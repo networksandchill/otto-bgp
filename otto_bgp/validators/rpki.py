@@ -222,6 +222,70 @@ class RPKIValidator:
                 reason=f"Validation system error: {str(e)}"
             )
     
+    def check_as_validity(self, as_number: int) -> Dict[str, Any]:
+        """
+        Lightweight AS-level RPKI check for policy generation.
+        Returns summary of AS's ROA coverage without full prefix validation.
+        
+        Args:
+            as_number: AS number to check
+            
+        Returns:
+            Dict with keys:
+            - has_valid_roas: bool - AS has at least one valid ROA
+            - total_roas: int - Total ROAs for this AS
+            - state: RPKIState - Overall state (VALID if has ROAs, NOTFOUND otherwise)
+            - message: str - Human-readable status message
+        """
+        try:
+            validated_asn = self._sanitize_asn(as_number)
+        except ValueError as e:
+            return {
+                'has_valid_roas': False,
+                'total_roas': 0,
+                'state': RPKIState.ERROR,
+                'message': f"Invalid AS number: {e}"
+            }
+        
+        # Check VRP data availability
+        if not self._vrp_dataset:
+            return {
+                'has_valid_roas': False,
+                'total_roas': 0,
+                'state': RPKIState.ERROR,
+                'message': "VRP data is unavailable - RPKI validation not possible"
+            }
+        
+        # Check VRP data freshness
+        if self._vrp_dataset.is_stale(self.max_vrp_age_hours):
+            return {
+                'has_valid_roas': False,
+                'total_roas': 0,
+                'state': RPKIState.ERROR,
+                'message': "VRP data is stale - RPKI validation unavailable"
+            }
+        
+        # Count ROAs for this AS
+        roa_count = 0
+        for vrp in self._vrp_dataset.vrp_entries:
+            if vrp.asn == validated_asn:
+                roa_count += 1
+        
+        if roa_count > 0:
+            return {
+                'has_valid_roas': True,
+                'total_roas': roa_count,
+                'state': RPKIState.VALID,
+                'message': f"AS{validated_asn} has {roa_count} valid ROA(s)"
+            }
+        else:
+            return {
+                'has_valid_roas': False,
+                'total_roas': 0,
+                'state': RPKIState.NOTFOUND,
+                'message': f"AS{validated_asn} has no ROAs - routes not found in RPKI"
+            }
+    
     def validate_policy_prefixes(self, policy: Dict[str, Any]) -> List[RPKIValidationResult]:
         """
         Validate all prefixes in a BGP policy

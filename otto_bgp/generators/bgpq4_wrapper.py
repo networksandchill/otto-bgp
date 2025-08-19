@@ -14,7 +14,7 @@ import logging
 import shutil
 import re
 from dataclasses import dataclass
-from typing import List, Set, Optional, Dict, Union
+from typing import List, Set, Optional, Dict, Union, Any
 from pathlib import Path
 from enum import Enum
 
@@ -399,13 +399,15 @@ class BGPq4Wrapper:
     
     def generate_policies_batch(self, 
                                as_numbers: Union[List[int], Set[int]],
-                               custom_policy_names: Dict[int, str] = None) -> PolicyBatchResult:
+                               custom_policy_names: Dict[int, str] = None,
+                               rpki_status: Dict[int, Dict[str, Any]] = None) -> PolicyBatchResult:
         """
         Generate BGP policies for multiple AS numbers
         
         Args:
             as_numbers: List or set of AS numbers
             custom_policy_names: Optional mapping of AS number to custom policy name
+            rpki_status: Optional RPKI validation status for each AS number
             
         Returns:
             PolicyBatchResult with all policy generation results
@@ -416,6 +418,7 @@ class BGPq4Wrapper:
             as_numbers = sorted(as_numbers)
         
         custom_policy_names = custom_policy_names or {}
+        rpki_status = rpki_status or {}
         
         self.logger.info(f"Starting batch policy generation for {len(as_numbers)} AS numbers")
         
@@ -447,7 +450,8 @@ class BGPq4Wrapper:
                                batch_result: PolicyBatchResult,
                                output_dir: Union[str, Path] = "policies",
                                separate_files: bool = True,
-                               combined_filename: str = "bgpq4_output.txt") -> List[str]:
+                               combined_filename: str = "bgpq4_output.txt",
+                               rpki_status: Dict[int, Dict[str, Any]] = None) -> List[str]:
         """
         Write policy generation results to files
         
@@ -456,6 +460,7 @@ class BGPq4Wrapper:
             output_dir: Directory to write policy files
             separate_files: Create separate file for each AS (default: True)
             combined_filename: Filename for combined output (when separate_files=False)
+            rpki_status: Optional RPKI validation status for each AS number
             
         Returns:
             List of created file paths
@@ -464,6 +469,7 @@ class BGPq4Wrapper:
         output_dir.mkdir(exist_ok=True)
         
         created_files = []
+        rpki_status = rpki_status or {}
         
         if separate_files:
             # Create separate file for each successful AS
@@ -486,6 +492,17 @@ class BGPq4Wrapper:
                 for result in batch_result.results:
                     if result.success and result.policy_content:
                         f.write(f"# AS{result.as_number}\n")
+                        
+                        # Add RPKI status if available
+                        rpki_info = rpki_status.get(result.as_number, {})
+                        if rpki_info:
+                            rpki_state = rpki_info.get('state')
+                            rpki_msg = rpki_info.get('message', '')
+                            if rpki_state:
+                                f.write(f"# RPKI Status: {rpki_state.value}\n")
+                            if rpki_msg:
+                                f.write(f"# RPKI Details: {rpki_msg}\n")
+                        
                         f.write(result.policy_content)
                         f.write("\n")
             

@@ -186,9 +186,47 @@ def cmd_policy(args):
     as_list = sorted(as_result.as_numbers)
     print(f"Found {len(as_list)} AS numbers: {as_list}")
     
+    # RPKI validation for extracted AS numbers (unless explicitly disabled)
+    rpki_status = {}
+    if not getattr(args, 'no_rpki', False):
+        try:
+            from otto_bgp.validators.rpki import RPKIValidator
+            from otto_bgp.utils.config import get_config_manager
+            
+            config = get_config_manager().get_config()
+            if config.rpki and config.rpki.enabled:
+                logger.info("Performing RPKI validation on extracted AS numbers")
+                rpki_validator = RPKIValidator(
+                    vrp_cache_path=Path(config.rpki.vrp_cache_path),
+                    allowlist_path=Path(config.rpki.allowlist_path),
+                    fail_closed=config.rpki.fail_closed,
+                    max_vrp_age_hours=config.rpki.max_vrp_age_hours,
+                    logger=logger
+                )
+                
+                # Validate each AS
+                for as_number in as_list:
+                    result = rpki_validator.check_as_validity(as_number)
+                    rpki_status[as_number] = result
+                    
+                    # Warn about problematic AS numbers
+                    if result['state'].value == 'invalid':
+                        print_warning(f"AS{as_number}: RPKI INVALID - {result['message']}")
+                    elif result['state'].value == 'notfound':
+                        logger.info(f"AS{as_number}: No ROAs found in RPKI")
+                    elif result['state'].value == 'error':
+                        print_warning(f"AS{as_number}: RPKI check failed - {result['message']}")
+            else:
+                logger.info("RPKI validation disabled in configuration")
+        except Exception as e:
+            logger.warning(f"RPKI validation failed: {e} - continuing without validation")
+    
     # Generate policies
     logger.info(f"Generating policies for {len(as_list)} AS numbers")
-    batch_result = bgpq4.generate_policies_batch(as_list)
+    batch_result = bgpq4.generate_policies_batch(
+        as_list,
+        rpki_status=rpki_status
+    )
     
     # Write output files
     output_dir = args.output_dir or "policies"
@@ -196,7 +234,8 @@ def cmd_policy(args):
         batch_result,
         output_dir=output_dir,
         separate_files=args.separate,
-        combined_filename=args.output or "bgpq4_output.txt"
+        combined_filename=args.output or "bgpq4_output.txt",
+        rpki_status=rpki_status
     )
     
     # Report results
@@ -517,6 +556,9 @@ def cmd_pipeline(args):
         # Single safety manager - no duplicates
         safety_manager = UnifiedSafetyManager()
         
+        # Pass RPKI flag to pipeline
+        rpki_enabled = not getattr(args, 'no_rpki', False)
+        
         # Legacy pipeline support for backward compatibility
         if hasattr(args, 'input_file') and args.input_file:
             # Direct file processing mode - use legacy pipeline
@@ -525,7 +567,8 @@ def cmd_pipeline(args):
                 output_dir=getattr(args, 'output_dir', 'output'),
                 separate_files=getattr(args, 'separate', False),
                 input_file=args.input_file,
-                dev_mode=getattr(args, 'dev', False)
+                dev_mode=getattr(args, 'dev', False),
+                rpki_enabled=rpki_enabled
             )
             
             # Report legacy results
@@ -876,6 +919,8 @@ def create_parser():
                               help='Test bgpq4 connectivity and exit')
     policy_parser.add_argument('--test-as', type=int, default=7922,
                               help='AS number to use for connectivity test (default: 7922)')
+    policy_parser.add_argument('--no-rpki', action='store_true',
+                              help='Disable RPKI validation during policy generation (not recommended)')
     
     # discover subcommand
     discover_parser = subparsers.add_parser('discover',
@@ -917,6 +962,8 @@ def create_parser():
                              help='Format for configuration diff (default: text)')
     apply_parser.add_argument('--skip-safety', action='store_true',
                              help='Skip safety validation (NOT RECOMMENDED)')
+    apply_parser.add_argument('--no-rpki', action='store_true',
+                             help='Disable RPKI validation during policy application (not recommended)')
     apply_parser.add_argument('--force', action='store_true',
                              help='Force application despite high risk')
     apply_parser.add_argument('--yes', '-y', action='store_true',
@@ -944,6 +991,8 @@ def create_parser():
                                 help='Command timeout in seconds (default: 30)')
     pipeline_parser.add_argument('--command-timeout', type=int, default=60,
                                 help='SSH command timeout in seconds (default: 60)')
+    pipeline_parser.add_argument('--no-rpki', action='store_true',
+                                help='Disable RPKI validation during policy generation (not recommended)')
     
     # test-proxy subcommand
     test_proxy_parser = subparsers.add_parser('test-proxy',
