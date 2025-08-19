@@ -1,47 +1,9 @@
-# Security Notice
+# Security Policy
 
-### Testing Data:
-- Use `test_devices.csv` for all testing purposes
-- Contains safe RFC 1918 private IPs and localhost
+## Reporting Security Vulnerabilities
 
-### Security Requirements:
+If you believe you have found a security vulnerability in Otto BGP, please report it by opening an issue on our GitHub repository:
 
-1. **SSH Credentials**: 
-   - NEVER commit SSH usernames/passwords to git
-   - Use environment variables: `SSH_USERNAME`, `SSH_PASSWORD`
-   - Production: Use SSH keys instead of passwords
+[Report Security Issue](https://github.com/networksandchill/otto-bgp/issues)
 
-2. **Network Devices**:
-   - Do not commit production IP addresses
-   - Use mock/test IPs for development
-   - Validate all CSV files before commits
-
-3. **BGP Toolkit Usage**:
-   ```bash
-   # SAFE - Uses test devices
-   bgp-toolkit collect test_devices.csv
-   
-   # UNSAFE - Do not use production IPs
-   # bgp-toolkit collect production_devices.csv
-   ```
-
-### Git History Note:
-The production IPs may still exist in git history. Consider:
-- Repository cleanup if sensitive
-- New repository for clean start
-- .gitignore for future device lists
-
-## Credential Management
-
-**Development**: Environment variables
-```bash
-export SSH_USERNAME="test_user"
-export SSH_PASSWORD="test_password"
-```
-
-**Production**: SSH key authentication
-```bash
-export SSH_USERNAME="bgp-service"
-export SSH_KEY_PATH="/etc/ssh/bgp-toolkit/id_rsa"
-
-```
+We take security issues seriously and will respond to reports as quickly as possible.
