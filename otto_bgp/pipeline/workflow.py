@@ -37,6 +37,7 @@ class PipelineConfig:
     input_file: Optional[str] = None  # For direct file processing
     dev_mode: bool = False  # Use Docker for bgpq4
     router_aware: bool = True  # v0.3.0 router-specific generation
+    rpki_enabled: bool = True  # v0.3.2 RPKI validation
 
 
 @dataclass
@@ -576,7 +577,8 @@ def run_pipeline(devices_file: str,
                 output_dir: str = "output",
                 separate_files: bool = False,
                 input_file: Optional[str] = None,
-                dev_mode: bool = False) -> PipelineResult:
+                dev_mode: bool = False,
+                rpki_enabled: bool = True) -> PipelineResult:
     """
     Convenience function to run the complete BGP policy pipeline
     
@@ -586,6 +588,7 @@ def run_pipeline(devices_file: str,
         separate_files: Create separate files per AS
         input_file: Direct file input (skips SSH collection)
         dev_mode: Use Docker for bgpq4
+        rpki_enabled: Enable RPKI validation during policy generation (default: True)
         
     Returns:
         Pipeline execution results
@@ -601,7 +604,8 @@ def run_pipeline(devices_file: str,
         separate_files=separate_files,
         skip_ssh=bool(input_file),
         input_file=input_file,
-        dev_mode=dev_mode
+        dev_mode=dev_mode,
+        rpki_enabled=rpki_enabled
     )
     
     # Execute pipeline

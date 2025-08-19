@@ -107,16 +107,28 @@ transit-router1,10.1.3.1,admin,MX240,datacenter2
 ### 2. Policy Generation Workflow
 
 #### Automated Policy Generation
+
+Otto BGP includes **RPKI validation by default** during policy generation to enhance security and policy accuracy.
+
 ```bash
-# Generate policies for all discovered AS numbers
+# Generate policies with RPKI validation (default behavior)
 ./otto-bgp policy discovered_as.txt --separate
 
-# Generate with custom output directory
+# Generate with custom output directory (RPKI validation included)
 ./otto-bgp policy as_list.txt --output-dir policies/routers/router1
 
 # Test BGPq4 connectivity first
 ./otto-bgp policy as_list.txt --test --test-as 13335
+
+# Disable RPKI validation if needed (not recommended)
+./otto-bgp policy as_list.txt --no-rpki --separate
 ```
+
+**RPKI Validation Features:**
+- **Default Behavior**: RPKI validation runs automatically during policy generation
+- **Status Comments**: Generated policies include RPKI validation status as comments
+- **Opt-out Available**: Use `--no-rpki` flag to disable validation when necessary
+- **Security Enhancement**: Helps identify potentially invalid or hijacked routes
 
 #### Router-Specific Generation
 ```python
@@ -173,7 +185,7 @@ done
 
 ### 4. Autonomous Operation Workflow
 
-Otto BGP v0.3.2 supports production-ready autonomous operation with comprehensive safety controls and email notifications.
+Otto BGP v0.3.2 supports production-ready autonomous operation with comprehensive safety controls, RPKI validation, and email notifications.
 
 #### Setup Autonomous Mode
 ```bash
@@ -188,18 +200,24 @@ Otto BGP v0.3.2 supports production-ready autonomous operation with comprehensiv
 ```
 
 #### Autonomous Operation Commands
+
+**Note**: RPKI validation is enabled by default in autonomous mode for enhanced security.
+
 ```bash
-# Standard autonomous operation
+# Standard autonomous operation (includes RPKI validation)
 ./otto-bgp apply --autonomous --auto-threshold 100
 
-# System-wide autonomous operation  
+# System-wide autonomous operation with RPKI validation
 ./otto-bgp apply --system --autonomous
 
-# Pipeline with autonomous application
+# Pipeline with autonomous application and RPKI validation
 ./otto-bgp pipeline devices.csv --autonomous --system
 
-# Preview autonomous decisions
+# Preview autonomous decisions (including RPKI status)
 ./otto-bgp apply --autonomous --dry-run
+
+# Disable RPKI validation in autonomous mode (not recommended)
+./otto-bgp apply --autonomous --no-rpki --auto-threshold 100
 ```
 
 #### Monitoring Autonomous Operations

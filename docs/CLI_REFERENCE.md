@@ -112,7 +112,7 @@ transit-router1,10.1.3.1,admin,MX240,datacenter2
 
 ### 2. policy - Policy Generation
 
-Generate BGP prefix-list policies using bgpq4 and IRR data.
+Generate BGP prefix-list policies using bgpq4 and IRR data with RPKI validation enabled by default.
 
 ```bash
 otto-bgp policy <input_file> [options]
@@ -129,6 +129,7 @@ otto-bgp policy <input_file> [options]
 --test-as AS_NUMBER         # Test with specific AS number
 --timeout SECONDS           # bgpq4 timeout per query (default: 45)
 --parallel N                # Parallel bgpq4 processes (default: 4)
+--no-rpki                   # Disable RPKI validation during policy generation (not recommended)
 ```
 
 #### Autonomous Mode Options
@@ -156,6 +157,12 @@ otto-bgp policy as_list.txt --test --test-as 13335
 
 # High-performance generation
 otto-bgp policy large_as_list.txt --parallel 8 --timeout 60
+
+# Disable RPKI validation (not recommended)
+otto-bgp policy as_list.txt --no-rpki
+
+# RPKI validation enabled by default (shows RPKI status in output comments)
+otto-bgp policy as_list.txt --separate  # Will include RPKI validation status
 ```
 
 #### Input File Format
@@ -184,6 +191,7 @@ otto-bgp apply [options]
 --confirm-timeout SECONDS  # Confirmation timeout (default: 120)
 --force                    # Override safety checks (use with caution)
 --yes, -y                  # Skip confirmation prompts
+--no-rpki                  # Disable RPKI validation during policy application (not recommended)
 ```
 
 #### Autonomous Mode Options (v0.3.2)
@@ -258,6 +266,7 @@ otto-bgp pipeline <devices.csv> [options]
 --mode MODE               # Execution mode: system, autonomous (default: system)
 --timeout SECONDS         # Command timeout in seconds (default: 30)
 --command-timeout SECONDS # SSH command timeout in seconds (default: 60)
+--no-rpki                 # Disable RPKI validation during policy generation (not recommended)
 ```
 
 #### Autonomous Mode Options
