@@ -1,0 +1,51 @@
+# Otto BGP v0.3.2 Coverage Configuration
+
+[run]
+source = otto_bgp
+omit = 
+    */tests/*
+    */test_*
+    */__pycache__/*
+    */venv/*
+    */env/*
+    */archive/*
+    setup.py
+    */conftest.py
+
+branch = True
+parallel = True
+
+[report]
+# Coverage reporting configuration
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    if settings.DEBUG
+    raise AssertionError
+    raise NotImplementedError
+    if 0:
+    if __name__ == .__main__.:
+    class .*\bProtocol\):
+    @(abc\.)?abstractmethod
+
+ignore_errors = True
+show_missing = True
+precision = 2
+skip_covered = False
+skip_empty = False
+
+# Minimum coverage requirements by module
+fail_under = 80
+
+[html]
+directory = htmlcov
+title = Otto BGP v0.3.2 Test Coverage Report
+
+[xml]
+output = coverage.xml
+
+[paths]
+source = 
+    otto_bgp/
+    */site-packages/otto_bgp

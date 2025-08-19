@@ -1,0 +1,61 @@
+[Unit]
+Description=Otto BGP - System Mode (Manual Operations)
+Documentation=file:///opt/otto-bgp/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=otto.bgp
+Group=otto.bgp
+WorkingDirectory=/opt/otto-bgp
+ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output
+Environment=PYTHONPATH=/opt/otto-bgp
+Environment=OTTO_BGP_MODE=system
+EnvironmentFile=-/etc/otto-bgp/otto.env
+
+# Lightweight security hardening for system mode
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# File system access
+ReadWritePaths=/var/lib/otto-bgp/output
+ReadWritePaths=/var/lib/otto-bgp/logs
+ReadWritePaths=/var/lib/otto-bgp/cache
+ReadOnlyPaths=/etc/otto-bgp
+ReadOnlyPaths=/opt/otto-bgp
+ReadOnlyPaths=/var/lib/otto-bgp/ssh-keys
+
+# Network access - full network for manual operations
+IPAddressDeny=
+IPAddressAllow=any
+
+# Capability restrictions
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otto-bgp-system
+
+# Resource limits - moderate for manual operations
+TimeoutStartSec=300
+TimeoutStopSec=60
+MemoryMax=2G
+CPUQuota=75%
+TasksMax=100
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

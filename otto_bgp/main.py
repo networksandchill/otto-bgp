@@ -1,0 +1,1054 @@
+#!/usr/bin/env python3
+"""
+Otto BGP - Orchestrated Transit Traffic Optimizer
+
+Autonomous BGP policy generation replacing legacy manual processes:
+- collect: BGP peer data collection from Juniper devices (replaces show-peers-juniper.py)
+- process: AS number extraction and text processing (replaces AS-info.py)
+- policy: BGP policy generation using bgpq4 (replaces bgpq3_processor.py)
+- pipeline: Full automated workflow
+
+Usage examples:
+    otto-bgp collect devices.csv
+    otto-bgp process bgp-data.txt -o cleaned.txt
+    otto-bgp policy input.txt -s
+    otto-bgp pipeline devices.csv --output-dir ./policies
+    otto-bgp --dev policy input.txt  # Use Podman for bgpq4
+"""
+
+import argparse
+import sys
+import os
+import logging
+import subprocess
+from pathlib import Path
+from typing import Optional, List, Dict
+
+# Import our modules
+from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
+from otto_bgp.processors.as_extractor import ASNumberExtractor, BGPTextProcessor
+from otto_bgp.generators.bgpq4_wrapper import BGPq4Wrapper
+from otto_bgp.pipeline.workflow import run_pipeline
+from otto_bgp.utils.logging import setup_logging, log_system_info
+from otto_bgp.utils.config import get_config_manager
+from otto_bgp.models import RouterProfile, DeviceInfo
+from otto_bgp.discovery import RouterInspector, YAMLGenerator
+from otto_bgp.utils.directories import DirectoryManager
+from otto_bgp.appliers import JuniperPolicyApplier, PolicyAdapter, SafetyManager
+from otto_bgp.appliers.safety import UnifiedSafetyManager
+from otto_bgp.appliers.exit_codes import OttoExitCodes
+from otto_bgp.validators.rpki import RPKIValidator
+from otto_bgp.utils.error_handling import (
+    handle_errors, ErrorFormatter, ParameterValidator, validate_common_args,
+    print_success, print_warning, print_error, print_fatal, print_usage,
+    OttoError, ValidationError, ConfigurationError
+)
+from otto_bgp.utils.error_handling import ConnectionError as OttoConnectionError
+
+
+def setup_app_logging(verbose: bool = False, quiet: bool = False):
+    """Configure logging for the application"""
+    if quiet:
+        level = 'WARNING'
+    elif verbose:
+        level = 'DEBUG'
+    else:
+        level = 'INFO'
+    
+    # Use our centralized logging setup
+    from otto_bgp.utils.logging import setup_logging as setup_toolkit_logging
+    setup_toolkit_logging(level=level, console_colors=True)
+    
+    # Log system information
+    if not quiet:
+        log_system_info()
+
+
+@handle_errors('otto-bgp.collect')
+def cmd_collect(args):
+    """BGP data collection from Juniper devices"""
+    logger = logging.getLogger('otto-bgp.collect')
+    
+    # Initialize SSH collector
+    collector = JuniperSSHCollector(
+        connection_timeout=args.timeout,
+        command_timeout=args.command_timeout
+    )
+    
+    # Collect BGP data from devices
+    logger.info(f"Starting BGP data collection from {args.devices_csv}")
+    bgp_data = collector.collect_bgp_data_from_csv(args.devices_csv)
+    
+    # Write output files
+    if args.output_dir:
+        output_files = collector.write_legacy_output_files(bgp_data, args.output_dir)
+    else:
+        output_files = collector.write_legacy_output_files(bgp_data)
+    
+    # Report results
+    successful = sum(1 for data in bgp_data if data.success)
+    total = len(bgp_data)
+    
+    print_success("BGP data collection complete:")
+    print(f"  Devices processed: {total}")
+    print(f"  Successful: {successful}")
+    print(f"  Failed: {total - successful}")
+    print(f"  Output files: {', '.join(output_files.values())}")
+    
+    return 0 if successful > 0 else 1
+
+
+@handle_errors('otto-bgp.process')
+def cmd_process(args):
+    """AS number extraction and BGP text processing"""
+    logger = logging.getLogger('otto-bgp.process')
+    
+    # Initialize processor
+    processor = ASNumberExtractor()
+    
+    # Process input file
+    logger.info(f"Processing BGP file: {args.input_file}")
+    
+    if args.extract_as:
+        # AS number extraction mode
+        as_result = processor.extract_as_numbers_from_file(args.input_file)
+        
+        as_list = sorted(as_result.as_numbers)
+        
+        # Write AS numbers to output file
+        if args.output:
+            output_path = Path(args.output)
+            with open(output_path, 'w') as f:
+                for as_num in as_list:
+                    f.write(f"AS{as_num}\n")
+            
+            print_success("AS extraction complete:")
+            print(f"  AS numbers found: {len(as_list)}")
+            print(f"  Output file: {output_path}")
+        else:
+            print_success(f"AS numbers found ({len(as_list)}):")
+            for as_num in as_list:
+                print(f"  AS{as_num}")
+        
+    else:
+        # Text processing mode (clean and deduplicate)
+        bgp_processor = BGPTextProcessor()
+        result = bgp_processor.process_file(args.input_file, args.output)
+        
+        print_success("BGP text processing complete:")
+        print(f"  Original lines: {result.original_lines}")
+        print(f"  Processed lines: {result.processed_lines}")
+        print(f"  Duplicates removed: {result.duplicates_removed}")
+        if args.output:
+            print(f"  Output file: {args.output}")
+    
+    return 0
+
+
+@handle_errors('otto-bgp.policy')
+def cmd_policy(args):
+    """BGP policy generation using bgpq4"""
+    logger = logging.getLogger('otto-bgp.policy')
+    
+    # Initialize bgpq4 wrapper
+    from otto_bgp.generators.bgpq4_wrapper import BGPq4Mode
+    mode = BGPq4Mode.PODMAN if getattr(args, 'dev', False) else BGPq4Mode.AUTO
+    bgpq4 = BGPq4Wrapper(
+        mode=mode,
+        command_timeout=getattr(args, 'timeout', 30)
+    )
+    
+    # Test connection if requested  
+    if getattr(args, 'test', False):
+        test_as = getattr(args, 'test_as', 7922)
+        # Validate test AS number
+        validator = ParameterValidator()
+        test_as = validator.validate_as_number(test_as, "test_as")
+        
+        success = bgpq4.test_bgpq4_connection(test_as)
+        if success:
+            print_success(f"bgpq4 connectivity test: PASSED")
+        else:
+            print_error(f"bgpq4 connectivity test: FAILED", 
+                       "Check network connectivity and bgpq4 installation")
+        return 0 if success else 1
+    
+    # Extract AS numbers from input file
+    logger.info(f"Extracting AS numbers from {args.input_file}")
+    as_extractor = ASNumberExtractor()
+    as_result = as_extractor.extract_as_numbers_from_file(args.input_file)
+    
+    if not as_result.as_numbers:
+        print_error("No AS numbers found in input file",
+                   "Check that the input file contains valid AS numbers (e.g., AS12345 or 12345)")
+        return 1
+    
+    as_list = sorted(as_result.as_numbers)
+    print(f"Found {len(as_list)} AS numbers: {as_list}")
+    
+    # Generate policies
+    logger.info(f"Generating policies for {len(as_list)} AS numbers")
+    batch_result = bgpq4.generate_policies_batch(as_list)
+    
+    # Write output files
+    output_dir = args.output_dir or "policies"
+    created_files = bgpq4.write_policies_to_files(
+        batch_result,
+        output_dir=output_dir,
+        separate_files=args.separate,
+        combined_filename=args.output or "bgpq4_output.txt"
+    )
+    
+    # Report results
+    print_success("Policy generation complete:")
+    print(f"  AS numbers processed: {batch_result.total_as_count}")
+    print(f"  Successful: {batch_result.successful_count}")
+    print(f"  Failed: {batch_result.failed_count}")
+    print(f"  Execution time: {batch_result.total_execution_time:.2f}s")
+    print(f"  Output files: {len(created_files)} files in {output_dir}/")
+    
+    if batch_result.failed_count > 0:
+        print_warning("Some AS numbers failed to generate policies:")
+        for result in batch_result.results:
+            if not result.success:
+                print(f"  AS{result.as_number}: {result.error_message}")
+    
+    return 0 if batch_result.successful_count > 0 else 1
+
+
+def cmd_discover(args):
+    """Discover BGP configurations and generate mappings"""
+    logger = logging.getLogger('otto-bgp.discover')
+    
+    # TODO: This function needs to be updated with proper error handling
+    # For now, using legacy error handling to allow testing of other functions
+    print_error("Discovery command temporarily disabled for error handling standardization",
+               "Please use other commands to test the new error handling")
+    return 1
+
+
+def cmd_list(args):
+    """List discovered routers, AS numbers, or BGP groups"""
+    logger = logging.getLogger('otto-bgp.list')
+    
+    try:
+        yaml_gen = YAMLGenerator(output_dir=Path(args.output_dir) / "discovered")
+        
+        # Load existing mappings
+        mappings = yaml_gen.load_previous_mappings()
+        if not mappings:
+            print("No discovered data found. Run 'otto-bgp discover' first.")
+            return 1
+        
+        if args.list_type == "routers":
+            print("Discovered Routers:")
+            print("-" * 50)
+            for hostname, data in mappings.get("routers", {}).items():
+                as_count = len(data.get("discovered_as_numbers", []))
+                group_count = len(data.get("bgp_groups", []))
+                print(f"  {hostname:<30} AS: {as_count:3d}  Groups: {group_count:2d}")
+        
+        elif args.list_type == "as":
+            print("Discovered AS Numbers:")
+            print("-" * 50)
+            as_numbers = mappings.get("as_numbers", {})
+            for as_num in sorted(as_numbers.keys(), key=int):
+                data = as_numbers[as_num]
+                router_count = len(data.get("routers", []))
+                groups = ", ".join(data.get("groups", []))
+                print(f"  AS{as_num:<10} Routers: {router_count:2d}  Groups: {groups}")
+        
+        elif args.list_type == "groups":
+            print("Discovered BGP Groups:")
+            print("-" * 50)
+            for group_name, data in mappings.get("bgp_groups", {}).items():
+                as_count = len(data.get("as_numbers", []))
+                router_count = len(data.get("routers", []))
+                print(f"  {group_name:<25} AS: {as_count:3d}  Routers: {router_count:2d}")
+        
+        return 0
+        
+    except FileNotFoundError as e:
+        logger.error(f"Discovery data not found: {e}")
+        print(f"Error: Discovery data not found - run 'otto-bgp discover' first")
+        return 1
+    except KeyError as e:
+        logger.error(f"Invalid discovery data format: {e}")
+        print(f"Error: Invalid discovery data format - {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Unexpected error in list command: {e}")
+        print(f"Unexpected error: {e}")
+        return 1
+
+
+def cmd_apply(args):
+    """Apply BGP policies to router via NETCONF/PyEZ"""
+    logger = logging.getLogger('otto-bgp.apply')
+    
+    # Check for NETCONF credentials from environment if not provided
+    import os
+    if not args.username:
+        args.username = os.environ.get('NETCONF_USERNAME')
+    if not args.password:
+        args.password = os.environ.get('NETCONF_PASSWORD')
+    if not args.ssh_key:
+        args.ssh_key = os.environ.get('NETCONF_SSH_KEY')
+    
+    # Validate credentials
+    if not args.username:
+        logger.error("NETCONF username not provided")
+        print("Error: NETCONF username required")
+        print("Provide via --username or set NETCONF_USERNAME environment variable")
+        return 1
+    
+    if not (args.password or args.ssh_key):
+        logger.error("NETCONF authentication not provided")
+        print("Error: NETCONF authentication required")
+        print("Provide via --password, --ssh-key, or environment variables")
+        print("  NETCONF_PASSWORD or NETCONF_SSH_KEY")
+        return 1
+    
+    try:
+        # Import here to fail gracefully if PyEZ not installed
+        from otto_bgp.appliers.juniper_netconf import JuniperPolicyApplier
+        from otto_bgp.appliers.adapter import PolicyAdapter
+        from otto_bgp.appliers.safety import SafetyManager
+        
+        # Initialize components
+        safety = SafetyManager()
+        applier = JuniperPolicyApplier(logger, safety_manager=safety)
+        adapter = PolicyAdapter(logger)
+        
+        # Determine policy directory
+        policy_dir = Path(args.policy_dir) / "routers" / args.router
+        if not policy_dir.exists():
+            print(f"Error: No policies found for router {args.router}")
+            print(f"  Looking in: {policy_dir}")
+            print(f"  Run 'otto-bgp discover' and 'otto-bgp policy' first")
+            return 1
+        
+        # Load policies
+        logger.info(f"Loading policies from {policy_dir}")
+        policies = applier.load_router_policies(policy_dir)
+        
+        if not policies:
+            print(f"No policies found for router {args.router}")
+            return 1
+        
+        print(f"Loaded {len(policies)} policies for {args.router}")
+        
+        # Safety validation
+        if not args.skip_safety:
+            print("\nPerforming safety validation...")
+            safety_result = safety.validate_policies_before_apply(policies)
+            
+            # Display safety report
+            if args.verbose or not safety_result.safe_to_proceed:
+                print(safety.generate_safety_report(safety_result))
+            
+            if not safety_result.safe_to_proceed:
+                print("\nSafety validation FAILED - cannot proceed with application")
+                print("Review the errors above and fix the issues before retrying.")
+                return 2
+            
+            if safety_result.risk_level in ['high', 'critical'] and not args.force:
+                print(f"\nRisk level: {safety_result.risk_level.upper()}")
+                print("Use --force to proceed despite high risk (NOT RECOMMENDED)")
+                return 2
+        
+        # Check autonomous mode decision
+        autonomous_mode = getattr(args, 'autonomous', False)
+        if autonomous_mode:
+            # Use SafetyManager to determine if policies can be auto-applied
+            can_auto_apply = safety.should_auto_apply(policies)
+            
+            if can_auto_apply:
+                print("\n✓ Autonomous mode: Policies approved for automatic application")
+                print("  Risk level: LOW - proceeding without manual confirmation")
+                # Set args.yes to skip user confirmation later
+                args.yes = True
+            else:
+                print("\n⚠ Autonomous mode: Manual approval required")
+                print("  Reason: Risk level too high or autonomous mode disabled")
+                print("  Falling back to manual confirmation process")
+        
+        # Connect to router
+        print(f"\nConnecting to {args.router}...")
+        try:
+            # Use SSH key if provided, otherwise password
+            connect_params = {
+                'hostname': args.router,
+                'username': args.username,
+                'port': args.port or int(os.environ.get('NETCONF_PORT', 830)),
+                'timeout': args.timeout or int(os.environ.get('NETCONF_TIMEOUT', 30))
+            }
+            
+            if args.ssh_key:
+                # SSH key authentication (preferred)
+                connect_params['ssh_private_key_file'] = args.ssh_key
+            else:
+                # Password authentication (less secure)
+                connect_params['password'] = args.password
+            
+            device = applier.connect_to_router(**connect_params)
+            print(f"Connected to {device.facts.get('hostname', args.router)}")
+            print(f"  Model: {device.facts.get('model', 'Unknown')}")
+            print(f"  Version: {device.facts.get('version', 'Unknown')}")
+        except Exception as e:
+            print(f"Failed to connect to {args.router}: {e}")
+            return 1
+        
+        # Preview changes
+        print("\nGenerating configuration preview...")
+        try:
+            diff = applier.preview_changes(policies, format=args.diff_format)
+            
+            if args.dry_run:
+                print("\n" + "=" * 60)
+                print("DRY RUN - Configuration Diff Preview")
+                print("=" * 60)
+                print(diff)
+                print("=" * 60)
+                print("\nDry run complete - no changes applied")
+                applier.disconnect()
+                return 0
+            
+            # Show diff and confirm
+            print("\n" + "=" * 60)
+            print("Configuration Changes to Apply")
+            print("=" * 60)
+            print(diff)
+            print("=" * 60)
+            
+            # Check BGP impact
+            bgp_impact = safety.check_bgp_session_impact(diff)
+            if bgp_impact:
+                print("\nPotential BGP Session Impact:")
+                for session, impact in bgp_impact.items():
+                    print(f"  {session}: {impact}")
+            
+            if not args.yes:
+                response = input("\nProceed with applying these changes? [y/N]: ")
+                if response.lower() != 'y':
+                    print("Application cancelled by user")
+                    applier.disconnect()
+                    return 0
+            
+        except Exception as e:
+            print(f"Failed to generate preview: {e}")
+            applier.disconnect()
+            return 1
+        
+        # Apply with confirmation
+        if args.confirm:
+            print(f"\nApplying policies with {args.confirm_timeout}s confirmation timeout...")
+            print("You must confirm the commit within this time or it will be rolled back!")
+            
+            result = applier.apply_with_confirmation(
+                policies=policies,
+                confirm_timeout=args.confirm_timeout,
+                comment=args.comment or f"Otto BGP policy update for {args.router}"
+            )
+        else:
+            print("\nWARNING: Applying without confirmation - changes are permanent!")
+            print("Use --confirm for automatic rollback safety")
+            
+            # For non-confirmed commits, we need different logic
+            # This is simplified - real implementation would differ
+            result = applier.apply_with_confirmation(
+                policies=policies,
+                confirm_timeout=0,  # No confirmation timeout
+                comment=args.comment or f"Otto BGP policy update for {args.router}"
+            )
+        
+        # Report results
+        if result.success:
+            print(f"\n✓ Successfully applied {result.policies_applied} policies to {args.router}")
+            if result.commit_id:
+                print(f"  Commit ID: {result.commit_id}")
+            
+            if args.confirm:
+                print(f"\n⚠ CONFIRMATION REQUIRED within {args.confirm_timeout} seconds!")
+                print("  Run: otto-bgp apply-confirm --router " + args.router)
+                print("  Or changes will be automatically rolled back")
+        else:
+            print(f"\n✗ Failed to apply policies: {result.error_message}")
+            return 1
+        
+        # Disconnect
+        applier.disconnect()
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\nInterrupted - rolling back any pending changes...")
+        if 'applier' in locals() and applier.connected:
+            applier.rollback_changes()
+            applier.disconnect()
+        return 130
+    except Exception as e:
+        logger.error(f"Apply command failed: {e}")
+        print(f"Error: {e}")
+        if 'applier' in locals() and applier.connected:
+            applier.disconnect()
+        return 1
+
+
+def cmd_pipeline(args):
+    """Unified pipeline for both system and autonomous modes"""
+    logger = logging.getLogger('otto-bgp.pipeline')
+    
+    # Mode detection - single point of configuration
+    mode = getattr(args, 'mode', 'system')
+    if os.getenv('OTTO_BGP_AUTONOMOUS') == 'true':
+        mode = 'autonomous'
+    
+    logger.info(f"Executing Otto BGP pipeline in {mode} mode")
+    
+    try:
+        # Load configuration
+        config = get_config_manager().get_config()
+        
+        # Create RPKI configuration if enabled
+        rpki_config = None
+        if hasattr(config, 'rpki') and config.rpki.enabled:
+            rpki_config = config.rpki
+        
+        # Single safety manager - no duplicates
+        safety_manager = UnifiedSafetyManager()
+        
+        # Legacy pipeline support for backward compatibility
+        if hasattr(args, 'input_file') and args.input_file:
+            # Direct file processing mode - use legacy pipeline
+            result = run_pipeline(
+                devices_file='',  # Not used in direct mode
+                output_dir=getattr(args, 'output_dir', 'output'),
+                separate_files=getattr(args, 'separate', False),
+                input_file=args.input_file,
+                dev_mode=getattr(args, 'dev', False)
+            )
+            
+            # Report legacy results
+            print(f"\nLegacy pipeline execution complete:")
+            print(f"  Success: {result.success}")
+            print(f"  Execution time: {result.execution_time:.2f}s")
+            return 0 if result.success else 1
+        
+        # New v0.3.2 unified pipeline
+        if not hasattr(args, 'devices_csv') or not args.devices_csv:
+            logger.error("Device CSV file required for unified pipeline")
+            print("Error: Device CSV file required")
+            return OttoExitCodes.VALIDATION_FAILED
+        
+        # Load devices
+        devices = load_device_config(args.devices_csv)
+        if not devices:
+            logger.error("No devices loaded from CSV file")
+            print("Error: No devices found in CSV file")
+            return OttoExitCodes.VALIDATION_FAILED
+        
+        # Generate policies for all devices
+        policies = generate_policies_for_devices(devices)
+        if not policies:
+            logger.error("No policies generated")
+            print("Error: No policies generated")
+            return OttoExitCodes.VALIDATION_FAILED
+        
+        logger.info(f"Generated {len(policies)} policies for {len(devices)} devices")
+        
+        # Execute unified pipeline for each device
+        results = []
+        failed_count = 0
+        
+        for device in devices:
+            device_policies = [p for p in policies if p.get('device_hostname') == device.hostname]
+            
+            if not device_policies:
+                logger.warning(f"No policies for device {device.hostname}")
+                continue
+            
+            # Execute unified pipeline with mode parameter
+            result = safety_manager.execute_pipeline(
+                policies=device_policies,
+                hostname=device.hostname,
+                mode=mode
+            )
+            
+            results.append(result)
+            
+            if not result.success:
+                failed_count += 1
+                logger.error(f"Pipeline failed for {device.hostname}: exit code {result.exit_code}")
+            else:
+                logger.info(f"Pipeline completed successfully for {device.hostname}")
+        
+        # Report unified results
+        successful_count = len(results) - failed_count
+        print(f"\nUnified pipeline execution complete:")
+        print(f"  Mode: {mode}")
+        print(f"  Devices processed: {len(devices)}")
+        print(f"  Successful: {successful_count}")
+        print(f"  Failed: {failed_count}")
+        print(f"  Policies generated: {len(policies)}")
+        
+        # Exit code handling
+        if failed_count > 0:
+            exit_code = results[0].exit_code if results else OttoExitCodes.UNEXPECTED_ERROR
+            logger.error(f"Pipeline failed with exit code {exit_code}")
+            sys.exit(exit_code)
+        
+        logger.info("Pipeline completed successfully")
+        sys.exit(OttoExitCodes.SUCCESS)
+        
+    except Exception as e:
+        logger.error(f"Unexpected pipeline error: {e}")
+        print(f"Unexpected error: {e}")
+        sys.exit(OttoExitCodes.UNEXPECTED_ERROR)
+
+
+def load_device_config(devices_csv: str) -> List[DeviceInfo]:
+    """Load device configuration from CSV file"""
+    logger = logging.getLogger('otto-bgp.pipeline')
+    
+    try:
+        # Use the existing JuniperSSHCollector to load devices
+        collector = JuniperSSHCollector()
+        devices = collector.load_devices_from_csv(devices_csv)
+        logger.info(f"Loaded {len(devices)} devices from {devices_csv}")
+        return devices
+    except Exception as e:
+        logger.error(f"Failed to load devices from {devices_csv}: {e}")
+        return []
+
+
+def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
+    """Generate BGP policies for all devices"""
+    logger = logging.getLogger('otto-bgp.pipeline')
+    
+    try:
+        # Collect BGP data from all devices
+        collector = JuniperSSHCollector()
+        as_extractor = ASNumberExtractor()
+        bgpq4 = BGPq4Wrapper()
+        all_policies = []
+        
+        for device in devices:
+            try:
+                # Collect BGP data from individual device
+                bgp_data = collector.collect_bgp_data_from_device(device)
+                
+                if bgp_data.success:
+                    # Extract AS numbers from BGP data
+                    as_result = as_extractor.extract_as_numbers_from_text(bgp_data.bgp_text)
+                    
+                    if as_result.as_numbers:
+                        # Generate policies using bgpq4
+                        batch_result = bgpq4.generate_policies_batch(list(as_result.as_numbers))
+                        
+                        # Convert to policy format with device information
+                        for policy_result in batch_result.results:
+                            if policy_result.success:
+                                policy = {
+                                    'device_hostname': device.hostname,
+                                    'device_address': device.address,
+                                    'as_number': policy_result.as_number,
+                                    'policy_name': policy_result.policy_name,
+                                    'policy_content': policy_result.policy_content
+                                }
+                                all_policies.append(policy)
+                    else:
+                        logger.warning(f"No AS numbers found for device {device.hostname}")
+                else:
+                    logger.error(f"Failed to collect BGP data from {device.hostname}: {bgp_data.error_message}")
+            except Exception as e:
+                logger.error(f"Error processing device {device.hostname}: {e}")
+                continue
+        
+        logger.info(f"Generated {len(all_policies)} policies for {len(devices)} devices")
+        return all_policies
+        
+    except Exception as e:
+        logger.error(f"Failed to generate policies: {e}")
+        return []
+
+
+def cmd_test_proxy(args):
+    """Test IRR proxy configuration and connectivity"""
+    logger = logging.getLogger('otto-bgp.test-proxy')
+    
+    try:
+        # Get configuration
+        config_manager = get_config_manager()
+        proxy_config = config_manager.get_config().irr_proxy
+        
+        if not proxy_config.enabled:
+            print("IRR proxy is not enabled in configuration")
+            print("Set OTTO_BGP_PROXY_ENABLED=true or enable in config file")
+            return 1
+        
+        print("IRR Proxy Configuration Test")
+        print("=" * 50)
+        print(f"Jump Host: {proxy_config.jump_host}")
+        print(f"Jump User: {proxy_config.jump_user}")
+        print(f"SSH Key: {proxy_config.ssh_key_file or 'Not set'}")
+        print(f"Known Hosts: {proxy_config.known_hosts_file or 'Not set'}")
+        print(f"Tunnels: {len(proxy_config.tunnels)}")
+        print()
+        
+        # Validate configuration
+        issues = config_manager.validate_config()
+        proxy_issues = [issue for issue in issues if 'proxy' in issue.lower()]
+        
+        if proxy_issues:
+            print("Configuration Issues:")
+            for issue in proxy_issues:
+                print(f"  ✗ {issue}")
+            print()
+            return 1
+        
+        # Test proxy setup
+        from otto_bgp.proxy import IRRProxyManager, ProxyConfig
+        
+        # Convert config
+        tunnel_config = ProxyConfig(
+            enabled=proxy_config.enabled,
+            method=proxy_config.method,
+            jump_host=proxy_config.jump_host,
+            jump_user=proxy_config.jump_user,
+            ssh_key_file=proxy_config.ssh_key_file,
+            known_hosts_file=proxy_config.known_hosts_file,
+            connection_timeout=proxy_config.connection_timeout,
+            tunnels=proxy_config.tunnels
+        )
+        
+        proxy_manager = IRRProxyManager(tunnel_config, logger)
+        
+        print("Testing tunnel setup...")
+        success_count = 0
+        
+        for tunnel_cfg in proxy_config.tunnels:
+            tunnel_name = tunnel_cfg.get('name', 'unknown')
+            print(f"  Setting up tunnel {tunnel_name}...")
+            
+            try:
+                status = proxy_manager.setup_tunnel(tunnel_cfg)
+                
+                if status.state.value == 'connected':
+                    print(f"    ✓ Tunnel {tunnel_name} established on port {status.local_port}")
+                    
+                    # Test connectivity
+                    if proxy_manager.test_tunnel_connectivity(tunnel_name):
+                        print(f"    ✓ Connectivity test passed")
+                        success_count += 1
+                    else:
+                        print(f"    ✗ Connectivity test failed")
+                else:
+                    print(f"    ✗ Failed to establish tunnel: {status.error_message}")
+                    
+            except Exception as e:
+                print(f"    ✗ Error: {e}")
+        
+        print()
+        
+        if args.test_bgpq4 and success_count > 0:
+            print("Testing bgpq4 through proxy...")
+            
+            # Test with bgpq4
+            from otto_bgp.generators.bgpq4_wrapper import BGPq4Wrapper
+            
+            try:
+                wrapper = BGPq4Wrapper(proxy_manager=proxy_manager)
+                test_result = wrapper.generate_policy_for_as(7922, "PROXY_TEST")
+                
+                if test_result.success:
+                    print("  ✓ bgpq4 test through proxy successful")
+                    if args.verbose:
+                        print(f"  Policy content preview: {test_result.policy_content[:100]}...")
+                else:
+                    print(f"  ✗ bgpq4 test failed: {test_result.error_message}")
+                    
+            except Exception as e:
+                print(f"  ✗ bgpq4 test error: {e}")
+        
+        # Cleanup
+        print("\nCleaning up tunnels...")
+        proxy_manager.cleanup_all_tunnels()
+        
+        print(f"\nProxy test completed: {success_count}/{len(proxy_config.tunnels)} tunnels successful")
+        return 0 if success_count > 0 else 1
+        
+    except Exception as e:
+        logger.error(f"Proxy test failed: {e}")
+        print(f"Error: {e}")
+        return 1
+
+
+def create_common_flags_parent():
+    """Create a parent parser with common global flags and mutual exclusion groups"""
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    
+    # Verbose/quiet mutual exclusion
+    verbose_group = parent_parser.add_mutually_exclusive_group()
+    verbose_group.add_argument('-v', '--verbose', action='store_true',
+                             help='Enable verbose logging')
+    verbose_group.add_argument('-q', '--quiet', action='store_true',
+                             help='Quiet mode (warnings only)')
+    
+    # System/autonomous mutual exclusion
+    mode_group = parent_parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--autonomous', action='store_true',
+                          help='Enable autonomous mode with automatic policy application')
+    mode_group.add_argument('--system', action='store_true',
+                          help='Use system-wide configuration and resources')
+    
+    # Common flags (no exclusions needed)
+    parent_parser.add_argument('--dev', action='store_true',
+                             help='Use Podman for bgpq4 (development mode)')
+    parent_parser.add_argument('--auto-threshold', type=int, default=100, metavar='N',
+                             help='Reference prefix count for notification context (informational only, default: 100)')
+    parent_parser.add_argument('--production', action='store_true',
+                             help='(DEPRECATED) Use --system instead. Production mode flag for backward compatibility')
+    
+    return parent_parser
+
+
+def create_parser():
+    """Create and configure argument parser"""
+    # Create parent parser with common flags
+    common_flags_parent = create_common_flags_parent()
+    
+    # Main parser - inherits common flags for global positioning
+    parser = argparse.ArgumentParser(
+        prog='otto-bgp',
+        description='Otto BGP - Orchestrated Transit Traffic Optimizer',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+        parents=[common_flags_parent]
+    )
+    
+    parser.add_argument('--version', action='version', version='otto-bgp 0.3.2')
+    
+    # Subcommands - each inherits common flags for flexible positioning
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # collect subcommand
+    collect_parser = subparsers.add_parser('collect', 
+                                          help='Collect BGP peer data from Juniper devices',
+                                          parents=[common_flags_parent])
+    collect_parser.add_argument('devices_csv', 
+                               help='CSV file with device addresses (must have "address" column)')
+    collect_parser.add_argument('--output-dir', default='.',
+                               help='Output directory for BGP data files (default: current directory)')
+    collect_parser.add_argument('--timeout', type=int, default=30,
+                               help='SSH connection timeout in seconds (default: 30)')
+    collect_parser.add_argument('--command-timeout', type=int, default=60,
+                               help='Command execution timeout in seconds (default: 60)')
+    
+    # process subcommand  
+    process_parser = subparsers.add_parser('process',
+                                          help='Process BGP data and extract AS numbers',
+                                          parents=[common_flags_parent])
+    process_parser.add_argument('input_file',
+                               help='Input file with BGP data or mixed text')
+    process_parser.add_argument('-o', '--output',
+                               help='Output file for processed data')
+    process_parser.add_argument('--extract-as', action='store_true',
+                               help='Extract AS numbers instead of text processing')
+    process_parser.add_argument('--pattern', default='standard',
+                               choices=['standard', 'peer_as', 'explicit_as', 'autonomous_system'],
+                               help='AS number extraction pattern (default: standard)')
+    
+    # policy subcommand
+    policy_parser = subparsers.add_parser('policy',
+                                         help='Generate BGP policies using bgpq4',
+                                         parents=[common_flags_parent])
+    policy_parser.add_argument('input_file',
+                              help='Input file containing AS numbers')
+    policy_parser.add_argument('-o', '--output', default='bgpq4_output.txt',
+                              help='Output file name (default: bgpq4_output.txt)')
+    policy_parser.add_argument('-s', '--separate', action='store_true',
+                              help='Create separate files for each AS')
+    policy_parser.add_argument('--output-dir', default='policies',
+                              help='Output directory for policy files (default: policies)')
+    policy_parser.add_argument('--timeout', type=int, default=30,
+                              help='bgpq4 command timeout in seconds (default: 30)')
+    policy_parser.add_argument('--test', action='store_true',
+                              help='Test bgpq4 connectivity and exit')
+    policy_parser.add_argument('--test-as', type=int, default=7922,
+                              help='AS number to use for connectivity test (default: 7922)')
+    
+    # discover subcommand
+    discover_parser = subparsers.add_parser('discover',
+                                           help='Discover BGP configurations and generate mappings',
+                                           parents=[common_flags_parent])
+    discover_parser.add_argument('devices_csv',
+                                help='CSV file with device addresses and hostnames')
+    discover_parser.add_argument('--output-dir', default='policies',
+                                help='Output directory for discovered data (default: policies)')
+    discover_parser.add_argument('--show-diff', action='store_true',
+                                help='Generate diff report when changes detected')
+    discover_parser.add_argument('--timeout', type=int, default=30,
+                                help='SSH connection timeout in seconds (default: 30)')
+    
+    # list subcommand
+    list_parser = subparsers.add_parser('list',
+                                       help='List discovered routers, AS numbers, or BGP groups',
+                                       parents=[common_flags_parent])
+    list_parser.add_argument('list_type', choices=['routers', 'as', 'groups'],
+                            help='What to list: routers, AS numbers, or BGP groups')
+    list_parser.add_argument('--output-dir', default='policies',
+                            help='Directory containing discovered data (default: policies)')
+    
+    # apply subcommand
+    apply_parser = subparsers.add_parser('apply',
+                                        help='Apply BGP policies to router via NETCONF',
+                                        parents=[common_flags_parent])
+    apply_parser.add_argument('--router', required=True,
+                             help='Router hostname to apply policies to')
+    apply_parser.add_argument('--policy-dir', default='policies',
+                             help='Directory containing router policies (default: policies)')
+    apply_parser.add_argument('--dry-run', action='store_true',
+                             help='Preview changes without applying')
+    apply_parser.add_argument('--confirm', action='store_true',
+                             help='Use confirmed commit with automatic rollback')
+    apply_parser.add_argument('--confirm-timeout', type=int, default=120,
+                             help='Confirmation timeout in seconds (default: 120)')
+    apply_parser.add_argument('--diff-format', choices=['text', 'set', 'xml'], default='text',
+                             help='Format for configuration diff (default: text)')
+    apply_parser.add_argument('--skip-safety', action='store_true',
+                             help='Skip safety validation (NOT RECOMMENDED)')
+    apply_parser.add_argument('--force', action='store_true',
+                             help='Force application despite high risk')
+    apply_parser.add_argument('--yes', '-y', action='store_true',
+                             help='Skip confirmation prompt')
+    apply_parser.add_argument('--username', help='NETCONF username (or set NETCONF_USERNAME env var)')
+    apply_parser.add_argument('--password', help='NETCONF password (or set NETCONF_PASSWORD env var)')
+    apply_parser.add_argument('--ssh-key', help='SSH private key for NETCONF (or set NETCONF_SSH_KEY env var)')
+    apply_parser.add_argument('--port', type=int,
+                             help='NETCONF port (default: 830 or NETCONF_PORT env var)')
+    apply_parser.add_argument('--timeout', type=int, default=30,
+                             help='Connection timeout in seconds (default: 30)')
+    apply_parser.add_argument('--comment', help='Commit comment')
+    
+    # pipeline subcommand
+    pipeline_parser = subparsers.add_parser('pipeline',
+                                           help='Run complete BGP policy generation workflow',
+                                           parents=[common_flags_parent])
+    pipeline_parser.add_argument('devices_csv',
+                                help='CSV file with device addresses')
+    pipeline_parser.add_argument('--output-dir', default='bgp_pipeline_output',
+                                help='Output directory for all pipeline results (default: bgp_pipeline_output)')
+    pipeline_parser.add_argument('--mode', choices=['system', 'autonomous'], 
+                                default='system', help='Execution mode (default: system)')
+    pipeline_parser.add_argument('--timeout', type=int, default=30,
+                                help='Command timeout in seconds (default: 30)')
+    pipeline_parser.add_argument('--command-timeout', type=int, default=60,
+                                help='SSH command timeout in seconds (default: 60)')
+    
+    # test-proxy subcommand
+    test_proxy_parser = subparsers.add_parser('test-proxy',
+                                             help='Test IRR proxy configuration and connectivity',
+                                             parents=[common_flags_parent])
+    test_proxy_parser.add_argument('--test-bgpq4', action='store_true',
+                                  help='Test bgpq4 functionality through proxy')
+    test_proxy_parser.add_argument('--timeout', type=int, default=10,
+                                  help='Connection timeout in seconds (default: 10)')
+    
+    return parser
+
+
+def validate_autonomous_mode(args, config):
+    """Validate autonomous mode settings and handle deprecated flags"""
+    logger = logging.getLogger('otto-bgp.main')
+    
+    # Handle deprecated --production flag
+    if getattr(args, 'production', False):
+        logger.warning("--production flag is deprecated, use --system instead")
+        args.system = True
+        print("Warning: --production flag is deprecated, use --system instead")
+    
+    # Check autonomous mode configuration
+    if getattr(args, 'autonomous', False):
+        autonomous_config = config.autonomous_mode
+        
+        if not autonomous_config.enabled:
+            logger.warning("Autonomous mode requested but not enabled in configuration")
+            print("Error: Autonomous mode requested but not enabled in configuration")
+            print("Run: ./install.sh --autonomous to enable autonomous mode")
+            return False
+        
+        # Recommend system installation for autonomous mode
+        installation_config = config.installation_mode
+        if not getattr(args, 'system', False) and installation_config.type != 'system':
+            logger.warning("Autonomous mode works best with system installation")
+            print("Warning: Autonomous mode works best with system installation (--system)")
+            print("Consider running: ./install.sh --system --autonomous for optimal setup")
+        
+        # Warn about high auto-threshold values (informational only)
+        auto_threshold = getattr(args, 'auto_threshold', 100)
+        if auto_threshold > 1000:
+            logger.warning(f"Auto-threshold {auto_threshold} is very high (informational only)")
+            print(f"Warning: Auto-threshold {auto_threshold} is very high (informational only)")
+            print("Note: Threshold is used for notification context and does not block operations")
+        
+        # Log autonomous mode activation
+        logger.info(f"Autonomous mode enabled with threshold {auto_threshold} (informational)")
+        print(f"Autonomous mode enabled: auto-apply threshold {auto_threshold} (informational only)")
+    
+    return True
+
+
+def main():
+    """Main entry point"""
+    parser = create_parser()
+    args = parser.parse_args()
+    
+    # Setup logging
+    setup_app_logging(args.verbose, args.quiet)
+    
+    # Load configuration and validate autonomous mode
+    config = get_config_manager().get_config()
+    if not validate_autonomous_mode(args, config):
+        return 1
+    
+    # Check if command was provided
+    if not args.command:
+        parser.print_help()
+        return 1
+    
+    # Validate common arguments before executing command
+    try:
+        args = validate_common_args(args)
+    except ValidationError as e:
+        print(ErrorFormatter.format_error(e))
+        return 1
+    except Exception as e:
+        print(ErrorFormatter.format_error(e))
+        return 1
+    
+    # Execute command
+    command_functions = {
+        'collect': cmd_collect,
+        'process': cmd_process,
+        'policy': cmd_policy,
+        'discover': cmd_discover,
+        'list': cmd_list,
+        'apply': cmd_apply,
+        'pipeline': cmd_pipeline,
+        'test-proxy': cmd_test_proxy
+    }
+    
+    try:
+        return command_functions[args.command](args)
+    except KeyboardInterrupt:
+        print_warning("Operation interrupted by user")
+        return 130
+    except Exception as e:
+        logger = logging.getLogger('otto-bgp.main')
+        logger.error(f"Unexpected error: {e}")
+        print(ErrorFormatter.format_error(e))
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

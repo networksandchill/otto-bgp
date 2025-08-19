@@ -1,0 +1,29 @@
+[Unit]
+Description=Otto BGP Autonomous Mode Scheduler
+Documentation=file:///opt/otto-bgp/README.md
+Requires=otto-bgp-autonomous.service
+
+[Timer]
+# Run every 4 hours during business hours (08:00, 12:00, 16:00, 20:00)
+# This reduces network load while maintaining policy freshness
+OnCalendar=*-*-* 08,12,16,20:00:00
+
+# Alternative schedules (uncomment as needed):
+# Hourly: OnCalendar=hourly
+# Every 2 hours: OnCalendar=*-*-* 00/2:00:00  
+# Business hours only: OnCalendar=Mon..Fri *-*-* 08..18/2:00:00
+
+# Persistence and accuracy
+Persistent=yes
+AccuracySec=1min
+
+# Randomization to prevent network congestion
+# Higher randomization for autonomous mode to avoid conflicts
+RandomizedDelaySec=900
+
+# Prevent overlapping executions
+# If previous run is still active, skip this execution
+WakeSystem=no
+
+[Install]
+WantedBy=timers.target

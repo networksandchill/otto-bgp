@@ -1,0 +1,26 @@
+# Otto BGP Environment Configuration
+# 
+# This file should be placed at /etc/otto-bgp/environment
+# for systemd service configuration
+
+# SSH Configuration
+SSH_USERNAME=bgp-read
+SSH_KEY_PATH=/var/lib/otto-bgp/ssh-keys/otto-bgp
+SSH_KNOWN_HOSTS=/var/lib/otto-bgp/ssh-keys/known_hosts
+
+# Otto BGP Configuration
+OTTO_BGP_OUTPUT_DIR=/var/lib/otto-bgp/output
+OTTO_BGP_LOG_LEVEL=INFO
+OTTO_BGP_LOG_FILE=/var/lib/otto-bgp/logs/otto-bgp.log
+
+# Security: NEVER set OTTO_BGP_SETUP_MODE=true in production!
+# OTTO_BGP_SETUP_MODE=false
+
+# BGP Tool Configuration
+BGPQ4_PATH=/usr/bin/bgpq4
+# BGPQ4_USE_DOCKER=false
+# BGPQ4_USE_PODMAN=false
+
+# Python Environment
+PYTHONPATH=/opt/otto-bgp
+PYTHONUNBUFFERED=1

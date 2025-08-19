@@ -1,0 +1,8 @@
+address,hostname,username,role,region
+192.168.1.1,edge-router-01.nyc,admin,edge,us-east
+192.168.1.2,edge-router-02.nyc,admin,edge,us-east
+192.168.2.1,core-router-01.lax,admin,core,us-west
+192.168.2.2,core-router-02.lax,admin,core,us-west
+192.168.3.1,transit-router-01.fra,admin,transit,eu-central
+10.0.1.1,lab-router-01,admin,lab,test-lab
+10.0.1.2,lab-router-02,admin,lab,test-lab

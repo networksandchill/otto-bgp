@@ -1,0 +1,99 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+/build/
+develop-eggs/
+/dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+
+# Virtual environments
+/venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+*.log
+*.tmp
+
+# BGP Toolkit specific
+policies/
+output/
+bgp_pipeline_output/
+*.txt
+!sample_input.txt
+!README.txt
+!requirements.txt
+
+# Credentials and sensitive data
+.env
+*.key
+*.pem
+*.p12
+*.pfx
+config.json
+/devices.csv
+
+# Backup files
+*.bkup
+*.backup
+*.old
+
+# Temporary directories
+temp/
+tmp/
+
+# Claude Code settings
+.claude/
+
+# Project configuration files (local only)
+/test_devices.csv
+
+# Claude AI instruction files (local development only)
+CLAUDE.md
+**/CLAUDE.md
+
+# Documentation and test files (local only)
+SEMGREP.md
+FEATURES.md
+test_known_hosts*
+
+# Internal documentation (not for public repo)  
+internal_docs/
+
+# Archive directory (historical docs and old tests)
+archive/otto_venv/

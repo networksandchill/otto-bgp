@@ -1,0 +1,91 @@
+[Unit]
+Description=Otto BGP RPKI Preflight - VRP Freshness Check
+Documentation=file:///opt/otto-bgp/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=otto.bgp
+Group=otto.bgp
+WorkingDirectory=/opt/otto-bgp
+ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py rpki-check --max-age 86400
+Environment=PYTHONPATH=/opt/otto-bgp
+Environment=OTTO_BGP_MODE=preflight
+EnvironmentFile=-/etc/otto-bgp/otto.env
+
+# Security hardening for preflight checks
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @cpu-emulation @obsolete @privileged @reboot @swap
+SystemCallErrorNumber=EPERM
+
+# File system access - minimal for RPKI validation
+ReadWritePaths=/var/lib/otto-bgp/logs
+ReadWritePaths=/var/lib/otto-bgp/cache
+ReadOnlyPaths=/etc/otto-bgp
+ReadOnlyPaths=/opt/otto-bgp
+InaccessiblePaths=/home
+InaccessiblePaths=/root
+InaccessiblePaths=/etc/shadow
+InaccessiblePaths=/etc/gshadow
+InaccessiblePaths=/var/lib/otto-bgp/ssh-keys
+InaccessiblePaths=/var/lib/otto-bgp/output
+
+# Network access - RPKI validation servers only
+# Allow HTTPS to RPKI validation servers
+IPAddressDeny=any
+IPAddressAllow=localhost
+# Common RPKI validation infrastructure networks
+IPAddressAllow=8.8.8.8/32
+IPAddressAllow=1.1.1.1/32
+IPAddressAllow=193.0.0.0/16
+IPAddressAllow=199.5.26.0/24
+
+# Capability restrictions
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otto-bgp-rpki-preflight
+LogLevelMax=info
+
+# Resource limits - minimal for preflight
+TimeoutStartSec=60
+TimeoutStopSec=10
+MemoryMax=256M
+MemorySwapMax=0
+CPUQuota=10%
+TasksMax=20
+LimitNOFILE=256
+LimitNPROC=10
+
+# Exit status handling
+# Success: VRP data is fresh (exit 0)
+# Failure: VRP data is stale or unavailable (exit 1)
+# This will block autonomous service if RPKI data is stale
+SuccessExitStatus=0
+ExecStartPost=/bin/sh -c 'if [ $EXIT_STATUS -ne 0 ]; then logger -t otto-bgp-rpki-preflight "RPKI preflight failed - blocking autonomous execution"; fi'
+
+[Install]
+WantedBy=multi-user.target

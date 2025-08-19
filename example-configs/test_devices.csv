@@ -1,0 +1,3 @@
+address,hostname
+8.8.8.8,google-dns
+1.1.1.1,cloudflare-dns

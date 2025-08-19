@@ -1,0 +1,106 @@
+{
+  "ssh": {
+    "username": "bgp-read",
+    "key_path": "/var/lib/otto-bgp/ssh-keys/otto-bgp",
+    "known_hosts_file": "/var/lib/otto-bgp/ssh-keys/known_hosts",
+    "connection_timeout": 30,
+    "command_timeout": 60,
+    "strict_host_key_checking": true
+  },
+  "bgpq4": {
+    "native_path": "/usr/bin/bgpq4",
+    "docker_image": "ghcr.io/bgp/bgpq4:latest",
+    "use_docker": false,
+    "use_podman": false,
+    "command_timeout": 30,
+    "cache_enabled": true,
+    "cache_ttl": 3600
+  },
+  "irr_proxy": {
+    "enabled": false,
+    "jump_host": "bastion.example.com",
+    "jump_user": "admin",
+    "ssh_key_file": "/var/lib/otto-bgp/ssh-keys/proxy-key",
+    "known_hosts_file": "/var/lib/otto-bgp/ssh-keys/proxy-known-hosts",
+    "connection_timeout": 30,
+    "health_check_interval": 300,
+    "max_retries": 3,
+    "tunnels": [
+      {
+        "name": "whois-radb",
+        "local_port": 43001,
+        "remote_host": "whois.radb.net",
+        "remote_port": 43
+      },
+      {
+        "name": "whois-ripe",
+        "local_port": 43002,
+        "remote_host": "whois.ripe.net",
+        "remote_port": 43
+      }
+    ]
+  },
+  "router_discovery": {
+    "enabled": true,
+    "cache_discovery_results": true,
+    "discovery_cache_ttl": 1800,
+    "auto_generate_mappings": true,
+    "track_bgp_groups": true,
+    "parallel_workers": 4
+  },
+  "policy_application": {
+    "enabled": false,
+    "dry_run_default": true,
+    "safety_validation": true,
+    "max_policy_size": 1048576,
+    "backup_before_apply": true,
+    "commit_timeout": 120
+  },
+  "netconf": {
+    "enabled": false,
+    "lab_only": true,
+    "username": null,
+    "password": null,
+    "ssh_key_path": null,
+    "port": 830,
+    "connection_timeout": 30,
+    "confirm_timeout": 120,
+    "auto_rollback": true,
+    "verify_host_keys": true,
+    "known_hosts_file": "/var/lib/otto-bgp/ssh-keys/netconf-known-hosts"
+  },
+  "as_processing": {
+    "min_as_number": 256,
+    "max_as_number": 4294967295,
+    "default_pattern": "standard",
+    "strict_validation": true,
+    "warn_reserved_ranges": true,
+    "remove_substrings": ["    peer-as ", ";"]
+  },
+  "output": {
+    "default_output_dir": "/var/lib/otto-bgp/output",
+    "router_aware_structure": true,
+    "policies_subdir": "policies/routers",
+    "discovery_subdir": "discovery",
+    "bgp_data_filename": "bgp.txt",
+    "bgp_juniper_filename": "bgp-juniper.txt",
+    "create_timestamps": true,
+    "backup_legacy_files": true
+  },
+  "performance": {
+    "parallel_workers": 4,
+    "enable_caching": true,
+    "cache_directory": "/var/lib/otto-bgp/cache",
+    "memory_limit": "512MB",
+    "progress_reporting": true
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "date_format": "%Y-%m-%d %H:%M:%S",
+    "log_to_file": true,
+    "log_file": "/var/lib/otto-bgp/logs/otto-bgp.log",
+    "security_log_file": "/var/lib/otto-bgp/logs/security.log",
+    "performance_log_file": "/var/lib/otto-bgp/logs/performance.log"
+  }
+}

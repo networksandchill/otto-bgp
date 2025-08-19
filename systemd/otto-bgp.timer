@@ -1,0 +1,29 @@
+[Unit]
+Description=Otto BGP System Mode Timer (Manual Scheduling)
+Documentation=file:///opt/otto-bgp/README.md
+Requires=otto-bgp.service
+
+[Timer]
+# This timer is for manual/system mode operations
+# For autonomous mode, use otto-bgp-autonomous.timer instead
+
+# Run every hour at the top of the hour
+OnCalendar=hourly
+
+# Alternative schedules (uncomment as needed):
+# Every 30 minutes: OnCalendar=*-*-* *:00,30:00
+# Business hours only: OnCalendar=Mon..Fri *-*-* 08..18:00:00
+# Daily at 6 AM: OnCalendar=*-*-* 06:00:00
+
+# Persistence and accuracy
+Persistent=yes
+AccuracySec=1min
+
+# Randomization to prevent network congestion
+RandomizedDelaySec=300
+
+# Prevent overlapping executions
+WakeSystem=no
+
+[Install]
+WantedBy=timers.target

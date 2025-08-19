@@ -1,0 +1,94 @@
+[Unit]
+Description=Otto BGP - Autonomous Mode (Scheduled Operations)
+Documentation=file:///opt/otto-bgp/README.md
+After=network-online.target otto-bgp-rpki-preflight.service
+Wants=network-online.target
+Requires=otto-bgp-rpki-preflight.service
+
+[Service]
+Type=oneshot
+User=otto.bgp
+Group=otto.bgp
+WorkingDirectory=/opt/otto-bgp
+ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output --autonomous
+Environment=PYTHONPATH=/opt/otto-bgp
+Environment=OTTO_BGP_MODE=autonomous
+Environment=OTTO_BGP_AUTONOMOUS=true
+EnvironmentFile=-/etc/otto-bgp/otto.env
+
+# Enhanced security hardening for autonomous mode
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @cpu-emulation @obsolete @privileged @reboot @swap
+SystemCallErrorNumber=EPERM
+
+# File system access - more restrictive for autonomous mode
+ReadWritePaths=/var/lib/otto-bgp/output
+ReadWritePaths=/var/lib/otto-bgp/logs
+ReadWritePaths=/var/lib/otto-bgp/cache
+ReadOnlyPaths=/etc/otto-bgp
+ReadOnlyPaths=/opt/otto-bgp
+ReadOnlyPaths=/var/lib/otto-bgp/ssh-keys
+InaccessiblePaths=/home
+InaccessiblePaths=/root
+InaccessiblePaths=/etc/shadow
+InaccessiblePaths=/etc/gshadow
+
+# Network isolation - configurable IP ranges for autonomous mode
+# Default: Allow SSH (22) and BGP/IRR queries (43, 443) to management networks only
+# Override via /etc/otto-bgp/otto.env: OTTO_BGP_ALLOWED_NETWORKS
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=10.0.0.0/8
+IPAddressAllow=172.16.0.0/12
+IPAddressAllow=192.168.0.0/16
+
+# Capability restrictions - no capabilities needed
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Process isolation
+PrivateNetwork=no
+# Note: PrivateNetwork=yes would break SSH/BGP functionality
+# Instead using IPAddressAllow/Deny for network segmentation
+
+# Logging with enhanced audit trail
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otto-bgp-autonomous
+LogLevelMax=warning
+
+# Resource limits - tighter for autonomous operations
+TimeoutStartSec=180
+TimeoutStopSec=30
+MemoryMax=1G
+MemorySwapMax=0
+CPUQuota=25%
+TasksMax=50
+LimitNOFILE=512
+LimitNPROC=50
+
+# Restart policy for autonomous mode
+Restart=no
+# Note: Timer handles scheduling; avoid restart loops
+
+[Install]
+WantedBy=multi-user.target
