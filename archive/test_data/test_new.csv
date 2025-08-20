@@ -1,4 +1,0 @@
-address,hostname
-192.168.1.1,edge-router-01.nyc
-192.168.1.2,core-router-01.sjc
-10.0.0.1,edge-router-02.lax
