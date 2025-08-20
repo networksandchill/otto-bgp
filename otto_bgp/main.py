@@ -21,6 +21,8 @@ import sys
 import os
 import logging
 import subprocess
+import atexit
+import signal
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -44,6 +46,75 @@ from otto_bgp.utils.error_handling import (
     OttoError, ValidationError, ConfigurationError
 )
 from otto_bgp.utils.error_handling import ConnectionError as OttoConnectionError
+
+# Global resource tracking for emergency cleanup
+_active_connections = set()
+_active_locks = set()
+_temp_files = set()
+
+def register_connection(connection):
+    """Register a connection for emergency cleanup"""
+    _active_connections.add(connection)
+
+def unregister_connection(connection):
+    """Unregister a connection from emergency cleanup"""
+    _active_connections.discard(connection)
+
+def register_lock(lock_path):
+    """Register a lock file for emergency cleanup"""
+    _active_locks.add(lock_path)
+
+def unregister_lock(lock_path):
+    """Unregister a lock file from emergency cleanup"""
+    _active_locks.discard(lock_path)
+
+def register_temp_file(file_path):
+    """Register a temporary file for emergency cleanup"""
+    _temp_files.add(file_path)
+
+def unregister_temp_file(file_path):
+    """Unregister a temporary file from emergency cleanup"""
+    _temp_files.discard(file_path)
+
+def emergency_cleanup():
+    """Emergency cleanup handler for atexit and signal handling"""
+    logger = logging.getLogger('otto-bgp.cleanup')
+    
+    # Close active connections
+    for connection in list(_active_connections):
+        try:
+            if hasattr(connection, 'close'):
+                connection.close()
+            elif hasattr(connection, 'disconnect'):
+                connection.disconnect()
+        except Exception:
+            pass  # Silent cleanup - don't interfere with exit
+    
+    # Release locks
+    for lock_path in list(_active_locks):
+        try:
+            if os.path.exists(lock_path):
+                os.unlink(lock_path)
+        except Exception:
+            pass  # Silent cleanup
+    
+    # Clean up temporary files
+    for temp_file in list(_temp_files):
+        try:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+        except Exception:
+            pass  # Silent cleanup
+
+def signal_handler(signum, frame):
+    """Handle signals with proper cleanup"""
+    emergency_cleanup()
+    sys.exit(128 + signum)  # Standard Unix exit code for signals
+
+# Register cleanup handlers
+atexit.register(emergency_cleanup)
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 
 def setup_app_logging(verbose: bool = False, quiet: bool = False):
@@ -583,15 +654,66 @@ def cmd_pipeline(args):
             print("Error: Device CSV file required")
             return OttoExitCodes.VALIDATION_FAILED
         
-        # Load devices
+        # Load devices with bulletproof validation
         devices = load_device_config(args.devices_csv)
+        
+        # DEFENSIVE VALIDATION: Bulletproof device list validation
+        if devices is None:
+            logger.error("Device loading returned None - possible internal error")
+            print("Error: Device loading failed internally")
+            return OttoExitCodes.VALIDATION_FAILED
+            
+        if not isinstance(devices, list):
+            logger.error(f"Device loading returned unexpected type: {type(devices).__name__}")
+            print("Error: Invalid device data structure")
+            return OttoExitCodes.VALIDATION_FAILED
+            
         if not devices:
             logger.error("No devices loaded from CSV file")
             print("Error: No devices found in CSV file")
             return OttoExitCodes.VALIDATION_FAILED
+            
+        if len(devices) == 0:  # Double-check for safety
+            logger.error("Device list has zero length")
+            print("Error: Empty device list")
+            return OttoExitCodes.VALIDATION_FAILED
+        
+        # DEFENSIVE VALIDATION: Validate device objects
+        valid_devices = []
+        for i, device in enumerate(devices):
+            if device is None:
+                logger.warning(f"Device at index {i} is None, skipping")
+                continue
+            if not hasattr(device, 'hostname'):
+                logger.warning(f"Device at index {i} missing hostname attribute, skipping")
+                continue
+            if not hasattr(device, 'address'):
+                logger.warning(f"Device at index {i} missing address attribute, skipping")
+                continue
+            valid_devices.append(device)
+            
+        if not valid_devices:
+            logger.error("No valid devices found after validation")
+            print("Error: All devices failed validation")
+            return OttoExitCodes.VALIDATION_FAILED
+            
+        devices = valid_devices  # Use only validated devices
+        logger.info(f"Validated {len(devices)} devices for processing")
         
         # Generate policies for all devices
         policies = generate_policies_for_devices(devices)
+        
+        # DEFENSIVE VALIDATION: Bulletproof policy validation
+        if policies is None:
+            logger.error("Policy generation returned None")
+            print("Error: Policy generation failed internally")
+            return OttoExitCodes.VALIDATION_FAILED
+            
+        if not isinstance(policies, list):
+            logger.error(f"Policy generation returned unexpected type: {type(policies).__name__}")
+            print("Error: Invalid policy data structure")
+            return OttoExitCodes.VALIDATION_FAILED
+            
         if not policies:
             logger.error("No policies generated")
             print("Error: No policies generated")
@@ -603,8 +725,27 @@ def cmd_pipeline(args):
         results = []
         failed_count = 0
         
+        # DEFENSIVE VALIDATION: Final safety check before iteration
+        if not devices or len(devices) == 0:
+            logger.error("Device list became invalid before iteration")
+            print("Error: Device list corruption detected")
+            return OttoExitCodes.VALIDATION_FAILED
+        
         for device in devices:
-            device_policies = [p for p in policies if p.get('device_hostname') == device.hostname]
+            # DEFENSIVE VALIDATION: Per-device safety checks
+            if device is None:
+                logger.error("Encountered None device during iteration")
+                continue
+                
+            if not hasattr(device, 'hostname'):
+                logger.error(f"Device missing hostname: {device}")
+                continue
+            # DEFENSIVE VALIDATION: Safe policy lookup
+            try:
+                device_policies = [p for p in policies if p and p.get('device_hostname') == device.hostname]
+            except Exception as e:
+                logger.error(f"Error filtering policies for device {device.hostname}: {e}")
+                continue
             
             if not device_policies:
                 logger.warning(f"No policies for device {device.hostname}")
@@ -634,39 +775,123 @@ def cmd_pipeline(args):
         print(f"  Failed: {failed_count}")
         print(f"  Policies generated: {len(policies)}")
         
-        # Exit code handling
+        # Exit code handling - return instead of sys.exit to allow cleanup
         if failed_count > 0:
             exit_code = results[0].exit_code if results else OttoExitCodes.UNEXPECTED_ERROR
             logger.error(f"Pipeline failed with exit code {exit_code}")
-            sys.exit(exit_code)
+            return exit_code
         
         logger.info("Pipeline completed successfully")
-        sys.exit(OttoExitCodes.SUCCESS)
+        return OttoExitCodes.SUCCESS
         
     except Exception as e:
         logger.error(f"Unexpected pipeline error: {e}")
         print(f"Unexpected error: {e}")
-        sys.exit(OttoExitCodes.UNEXPECTED_ERROR)
+        return OttoExitCodes.UNEXPECTED_ERROR
 
 
 def load_device_config(devices_csv: str) -> List[DeviceInfo]:
-    """Load device configuration from CSV file"""
+    """Load device configuration from CSV file with bulletproof validation
+    
+    Args:
+        devices_csv: Path to CSV file containing device information
+        
+    Returns:
+        List[DeviceInfo]: List of validated device objects (never None)
+        
+    Raises:
+        Never raises - returns empty list on any error
+    """
     logger = logging.getLogger('otto-bgp.pipeline')
     
+    # DEFENSIVE VALIDATION: Input parameter validation
+    if devices_csv is None:
+        logger.error("load_device_config: devices_csv parameter is None")
+        return []
+        
+    if not isinstance(devices_csv, str):
+        logger.error(f"load_device_config: devices_csv must be string, got {type(devices_csv).__name__}")
+        return []
+        
+    if not devices_csv.strip():
+        logger.error("load_device_config: devices_csv is empty or whitespace-only")
+        return []
+    
     try:
+        # DEFENSIVE VALIDATION: Check file exists and is readable
+        import os
+        if not os.path.exists(devices_csv):
+            logger.error(f"load_device_config: CSV file does not exist: {devices_csv}")
+            return []
+            
+        if not os.path.isfile(devices_csv):
+            logger.error(f"load_device_config: Path is not a file: {devices_csv}")
+            return []
+            
+        if not os.access(devices_csv, os.R_OK):
+            logger.error(f"load_device_config: CSV file is not readable: {devices_csv}")
+            return []
+        
         # Use the existing JuniperSSHCollector to load devices
         collector = JuniperSSHCollector()
         devices = collector.load_devices_from_csv(devices_csv)
-        logger.info(f"Loaded {len(devices)} devices from {devices_csv}")
-        return devices
+        
+        # DEFENSIVE VALIDATION: Validate return value from collector
+        if devices is None:
+            logger.error(f"load_device_config: collector returned None for {devices_csv}")
+            return []
+            
+        if not isinstance(devices, list):
+            logger.error(f"load_device_config: collector returned non-list: {type(devices).__name__}")
+            return []
+            
+        # Additional validation of individual devices
+        valid_devices = []
+        for i, device in enumerate(devices):
+            if device is None:
+                logger.warning(f"load_device_config: Device {i} is None, skipping")
+                continue
+                
+            if not hasattr(device, 'hostname') or not hasattr(device, 'address'):
+                logger.warning(f"load_device_config: Device {i} missing required attributes, skipping")
+                continue
+                
+            valid_devices.append(device)
+        
+        logger.info(f"Loaded {len(valid_devices)} valid devices from {devices_csv}")
+        return valid_devices
+        
     except Exception as e:
         logger.error(f"Failed to load devices from {devices_csv}: {e}")
-        return []
+        return []  # Always return empty list, never None
 
 
 def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
-    """Generate BGP policies for all devices"""
+    """Generate BGP policies for all devices with bulletproof validation
+    
+    Args:
+        devices: List of DeviceInfo objects to process
+        
+    Returns:
+        List[Dict]: List of policy dictionaries (never None)
+        
+    Raises:
+        Never raises - returns empty list on any error
+    """
     logger = logging.getLogger('otto-bgp.pipeline')
+    
+    # DEFENSIVE VALIDATION: Input parameter validation
+    if devices is None:
+        logger.error("generate_policies_for_devices: devices parameter is None")
+        return []
+        
+    if not isinstance(devices, list):
+        logger.error(f"generate_policies_for_devices: devices must be list, got {type(devices).__name__}")
+        return []
+        
+    if not devices:
+        logger.info("generate_policies_for_devices: empty device list provided")
+        return []
     
     try:
         # Collect BGP data from all devices
@@ -675,7 +900,34 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
         bgpq4 = BGPq4Wrapper()
         all_policies = []
         
-        for device in devices:
+        # DEFENSIVE VALIDATION: Validate each device before processing
+        valid_devices = []
+        for i, device in enumerate(devices):
+            if device is None:
+                logger.warning(f"generate_policies_for_devices: Device {i} is None, skipping")
+                continue
+                
+            if not hasattr(device, 'hostname'):
+                logger.warning(f"generate_policies_for_devices: Device {i} missing hostname, skipping")
+                continue
+                
+            if not hasattr(device, 'address'):
+                logger.warning(f"generate_policies_for_devices: Device {i} missing address, skipping")
+                continue
+                
+            valid_devices.append(device)
+            
+        if not valid_devices:
+            logger.error("generate_policies_for_devices: No valid devices found")
+            return []
+            
+        logger.info(f"Processing {len(valid_devices)} valid devices for policy generation")
+        
+        for device in valid_devices:
+            # Additional per-device safety check
+            if device is None:
+                logger.error("generate_policies_for_devices: Device became None during iteration")
+                continue
             try:
                 # Collect BGP data from individual device
                 bgp_data = collector.collect_bgp_data_from_device(device)
@@ -707,12 +959,39 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
                 logger.error(f"Error processing device {device.hostname}: {e}")
                 continue
         
-        logger.info(f"Generated {len(all_policies)} policies for {len(devices)} devices")
-        return all_policies
+        # DEFENSIVE VALIDATION: Validate final result
+        if all_policies is None:
+            logger.error("generate_policies_for_devices: all_policies became None")
+            return []
+            
+        if not isinstance(all_policies, list):
+            logger.error(f"generate_policies_for_devices: all_policies is not a list: {type(all_policies).__name__}")
+            return []
+            
+        # Validate individual policies
+        valid_policies = []
+        for i, policy in enumerate(all_policies):
+            if policy is None:
+                logger.warning(f"generate_policies_for_devices: Policy {i} is None, skipping")
+                continue
+                
+            if not isinstance(policy, dict):
+                logger.warning(f"generate_policies_for_devices: Policy {i} is not a dict, skipping")
+                continue
+                
+            # Check required keys
+            required_keys = ['device_hostname', 'device_address', 'as_number', 'policy_name', 'policy_content']
+            if all(key in policy for key in required_keys):
+                valid_policies.append(policy)
+            else:
+                logger.warning(f"generate_policies_for_devices: Policy {i} missing required keys")
+                
+        logger.info(f"Generated {len(valid_policies)} valid policies for {len(valid_devices)} devices")
+        return valid_policies
         
     except Exception as e:
         logger.error(f"Failed to generate policies: {e}")
-        return []
+        return []  # Always return empty list, never None
 
 
 def cmd_test_proxy(args):

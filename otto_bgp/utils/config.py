@@ -11,6 +11,7 @@ Provides centralized configuration handling with:
 
 import os
 import json
+import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -844,18 +845,39 @@ class ConfigManager:
             print(f"    RPKI validation disabled")
 
 
-# Global configuration instance
+# Global configuration instance with thread-safe singleton pattern
 _config_manager = None
+_config_manager_lock = threading.RLock()
 
 
 def get_config_manager(config_path: Optional[Path] = None) -> ConfigManager:
-    """Get global configuration manager instance"""
+    """
+    Get global configuration manager instance using thread-safe double-checked locking.
+    
+    Fixes race condition where multiple threads could create multiple instances
+    during concurrent initialization. Uses double-checked locking pattern for
+    optimal performance - fast path avoids lock acquisition after initialization.
+    
+    Performance: First check is lockless, lock only acquired during initialization.
+    """
     global _config_manager
     
-    if _config_manager is None:
-        _config_manager = ConfigManager(config_path)
+    # Fast path - avoid lock if already initialized (lockless read)
+    if _config_manager is not None:
+        return _config_manager
     
-    return _config_manager
+    # Slow path - thread-safe initialization with double-checked locking
+    with _config_manager_lock:
+        # Check again inside lock in case another thread initialized it
+        if _config_manager is None:
+            # Log thread info for race condition debugging
+            thread_id = threading.current_thread().ident
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Initializing ConfigManager singleton in thread {thread_id}")
+            
+            _config_manager = ConfigManager(config_path)
+            
+        return _config_manager
 
 
 def get_config() -> BGPToolkitConfig:

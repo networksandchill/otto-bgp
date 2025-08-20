@@ -175,17 +175,29 @@ class UltraMemoryEfficientASExtractor:
             import subprocess
             try:
                 # Use system sort with unique flag for memory-efficient deduplication
-                result = subprocess.run([
-                    'sort', '-n', '-u', temp_as_path
-                ], stdout=open(temp_sorted_path, 'w'), 
-                stderr=subprocess.PIPE, timeout=300)
+                # Proper file handle management with context manager
+                with open(temp_sorted_path, 'w') as sorted_file:
+                    result = subprocess.run([
+                        'sort', '-n', '-u', temp_as_path
+                    ], stdout=sorted_file, 
+                    stderr=subprocess.PIPE, timeout=300)
                 
                 if result.returncode != 0:
                     raise RuntimeError(f"Sort command failed: {result.stderr.decode()}")
                     
                 self.logger.debug("External sort completed successfully")
                 
-            except (subprocess.TimeoutExpired, FileNotFoundError):
+            except subprocess.TimeoutExpired as e:
+                # Ensure proper cleanup on timeout
+                self.logger.warning(f"Sort command timed out after 300 seconds: {e}")
+                # Clean up partial sorted file if it exists
+                try:
+                    if os.path.exists(temp_sorted_path):
+                        os.unlink(temp_sorted_path)
+                except OSError:
+                    pass  # File cleanup failed, but continue
+                return self._fallback_disk_deduplication(temp_as_path)
+            except FileNotFoundError:
                 # Fallback to Python-based sorting if system sort unavailable
                 self.logger.warning("System sort unavailable, using Python fallback")
                 return self._fallback_disk_deduplication(temp_as_path)
@@ -292,7 +304,18 @@ class StreamingASExtractor:
                                    pattern: re.Pattern,
                                    validator_func) -> Set[int]:
         """Extract AS numbers using streaming file processing with aggressive memory management"""
+        # Validate file_path input
+        if not file_path or (isinstance(file_path, str) and not file_path.strip()):
+            raise ValueError("file_path cannot be empty or None")
+        
         file_path = Path(file_path)
+        
+        # Check if file exists and is a file
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        if not file_path.is_file():
+            raise ValueError(f"Path is not a file: {file_path}")
+        
         as_collection = MemoryEfficientASSet(self.memory_limit_mb)
         lines_processed = 0
         
@@ -1265,6 +1288,10 @@ class ASProcessor:
     def get_sorted_as_list(self, as_numbers: Set[int]) -> List[int]:
         """Get sorted list of AS numbers"""
         return sorted(as_numbers)
+
+
+# Backward compatibility alias for existing imports
+ASExtractor = ASNumberExtractor
 
 
 class MemoryBenchmark:

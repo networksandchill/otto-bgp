@@ -18,6 +18,7 @@ import csv
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 from pathlib import Path
+from contextlib import contextmanager
 
 # Import secure host key verification
 from otto_bgp.utils.ssh_security import get_host_key_policy
@@ -36,6 +37,40 @@ class BGPPeerData:
     bgp_config: str
     success: bool
     error_message: Optional[str] = None
+
+
+class SSHConnectionManager:
+    """Context manager for SSH connections with resource leak prevention"""
+    
+    def __init__(self, collector: 'JuniperSSHCollector', device: DeviceInfo):
+        self.collector = collector
+        self.device = device
+        self.ssh_client = None
+        self.connected = False
+    
+    def __enter__(self):
+        try:
+            self.ssh_client = self.collector._create_ssh_client()
+            self.connected = self.collector._connect_to_device(self.ssh_client, self.device)
+            if not self.connected:
+                self.ssh_client.close()
+                raise ConnectionError(f"Failed to connect to {self.device.address}")
+            return self.ssh_client
+        except Exception as e:
+            if self.ssh_client is not None:
+                try:
+                    self.ssh_client.close()
+                except Exception:
+                    pass
+            raise e
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.ssh_client is not None:
+            try:
+                self.ssh_client.close()
+                self.collector.logger.debug(f"SSH connection closed to {self.device.address}")
+            except (paramiko.SSHException, OSError) as e:
+                self.collector.logger.debug(f"SSH cleanup warning for {self.device.address}: {e}")
 
 
 class JuniperSSHCollector:
@@ -236,13 +271,8 @@ class JuniperSSHCollector:
             BGP configuration text
         """
         device = DeviceInfo(address=address, hostname=f"router-{address.replace('.', '-')}")
-        ssh_client = self._create_ssh_client()
         
-        try:
-            # Connect to device
-            if not self._connect_to_device(ssh_client, device):
-                raise ConnectionError(f"Failed to connect to {address}")
-            
+        with SSHConnectionManager(self, device) as ssh_client:
             # Execute command to get full BGP configuration
             command = 'show configuration protocols bgp'
             self.logger.debug(f"Executing command on {address}: {command}")
@@ -259,12 +289,6 @@ class JuniperSSHCollector:
             self.logger.info(f"Successfully collected BGP configuration from {address}")
             
             return bgp_config
-            
-        except Exception as e:
-            self.logger.error(f"Error collecting BGP config from {address}: {e}")
-            raise
-        finally:
-            ssh_client.close()
     
     def collect_bgp_data_from_device(self, device: DeviceInfo) -> BGPPeerData:
         """
@@ -276,39 +300,37 @@ class JuniperSSHCollector:
         Returns:
             BGPPeerData object with results
         """
-        ssh_client = self._create_ssh_client()
-        
         try:
-            # Connect to device
-            if not self._connect_to_device(ssh_client, device):
+            with SSHConnectionManager(self, device) as ssh_client:
+                # Execute BGP configuration command
+                command = 'show configuration protocols bgp group CUSTOMERS | match peer-as'
+                self.logger.debug(f"Executing command on {device.address}: {command}")
+                
+                _, stdout, stderr = ssh_client.exec_command(command, timeout=self.command_timeout)
+                
+                # Read command output
+                bgp_config = stdout.read().decode('utf-8')
+                stderr_output = stderr.read().decode('utf-8')
+                
+                if stderr_output:
+                    self.logger.warning(f"Command stderr from {device.address}: {stderr_output}")
+                
+                self.logger.info(f"Successfully collected BGP data from {device.address}")
+                
                 return BGPPeerData(
                     device=device,
-                    bgp_config="",
-                    success=False,
-                    error_message="SSH connection failed"
+                    bgp_config=bgp_config,
+                    success=True
                 )
-            
-            # Execute BGP configuration command
-            command = 'show configuration protocols bgp group CUSTOMERS | match peer-as'
-            self.logger.debug(f"Executing command on {device.address}: {command}")
-            
-            _, stdout, stderr = ssh_client.exec_command(command, timeout=self.command_timeout)
-            
-            # Read command output
-            bgp_config = stdout.read().decode('utf-8')
-            stderr_output = stderr.read().decode('utf-8')
-            
-            if stderr_output:
-                self.logger.warning(f"Command stderr from {device.address}: {stderr_output}")
-            
-            self.logger.info(f"Successfully collected BGP data from {device.address}")
-            
+                
+        except ConnectionError as e:
+            self.logger.error(f"Connection error to {device.address}: {e}")
             return BGPPeerData(
                 device=device,
-                bgp_config=bgp_config,
-                success=True
+                bgp_config="",
+                success=False,
+                error_message="SSH connection failed"
             )
-            
         except paramiko.SSHException as e:
             self.logger.error(f"SSH error collecting BGP data from {device.address}: {e}")
             return BGPPeerData(
@@ -333,14 +355,6 @@ class JuniperSSHCollector:
                 success=False,
                 error_message=str(e)
             )
-        
-        finally:
-            # Always close SSH connection
-            try:
-                ssh_client.close()
-                self.logger.debug(f"SSH connection closed to {device.address}")
-            except (paramiko.SSHException, OSError) as e:
-                self.logger.debug(f"SSH cleanup warning for {device.address}: {e}")
     
     def collect_bgp_data_from_csv(self, csv_path: str, 
                                   use_parallel: bool = True) -> List[BGPPeerData]:
@@ -407,18 +421,17 @@ class JuniperSSHCollector:
         
         self.logger.info(f"Starting parallel BGP data collection from {len(devices)} devices using {optimal_workers} workers")
         
-        # Create parallel executor
-        executor = ParallelExecutor(
+        # Create parallel executor with proper resource management
+        with ParallelExecutor(
             max_workers=optimal_workers, 
             show_progress=show_progress
-        )
-        
-        # Execute parallel collection
-        parallel_results = executor.execute_batch(
-            items=devices,
-            task_func=self.collect_bgp_data_from_device,
-            task_name="Collecting BGP data"
-        )
+        ) as executor:
+            # Execute parallel collection
+            parallel_results = executor.execute_batch(
+                items=devices,
+                task_func=self.collect_bgp_data_from_device,
+                task_name="Collecting BGP data"
+            )
         
         # Extract BGPPeerData results from ParallelResult objects
         bgp_results = []

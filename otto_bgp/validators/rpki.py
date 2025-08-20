@@ -27,7 +27,13 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+
+# Import timeout management
+from otto_bgp.utils.timeout_config import (
+    TimeoutManager, TimeoutType, TimeoutContext, ExponentialBackoff,
+    get_timeout, timeout_context
+)
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -37,6 +43,130 @@ from ipaddress import ip_network, ip_address, AddressValueError, NetmaskValueErr
 
 # Otto BGP imports for integration
 from ..appliers.guardrails import GuardrailComponent, GuardrailResult, GuardrailConfig
+
+
+class ThreadHealthMonitor:
+    """Monitor health and performance of worker threads with watchdog functionality"""
+    
+    def __init__(self, max_workers: int):
+        self.max_workers = max_workers
+        self.thread_stats = {}
+        self.lock = threading.Lock()
+        self.start_time = time.time()
+        self.watchdog_active = False
+        self.watchdog_thread = None
+        
+    def register_thread(self, thread_id: str) -> None:
+        """Register a new worker thread"""
+        with self.lock:
+            self.thread_stats[thread_id] = {
+                'start_time': time.time(),
+                'last_heartbeat': time.time(),
+                'operations': 0,
+                'errors': 0,
+                'timeouts': 0,
+                'status': 'running'
+            }
+    
+    def heartbeat(self, thread_id: str, operation_success: bool = True, timeout: bool = False) -> None:
+        """Record thread heartbeat and operation result"""
+        with self.lock:
+            if thread_id in self.thread_stats:
+                stats = self.thread_stats[thread_id]
+                stats['last_heartbeat'] = time.time()
+                stats['operations'] += 1
+                if not operation_success:
+                    stats['errors'] += 1
+                if timeout:
+                    stats['timeouts'] += 1
+    
+    def mark_thread_completed(self, thread_id: str) -> None:
+        """Mark thread as completed"""
+        with self.lock:
+            if thread_id in self.thread_stats:
+                self.thread_stats[thread_id]['status'] = 'completed'
+    
+    def mark_thread_failed(self, thread_id: str, error: str) -> None:
+        """Mark thread as failed"""
+        with self.lock:
+            if thread_id in self.thread_stats:
+                self.thread_stats[thread_id]['status'] = 'failed'
+                self.thread_stats[thread_id]['error'] = error
+    
+    def get_unhealthy_threads(self, max_silence: float = 30.0) -> List[str]:
+        """Get list of threads that appear unhealthy"""
+        unhealthy = []
+        current_time = time.time()
+        
+        with self.lock:
+            for thread_id, stats in self.thread_stats.items():
+                if stats['status'] == 'running':
+                    silence_time = current_time - stats['last_heartbeat']
+                    if silence_time > max_silence:
+                        unhealthy.append(thread_id)
+        
+        return unhealthy
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """Get summary of all thread health"""
+        with self.lock:
+            total_ops = sum(s['operations'] for s in self.thread_stats.values())
+            total_errors = sum(s['errors'] for s in self.thread_stats.values())
+            total_timeouts = sum(s['timeouts'] for s in self.thread_stats.values())
+            
+            status_counts = {}
+            for stats in self.thread_stats.values():
+                status = stats['status']
+                status_counts[status] = status_counts.get(status, 0) + 1
+            
+            return {
+                'total_threads': len(self.thread_stats),
+                'max_workers': self.max_workers,
+                'total_operations': total_ops,
+                'total_errors': total_errors,
+                'total_timeouts': total_timeouts,
+                'error_rate': total_errors / max(1, total_ops),
+                'status_counts': status_counts,
+                'runtime': time.time() - self.start_time
+            }
+    
+    def start_watchdog(self, check_interval: float = 10.0, max_silence: float = 30.0) -> None:
+        """Start watchdog thread to monitor worker health"""
+        if self.watchdog_active:
+            return
+            
+        self.watchdog_active = True
+        self.watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, 
+            args=(check_interval, max_silence),
+            daemon=True
+        )
+        self.watchdog_thread.start()
+    
+    def stop_watchdog(self) -> None:
+        """Stop watchdog thread"""
+        self.watchdog_active = False
+        if self.watchdog_thread and self.watchdog_thread.is_alive():
+            self.watchdog_thread.join(timeout=5.0)
+    
+    def _watchdog_loop(self, check_interval: float, max_silence: float) -> None:
+        """Watchdog loop to monitor thread health"""
+        logger = logging.getLogger(__name__ + ".watchdog")
+        
+        while self.watchdog_active:
+            try:
+                unhealthy = self.get_unhealthy_threads(max_silence)
+                if unhealthy:
+                    logger.warning(f"Detected {len(unhealthy)} unhealthy threads: {unhealthy}")
+                    
+                    # Log summary for debugging
+                    summary = self.get_summary()
+                    logger.debug(f"Thread health summary: {summary}")
+                
+                time.sleep(check_interval)
+            except Exception as e:
+                logger.error(f"Watchdog error: {e}")
+                time.sleep(check_interval)
 
 
 class RPKIState(Enum):
@@ -600,13 +730,68 @@ class LazyVRPCache:
             self._asn_cache.move_to_end(key)
     
     def _can_cache_entry(self, vrp_entries: List[VRPEntry]) -> bool:
-        """Check if new entries can be cached within memory limits"""
-        if not vrp_entries:
+        """Check if new entries can be cached within memory limits
+        
+        Args:
+            vrp_entries: List of VRP entries to validate for caching
+            
+        Returns:
+            bool: True if entries can be cached, False otherwise
+            
+        Raises:
+            TypeError: If vrp_entries is not a list
+            ValueError: If vrp_entries contains invalid entries
+        """
+        # DEFENSIVE VALIDATION: Bulletproof input validation
+        if vrp_entries is None:
+            self.logger.warning("_can_cache_entry: vrp_entries is None, cannot cache")
+            return False
+            
+        if not isinstance(vrp_entries, list):
+            raise TypeError(f"_can_cache_entry: vrp_entries must be a list, got {type(vrp_entries).__name__}")
+            
+        if not vrp_entries:  # Empty list check
+            self.logger.debug("_can_cache_entry: vrp_entries is empty, nothing to cache")
+            return False
+            
+        if len(vrp_entries) == 0:  # Double-check for safety
+            self.logger.debug("_can_cache_entry: vrp_entries has zero length, nothing to cache")
             return False
         
-        # Estimate memory usage of new entries
-        estimated_entry_size = self._estimate_vrp_entry_size(vrp_entries[0])
-        estimated_total_size = estimated_entry_size * len(vrp_entries)
+        # DEFENSIVE VALIDATION: Check first entry before access
+        first_entry = vrp_entries[0] if vrp_entries else None
+        if first_entry is None:
+            self.logger.error("_can_cache_entry: First VRP entry is None, cannot estimate cache size")
+            return False
+            
+        # Validate that first entry is actually a VRPEntry
+        if not hasattr(first_entry, '__dict__'):
+            self.logger.error(f"_can_cache_entry: First entry is not a valid VRP entry: {type(first_entry).__name__}")
+            return False
+        
+        try:
+            # Estimate memory usage of new entries
+            estimated_entry_size = self._estimate_vrp_entry_size(first_entry)
+            
+            # DEFENSIVE VALIDATION: Check for reasonable memory estimate
+            if estimated_entry_size <= 0:
+                self.logger.warning(f"_can_cache_entry: Invalid memory estimate {estimated_entry_size}, using default")
+                estimated_entry_size = 1024  # Default reasonable size
+                
+            if estimated_entry_size > 1024 * 1024:  # 1MB per entry is suspicious
+                self.logger.warning(f"_can_cache_entry: Suspiciously large entry size {estimated_entry_size}, capping at 1MB")
+                estimated_entry_size = 1024 * 1024
+                
+            estimated_total_size = estimated_entry_size * len(vrp_entries)
+            
+            # DEFENSIVE VALIDATION: Protect against integer overflow
+            if estimated_total_size < 0:
+                self.logger.error("_can_cache_entry: Integer overflow in memory calculation, cannot cache")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"_can_cache_entry: Error estimating memory usage: {e}")
+            return False
         
         # Check memory limit
         if self._estimated_memory_usage + estimated_total_size > self.max_memory_bytes:
@@ -1216,37 +1401,137 @@ class RPKIValidator:
         prefix_chunks = self._chunk_prefixes(prefixes, chunk_size)
         
         results = []
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all chunks for parallel processing
-            future_to_chunk = {
-                executor.submit(self._validate_prefix_chunk, chunk, asn): chunk 
-                for chunk in prefix_chunks
-            }
-            
-            # Collect results as they complete (preserving order)
-            chunk_results = {}
-            for future in as_completed(future_to_chunk):
-                try:
-                    chunk_index = prefix_chunks.index(future_to_chunk[future])
-                    chunk_results[chunk_index] = future.result()
-                except Exception as e:
-                    # Handle chunk processing errors
-                    chunk = future_to_chunk[future]
-                    chunk_index = prefix_chunks.index(chunk)
-                    error_results = [
-                        RPKIValidationResult(
-                            prefix=prefix,
-                            asn=asn,
-                            state=RPKIState.ERROR,
-                            reason=f"Parallel validation error: {str(e)}"
-                        ) for prefix in chunk
-                    ]
-                    chunk_results[chunk_index] = error_results
-                    self.logger.error(f"Error processing chunk {chunk_index}: {e}")
-            
-            # Reconstruct results in original order
-            for i in sorted(chunk_results.keys()):
-                results.extend(chunk_results[i])
+        
+        # Get timeout values for RPKI validation
+        thread_timeout = get_timeout(TimeoutType.THREAD_POOL)
+        rpki_timeout = get_timeout(TimeoutType.RPKI_VALIDATION)
+        
+        # Initialize health monitoring
+        health_monitor = ThreadHealthMonitor(max_workers)
+        health_monitor.start_watchdog()
+        
+        try:
+            with timeout_context(TimeoutType.RPKI_VALIDATION, f"rpki_parallel_{len(prefixes)}_prefixes") as ctx:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # Submit all chunks for parallel processing
+                    future_to_chunk = {}
+                    for i, chunk in enumerate(prefix_chunks):
+                        thread_id = f"rpki_chunk_{i}"
+                        health_monitor.register_thread(thread_id)
+                        future = executor.submit(self._validate_prefix_chunk_with_monitoring, 
+                                               chunk, asn, thread_id, health_monitor)
+                        future_to_chunk[future] = {'chunk': chunk, 'thread_id': thread_id, 'index': i}
+                    
+                    # Collect results with timeout protection
+                    chunk_results = {}
+                    completed_futures = set()
+                    
+                    while len(completed_futures) < len(future_to_chunk) and not ctx.check_timeout():
+                        try:
+                            # Calculate remaining timeout
+                            timeout_remaining = min(thread_timeout, ctx.remaining_time())
+                            if timeout_remaining <= 0:
+                                self.logger.warning("RPKI validation timeout reached")
+                                break
+                            
+                            # Wait for futures with timeout
+                            pending_futures = set(future_to_chunk.keys()) - completed_futures
+                            
+                            if not pending_futures:
+                                break
+                                
+                            for future in as_completed(pending_futures, timeout=timeout_remaining):
+                                if future in completed_futures:
+                                    continue
+                                    
+                                completed_futures.add(future)
+                                future_info = future_to_chunk[future]
+                                chunk = future_info['chunk']
+                                thread_id = future_info['thread_id']
+                                chunk_index = future_info['index']
+                                
+                                try:
+                                    # Get result with individual timeout
+                                    chunk_results[chunk_index] = future.result(timeout=thread_timeout)
+                                    health_monitor.mark_thread_completed(thread_id)
+                                    self.logger.debug(f"Completed chunk {chunk_index} ({len(chunk)} prefixes)")
+                                    
+                                except FuturesTimeoutError:
+                                    # Individual thread timeout
+                                    health_monitor.mark_thread_failed(thread_id, "timeout")
+                                    self.logger.warning(f"Thread timeout for chunk {chunk_index}")
+                                    error_results = [
+                                        RPKIValidationResult(
+                                            prefix=prefix,
+                                            asn=asn,
+                                            state=RPKIState.ERROR,
+                                            reason=f"Thread timeout after {thread_timeout}s"
+                                        ) for prefix in chunk
+                                    ]
+                                    chunk_results[chunk_index] = error_results
+                                    future.cancel()
+                                    
+                                except Exception as e:
+                                    # Handle other thread errors
+                                    health_monitor.mark_thread_failed(thread_id, str(e))
+                                    self.logger.error(f"Error processing chunk {chunk_index}: {e}")
+                                    error_results = [
+                                        RPKIValidationResult(
+                                            prefix=prefix,
+                                            asn=asn,
+                                            state=RPKIState.ERROR,
+                                            reason=f"Parallel validation error: {str(e)}"
+                                        ) for prefix in chunk
+                                    ]
+                                    chunk_results[chunk_index] = error_results
+                                
+                                # Break from inner loop to check timeout
+                                break
+                                
+                        except FuturesTimeoutError:
+                            # No futures completed within timeout
+                            if ctx.check_timeout():
+                                self.logger.warning("Overall RPKI validation timeout reached")
+                                break
+                            # Continue if overall timeout not reached
+                            continue
+                    
+                    # Handle any remaining futures that didn't complete
+                    remaining_futures = set(future_to_chunk.keys()) - completed_futures
+                    if remaining_futures:
+                        self.logger.warning(f"Cancelling {len(remaining_futures)} incomplete futures due to timeout")
+                        for future in remaining_futures:
+                            future.cancel()
+                            future_info = future_to_chunk[future]
+                            chunk = future_info['chunk']
+                            thread_id = future_info['thread_id']
+                            chunk_index = future_info['index']
+                            
+                            health_monitor.mark_thread_failed(thread_id, "cancelled_timeout")
+                            
+                            # Create error results for cancelled chunks
+                            if chunk_index not in chunk_results:
+                                error_results = [
+                                    RPKIValidationResult(
+                                        prefix=prefix,
+                                        asn=asn,
+                                        state=RPKIState.ERROR,
+                                        reason="Validation cancelled due to timeout"
+                                    ) for prefix in chunk
+                                ]
+                                chunk_results[chunk_index] = error_results
+                    
+                    # Reconstruct results in original order
+                    for i in sorted(chunk_results.keys()):
+                        results.extend(chunk_results[i])
+                    
+                    # Log health summary
+                    summary = health_monitor.get_summary()
+                    self.logger.debug(f"RPKI validation health summary: {summary}")
+                    
+        finally:
+            # Stop watchdog
+            health_monitor.stop_watchdog()
         
         self.logger.debug(f"Parallel validation completed: {len(results)} results")
         return results
@@ -1322,6 +1607,39 @@ class RPKIValidator:
             List of prefix chunks
         """
         return [prefixes[i:i + chunk_size] for i in range(0, len(prefixes), chunk_size)]
+    
+    def _validate_prefix_chunk_with_monitoring(self, prefix_chunk: List[str], asn: int, 
+                                             thread_id: str, health_monitor: ThreadHealthMonitor) -> List[RPKIValidationResult]:
+        """
+        Validate a chunk of prefixes with health monitoring
+        
+        This wrapper provides heartbeat monitoring and error tracking for the thread pool.
+        
+        Args:
+            prefix_chunk: List of prefixes to validate
+            asn: AS number for validation
+            thread_id: Unique identifier for this thread
+            health_monitor: Health monitoring instance
+            
+        Returns:
+            List of validation results for the chunk
+        """
+        try:
+            # Initial heartbeat
+            health_monitor.heartbeat(thread_id)
+            
+            # Perform the actual validation
+            results = self._validate_prefix_chunk(prefix_chunk, asn)
+            
+            # Final heartbeat with success
+            health_monitor.heartbeat(thread_id, operation_success=True)
+            
+            return results
+            
+        except Exception as e:
+            # Record error and re-raise
+            health_monitor.heartbeat(thread_id, operation_success=False)
+            raise e
     
     def _validate_prefix_chunk(self, prefix_chunk: List[str], asn: int) -> List[RPKIValidationResult]:
         """

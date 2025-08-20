@@ -70,15 +70,28 @@ class BGPPolicyPipeline:
         self.bgp_generator = BGPq4Wrapper(mode=bgpq4_mode)
         self.router_inspector = RouterInspector()
         
-        # Pipeline state
+        # Pipeline state - properly isolated between runs
+        self._reset_pipeline_state()
+        self._pipeline_used = False  # Track if pipeline has been used
+
+    def _reset_pipeline_state(self):
+        """Reset all pipeline state to ensure clean runs"""
         self.start_time = None
         self.bgp_data_collection = []
         self.as_extraction_results = None
         self.policy_results = []
         self.router_profiles = []  # v0.3.0 router awareness
         
+    def _ensure_fresh_pipeline(self):
+        """Enforce single-use pattern or reset state for reuse"""
+        if self._pipeline_used:
+            self.logger.warning("Pipeline instance being reused - resetting state to prevent contamination")
+            self._reset_pipeline_state()
+        self._pipeline_used = True
+        
     def run_complete_pipeline(self) -> PipelineResult:
         """Execute the complete BGP policy generation pipeline (v0.3.0 router-aware)"""
+        self._ensure_fresh_pipeline()  # Ensure clean state for this run
         if self.config.router_aware:
             return self.run_router_aware_pipeline()
         else:

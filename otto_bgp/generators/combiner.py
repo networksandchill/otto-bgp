@@ -11,10 +11,12 @@ import tempfile
 import heapq
 import os
 import gc
+import atexit
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Iterator, TextIO, Union
 from dataclasses import dataclass
 from datetime import datetime
+from contextlib import contextmanager
 
 
 @dataclass
@@ -33,6 +35,7 @@ class CombinedPolicyResult:
 class StreamingPrefixListBuilder:
     """
     Memory-efficient prefix list builder with overflow to disk
+    Enhanced with comprehensive resource management and leak prevention
     """
     
     def __init__(self, max_memory_entries: int = 50000):
@@ -40,6 +43,20 @@ class StreamingPrefixListBuilder:
         self.prefix_sets = {}  # Memory-limited prefix storage
         self.overflow_files = {}  # Disk storage for large prefix lists
         self.temp_dir = None
+        self._cleanup_registered = False
+        
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+        
+    def __del__(self):
+        """Destructor cleanup as last resort"""
+        try:
+            self.cleanup()
+        except Exception:
+            pass  # Silent cleanup in destructor
         
     def add_prefixes_streaming(self, as_number: int, prefix_stream: Iterator[str]) -> None:
         """Add prefixes with memory pressure management"""
@@ -112,34 +129,72 @@ class StreamingPrefixListBuilder:
         
         if not self.temp_dir:
             self.temp_dir = tempfile.mkdtemp(prefix='otto_bgp_prefixes_')
+            # Register cleanup on exit
+            atexit.register(self._emergency_cleanup)
             
         if as_number not in self.overflow_files:
             temp_file_path = os.path.join(self.temp_dir, f'prefixes_AS{as_number}.txt')
-            self.overflow_files[as_number] = open(temp_file_path, 'w+')
+            try:
+                # Use managed file handle
+                file_handle = open(temp_file_path, 'w+')
+                self.overflow_files[as_number] = file_handle
+            except OSError as e:
+                logging.getLogger(__name__).error(f"Failed to create overflow file for AS{as_number}: {e}")
+                return
             
         # Write prefixes to disk and clear memory
         if as_number in self.prefix_sets and self.prefix_sets[as_number]:
-            for prefix in sorted(self.prefix_sets[as_number]):
-                self.overflow_files[as_number].write(f"{prefix}\n")
-            self.overflow_files[as_number].flush()
-            
-            # Clear memory
-            self.prefix_sets[as_number].clear()
+            try:
+                for prefix in sorted(self.prefix_sets[as_number]):
+                    self.overflow_files[as_number].write(f"{prefix}\n")
+                self.overflow_files[as_number].flush()
+                
+                # Clear memory
+                self.prefix_sets[as_number].clear()
+            except (OSError, IOError) as e:
+                logging.getLogger(__name__).error(f"Failed to write overflow data for AS{as_number}: {e}")
+                # Close and remove problematic file
+                if as_number in self.overflow_files:
+                    try:
+                        self.overflow_files[as_number].close()
+                        del self.overflow_files[as_number]
+                    except Exception:
+                        pass
     
     def cleanup(self) -> None:
-        """Clean up temporary files"""
+        """Clean up temporary files with comprehensive resource management"""
         
-        # Close overflow files
-        for temp_file in self.overflow_files.values():
-            temp_file.close()
-            
+        # Close overflow files with error handling
+        for as_number, temp_file in list(self.overflow_files.items()):
+            try:
+                if hasattr(temp_file, 'close') and not temp_file.closed:
+                    temp_file.close()
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Error closing overflow file for AS{as_number}: {e}")
+            finally:
+                # Always remove from tracking
+                del self.overflow_files[as_number]
+                
         # Remove temporary directory
         if self.temp_dir and os.path.exists(self.temp_dir):
-            import shutil
-            shutil.rmtree(self.temp_dir)
-            
+            try:
+                import shutil
+                shutil.rmtree(self.temp_dir)
+                logging.getLogger(__name__).debug(f"Cleaned up temporary directory: {self.temp_dir}")
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Error cleaning up temp directory {self.temp_dir}: {e}")
+            finally:
+                self.temp_dir = None
+                
         self.overflow_files.clear()
         self.prefix_sets.clear()
+    
+    def _emergency_cleanup(self):
+        """Emergency cleanup for atexit handler"""
+        try:
+            self.cleanup()
+        except Exception:
+            pass  # Silent cleanup in emergency
 
 
 class StreamingDeduplicator:
@@ -152,51 +207,60 @@ class StreamingDeduplicator:
         
     def deduplicate_prefixes_streaming(self, 
                                      prefix_sources: List[Iterator[str]]) -> Iterator[str]:
-        """Deduplicate prefixes from multiple sources using external sort"""
+        """Deduplicate prefixes from multiple sources using external sort with enhanced cleanup"""
         
-        # Create temporary files for each source
+        # Create temporary files for each source with managed cleanup
         temp_files = []
         
         try:
             for i, prefix_source in enumerate(prefix_sources):
-                temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, 
-                                                      prefix=f'dedup_source_{i}_')
+                try:
+                    # Use context manager for each temp file creation
+                    with tempfile.NamedTemporaryFile(mode='w', delete=False, 
+                                                    prefix=f'dedup_source_{i}_') as temp_file:
+                        
+                        # Write prefixes to temporary file
+                        for prefix in prefix_source:
+                            temp_file.write(f"{prefix.strip()}\n")
+                        temp_file.flush()
+                        temp_files.append(temp_file.name)
+                        
+                except (OSError, IOError) as e:
+                    logging.getLogger(__name__).error(f"Failed to create temp file for source {i}: {e}")
+                    continue
                 
-                # Write prefixes to temporary file
-                for prefix in prefix_source:
-                    temp_file.write(f"{prefix.strip()}\n")
-                temp_file.flush()
-                temp_files.append(temp_file.name)
-                temp_file.close()
-                
-            # Use external sort for memory-efficient deduplication
-            yield from self._external_sort_deduplicate(temp_files)
+            if temp_files:
+                # Use external sort for memory-efficient deduplication
+                yield from self._external_sort_deduplicate(temp_files)
             
         finally:
-            # Cleanup temporary files
+            # Comprehensive cleanup of temporary files
             for temp_file_path in temp_files:
                 try:
-                    os.unlink(temp_file_path)
-                except OSError:
-                    pass
+                    if os.path.exists(temp_file_path):
+                        os.unlink(temp_file_path)
+                        logging.getLogger(__name__).debug(f"Cleaned up temp file: {temp_file_path}")
+                except OSError as e:
+                    logging.getLogger(__name__).warning(f"Failed to cleanup temp file {temp_file_path}: {e}")
                     
     def _external_sort_deduplicate(self, temp_files: List[str]) -> Iterator[str]:
-        """Use external sorting for memory-efficient deduplication"""
+        """Use external sorting for memory-efficient deduplication with proper resource management"""
         
         if not temp_files:
             return
             
-        file_handles = []
-        
-        try:
-            file_handles = [open(f, 'r') for f in temp_files]
-            
+        # Use context manager for automatic file handle cleanup
+        with self._managed_file_handles(temp_files) as file_handles:
             # Initialize heap with first line from each file
             heap = []
             for i, fh in enumerate(file_handles):
-                line = fh.readline().strip()
-                if line:
-                    heapq.heappush(heap, (line, i))
+                try:
+                    line = fh.readline().strip()
+                    if line:
+                        heapq.heappush(heap, (line, i))
+                except (OSError, IOError) as e:
+                    logging.getLogger(__name__).warning(f"Error reading from temp file {i}: {e}")
+                    continue
                     
             last_prefix = None
             
@@ -209,14 +273,40 @@ class StreamingDeduplicator:
                     last_prefix = prefix
                     
                 # Read next line from same file
-                next_line = file_handles[file_idx].readline().strip()
-                if next_line:
-                    heapq.heappush(heap, (next_line, file_idx))
-                    
+                try:
+                    next_line = file_handles[file_idx].readline().strip()
+                    if next_line:
+                        heapq.heappush(heap, (next_line, file_idx))
+                except (OSError, IOError) as e:
+                    logging.getLogger(__name__).warning(f"Error reading next line from file {file_idx}: {e}")
+                    continue
+    
+    @contextmanager
+    def _managed_file_handles(self, temp_files: List[str]):
+        """Context manager for managing multiple file handles with guaranteed cleanup"""
+        file_handles = []
+        try:
+            for temp_file in temp_files:
+                try:
+                    fh = open(temp_file, 'r')
+                    file_handles.append(fh)
+                except (OSError, IOError) as e:
+                    logging.getLogger(__name__).warning(f"Failed to open temp file {temp_file}: {e}")
+                    # Add None placeholder to maintain index alignment
+                    file_handles.append(None)
+            
+            # Filter out None handles
+            valid_handles = [fh for fh in file_handles if fh is not None]
+            yield valid_handles
+            
         finally:
-            # Close all file handles
+            # Ensure all file handles are closed
             for fh in file_handles:
-                fh.close()
+                if fh is not None:
+                    try:
+                        fh.close()
+                    except Exception as e:
+                        logging.getLogger(__name__).warning(f"Error closing file handle: {e}")
 
 
 class PolicyCombiner:

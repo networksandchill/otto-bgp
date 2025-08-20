@@ -16,10 +16,15 @@ import time
 import socket
 import signal
 import atexit
+import threading
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 from pathlib import Path
 from enum import Enum
+from contextlib import contextmanager
+
+# Import resource management
+from otto_bgp.utils.subprocess_manager import ManagedProcess, ProcessState
 
 
 class TunnelState(Enum):
@@ -99,7 +104,7 @@ class IRRProxyManager:
     
     def setup_tunnel(self, tunnel_config: Dict[str, Union[str, int]]) -> TunnelStatus:
         """
-        Setup an SSH tunnel to an IRR service
+        Setup an SSH tunnel to an IRR service with enhanced resource management
         
         Args:
             tunnel_config: Configuration for specific tunnel
@@ -144,41 +149,35 @@ class IRRProxyManager:
             # Build SSH command
             ssh_cmd = self._build_ssh_command(local_port, remote_host, remote_port)
             
-            # Start SSH process
-            self.logger.debug(f"Starting SSH tunnel: {' '.join(ssh_cmd)}")
-            process = subprocess.Popen(
-                ssh_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL
-            )
-            
-            # Wait for tunnel to establish
-            if self._wait_for_tunnel(local_port, timeout=self.config.connection_timeout):
-                tunnel_status.state = TunnelState.CONNECTED
-                tunnel_status.process_id = process.pid
-                tunnel_status.established_at = time.time()
-                tunnel_status.last_check = time.time()
+            # Use managed process for better resource control
+            with ManagedProcess(
+                command=ssh_cmd,
+                timeout=None,  # Long-running process
+                capture_output=True
+            ) as managed:
+                process = managed.process
                 
-                # Register tunnel and process
-                self.tunnels[tunnel_name] = tunnel_status
-                self.processes[tunnel_name] = process
-                self.allocated_ports.add(local_port)
-                
-                self.logger.info(f"Tunnel {tunnel_name} established successfully on port {local_port}")
-                
-            else:
-                # Tunnel failed to establish
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                
-                tunnel_status.state = TunnelState.FAILED
-                tunnel_status.error_message = "Failed to establish tunnel within timeout"
-                self.logger.error(f"Tunnel {tunnel_name} failed to establish")
+                # Wait for tunnel to establish
+                if self._wait_for_tunnel(local_port, timeout=self.config.connection_timeout):
+                    tunnel_status.state = TunnelState.CONNECTED
+                    tunnel_status.process_id = process.pid
+                    tunnel_status.established_at = time.time()
+                    tunnel_status.last_check = time.time()
+                    
+                    # Register tunnel and process - must detach from context manager
+                    # for long-running tunnels
+                    managed._cleanup_done = True  # Prevent automatic cleanup
+                    self.tunnels[tunnel_name] = tunnel_status
+                    self.processes[tunnel_name] = process
+                    self.allocated_ports.add(local_port)
+                    
+                    self.logger.info(f"Tunnel {tunnel_name} established successfully on port {local_port}")
+                    
+                else:
+                    tunnel_status.state = TunnelState.FAILED
+                    tunnel_status.error_message = "Failed to establish tunnel within timeout"
+                    self.logger.error(f"Tunnel {tunnel_name} failed to establish")
+                    # Process will be cleaned up by context manager
         
         except Exception as e:
             tunnel_status.state = TunnelState.FAILED
@@ -305,7 +304,7 @@ class IRRProxyManager:
     
     def cleanup_tunnel(self, tunnel_name: str) -> bool:
         """
-        Clean up a specific tunnel
+        Clean up a specific tunnel with enhanced resource management
         
         Args:
             tunnel_name: Name of tunnel to cleanup
@@ -318,15 +317,29 @@ class IRRProxyManager:
         if tunnel_name in self.processes:
             try:
                 process = self.processes[tunnel_name]
-                process.terminate()
                 
-                # Wait for graceful termination
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.logger.warning(f"Force killing tunnel {tunnel_name} process")
-                    process.kill()
-                    process.wait()
+                # Use managed termination for better resource control
+                if process.poll() is None:  # Process still running
+                    self.logger.info(f"Terminating tunnel {tunnel_name} process {process.pid}")
+                    
+                    # Try graceful termination first
+                    process.terminate()
+                    
+                    # Wait for graceful termination with timeout
+                    try:
+                        process.wait(timeout=5)
+                        self.logger.debug(f"Tunnel {tunnel_name} process terminated gracefully")
+                    except subprocess.TimeoutExpired:
+                        # Force kill if graceful termination fails
+                        self.logger.warning(f"Force killing unresponsive tunnel {tunnel_name} process {process.pid}")
+                        process.kill()
+                        
+                        # Ensure process is fully cleaned up
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            self.logger.error(f"Failed to kill process {process.pid} - may be zombie")
+                            success = False
                 
                 del self.processes[tunnel_name]
                 self.logger.info(f"Cleaned up tunnel {tunnel_name} process")
@@ -335,22 +348,53 @@ class IRRProxyManager:
                 self.logger.error(f"Error cleaning up tunnel {tunnel_name} process: {e}")
                 success = False
         
+        # Clean up tunnel state
         if tunnel_name in self.tunnels:
             tunnel = self.tunnels[tunnel_name]
             self.allocated_ports.discard(tunnel.local_port)
             del self.tunnels[tunnel_name]
+            self.logger.debug(f"Cleaned up tunnel {tunnel_name} state")
         
         return success
     
     def cleanup_all_tunnels(self):
-        """Clean up all tunnels and processes"""
-        self.logger.info("Cleaning up all proxy tunnels")
+        """Clean up all tunnels and processes with comprehensive resource management"""
+        if not self.tunnels and not self.processes:
+            return
+        
+        self.logger.info(f"Cleaning up {len(self.tunnels)} proxy tunnels")
+        
+        # Create thread pool for parallel cleanup to handle unresponsive processes
+        cleanup_threads = []
         
         tunnel_names = list(self.tunnels.keys())
-        for tunnel_name in tunnel_names:
-            self.cleanup_tunnel(tunnel_name)
         
+        # First pass: graceful termination
+        for tunnel_name in tunnel_names:
+            if tunnel_name in self.processes:
+                process = self.processes[tunnel_name]
+                if process.poll() is None:
+                    try:
+                        self.logger.debug(f"Sending SIGTERM to tunnel {tunnel_name} process {process.pid}")
+                        process.terminate()
+                    except Exception as e:
+                        self.logger.error(f"Error terminating tunnel {tunnel_name}: {e}")
+        
+        # Wait for graceful termination
+        time.sleep(2)
+        
+        # Second pass: cleanup and force kill if needed
+        for tunnel_name in tunnel_names:
+            try:
+                self.cleanup_tunnel(tunnel_name)
+            except Exception as e:
+                self.logger.error(f"Error during tunnel cleanup {tunnel_name}: {e}")
+        
+        # Ensure all resources are cleared
         self.allocated_ports.clear()
+        self.processes.clear()
+        self.tunnels.clear()
+        
         self.logger.info("All proxy tunnels cleaned up")
     
     def get_tunnel_status(self, tunnel_name: str) -> Optional[TunnelStatus]:

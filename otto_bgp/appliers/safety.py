@@ -95,17 +95,21 @@ class UnifiedSafetyManager:
             emergency_override: Emergency override flag (requires justification)
         """
         self.logger = logger or logging.getLogger(__name__)
-        self.checkpoints = []
         
-        # Initialize guardrail system
+        # Thread-safe collections and state management
+        # Fixes race condition where multiple threads could corrupt shared state
+        self._state_lock = threading.RLock()  # Reentrant for nested operations
+        self.checkpoints = []  # Protected by _state_lock
+        
+        # Initialize guardrail system with thread safety
         self.guardrails: Dict[str, GuardrailComponent] = {}
         self._initialize_guardrails()
         
-        # Safety state tracking
+        # Safety state tracking - all access must be synchronized
         self._safety_active = True
         self._emergency_override = emergency_override
-        self._rollback_callbacks: List[callable] = []
-        self._current_operation: Optional[str] = None
+        self._rollback_callbacks: List[callable] = []  # Protected by _state_lock
+        self._current_operation: Optional[str] = None  # Protected by _state_lock
         
         # Signal handling
         if enable_signal_handlers:
@@ -192,21 +196,38 @@ class UnifiedSafetyManager:
             self.logger.error(f"Failed to install signal handlers: {e}")
             
     def _emergency_rollback(self):
-        """Emergency rollback procedure called by signal handler"""
+        """
+        Emergency rollback procedure called by signal handler.
+        Thread-safe execution of rollback callbacks.
+        """
         self.logger.warning("Executing emergency rollback procedures")
         
-        # Execute all registered rollback callbacks
-        for callback in self._rollback_callbacks:
+        # Thread-safe access to rollback callbacks
+        with self._state_lock:
+            # Create a copy to avoid modification during iteration
+            callbacks_to_execute = list(self._rollback_callbacks)
+            thread_id = threading.current_thread().ident
+            self.logger.debug(f"Executing {len(callbacks_to_execute)} rollback callbacks in thread {thread_id}")
+        
+        # Execute callbacks outside the lock to avoid deadlocks
+        for i, callback in enumerate(callbacks_to_execute):
             try:
+                self.logger.debug(f"Executing rollback callback {i+1}/{len(callbacks_to_execute)}")
                 callback()
             except Exception as e:
-                self.logger.error(f"Emergency rollback callback failed: {e}")
+                self.logger.error(f"Emergency rollback callback {i+1} failed: {e}")
                 
         self.logger.info("Emergency rollback procedures completed")
         
     def add_rollback_callback(self, callback: callable):
-        """Add callback to be executed during emergency rollback"""
-        self._rollback_callbacks.append(callback)
+        """
+        Add callback to be executed during emergency rollback.
+        Thread-safe operation using state lock.
+        """
+        with self._state_lock:
+            thread_id = threading.current_thread().ident
+            self.logger.debug(f"Adding rollback callback in thread {thread_id}")
+            self._rollback_callbacks.append(callback)
         
     def _determine_unified_risk_level(self, errors: List[str], warnings: List[str], 
                                      guardrail_risks: List[str]) -> str:
@@ -250,18 +271,25 @@ class UnifiedSafetyManager:
             return f"Safe to proceed - {guardrail_count} guardrails passed"
             
     def _prepare_rollback_checkpoint(self) -> str:
-        """Prepare rollback checkpoint for safe operations"""
+        """
+        Prepare rollback checkpoint for safe operations.
+        Thread-safe operation using state lock.
+        """
         checkpoint_id = f"unified_safety_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        checkpoint = {
-            'id': checkpoint_id,
-            'timestamp': datetime.now().isoformat(),
-            'operation': self._current_operation,
-            'safety_manager': 'unified',
-            'guardrails_active': sum(1 for g in self.guardrails.values() if g.is_enabled())
-        }
-        
-        self.checkpoints.append(checkpoint)
+        # Create checkpoint with thread-safe access to guardrails and current operation
+        with self._state_lock:
+            checkpoint = {
+                'id': checkpoint_id,
+                'timestamp': datetime.now().isoformat(),
+                'operation': self._current_operation,
+                'safety_manager': 'unified',
+                'guardrails_active': sum(1 for g in self.guardrails.values() if g.is_enabled()),
+                'thread_id': threading.current_thread().ident
+            }
+            
+            self.checkpoints.append(checkpoint)
+            
         self.logger.info(f"Rollback checkpoint prepared: {checkpoint_id}")
         return checkpoint_id
         
@@ -304,8 +332,9 @@ class UnifiedSafetyManager:
         """
         self.logger.info(f"UNIFIED SAFETY CHECK: Validating {len(policies)} policies")
         
-        # Set current operation context
-        self._current_operation = "policy_validation"
+        # Set current operation context with thread safety
+        with self._state_lock:
+            self._current_operation = "policy_validation"
         
         warnings = []
         errors = []
@@ -527,7 +556,8 @@ class UnifiedSafetyManager:
                                   device_hostname: str,
                                   checkpoint_name: Optional[str] = None) -> str:
         """
-        Create a rollback checkpoint before applying changes
+        Create a rollback checkpoint before applying changes.
+        Thread-safe operation using state lock.
         
         Args:
             device_hostname: Router hostname
@@ -539,15 +569,18 @@ class UnifiedSafetyManager:
         if not checkpoint_name:
             checkpoint_name = f"otto_bgp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        checkpoint = {
-            'id': checkpoint_name,
-            'hostname': device_hostname,
-            'timestamp': datetime.now().isoformat(),
-            'status': 'active'
-        }
-        
-        self.checkpoints.append(checkpoint)
-        
+        # Thread-safe checkpoint creation
+        with self._state_lock:
+            checkpoint = {
+                'id': checkpoint_name,
+                'hostname': device_hostname,
+                'timestamp': datetime.now().isoformat(),
+                'status': 'active',
+                'thread_id': threading.current_thread().ident
+            }
+            
+            self.checkpoints.append(checkpoint)
+            
         self.logger.info(f"Created rollback checkpoint: {checkpoint_name}")
         
         return checkpoint_name

@@ -13,6 +13,8 @@ import logging
 import signal
 import time
 import threading
+import fcntl
+import os
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Set, Tuple, Any
 from dataclasses import dataclass
@@ -380,6 +382,8 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
         super().__init__("concurrent_operation", config, logger)
         self.lock_file_path = Path("/tmp/otto-bgp.lock")
         self._lock_acquired = False
+        self._lock_fd = None  # File descriptor for atomic fcntl.flock operations
+        self._lock_creation_time = None  # Track when lock was acquired for debugging
         
     def check(self, context: Dict[str, Any]) -> GuardrailResult:
         """
@@ -468,31 +472,100 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
             return None
             
     def _acquire_lock(self) -> bool:
-        """Acquire operation lock"""
+        """
+        Acquire operation lock using atomic fcntl.flock for true process locking.
+        
+        Fixes race condition where multiple processes could create lock file
+        simultaneously. Uses exclusive non-blocking lock for immediate failure
+        if another process holds the lock.
+        
+        Performance: Minimal overhead - single fcntl syscall.
+        """
         try:
-            import os
+            # Create or open lock file (this is safe - file creation race is handled by fcntl)
+            self._lock_fd = open(self.lock_file_path, 'w')
             
-            # Create lock file with current PID
-            with open(self.lock_file_path, 'x') as f:  # 'x' fails if file exists
-                f.write(str(os.getpid()))
-                
+            # Atomic exclusive lock - fails immediately if another process has it
+            fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            # Lock acquired successfully - write PID and metadata
+            self._lock_fd.write(f"{os.getpid()}\n")
+            self._lock_fd.write(f"acquired_at={time.time()}\n")
+            self._lock_fd.write(f"thread_id={threading.current_thread().ident}\n")
+            self._lock_fd.flush()
+            
             self._lock_acquired = True
+            self._lock_creation_time = time.time()
+            
+            self.logger.debug(f"Acquired exclusive lock (PID {os.getpid()}, "
+                             f"thread {threading.current_thread().ident})")
             return True
             
-        except FileExistsError:
-            return False
+        except (OSError, IOError) as e:
+            # Lock is held by another process or system error
+            if self._lock_fd:
+                try:
+                    self._lock_fd.close()
+                except:
+                    pass
+                self._lock_fd = None
+            
+            # Check if it's because lock is held (EAGAIN/EACCES) vs other errors
+            if e.errno in (11, 13):  # EAGAIN or EACCES
+                self.logger.debug(f"Lock held by another process (errno {e.errno})")
+                return False
+            else:
+                self.logger.error(f"Failed to acquire lock due to system error: {e}")
+                return False
+                
         except Exception as e:
-            self.logger.error(f"Failed to acquire lock: {e}")
+            # Unexpected error
+            if self._lock_fd:
+                try:
+                    self._lock_fd.close()
+                except:
+                    pass
+                self._lock_fd = None
+            self.logger.error(f"Unexpected error acquiring lock: {e}")
             return False
             
     def _remove_lock(self):
-        """Remove operation lock"""
+        """
+        Remove operation lock and release fcntl lock.
+        
+        Properly releases both the fcntl lock and closes file descriptor
+        to ensure other processes can acquire the lock.
+        """
         try:
+            if self._lock_fd is not None:
+                # Release fcntl lock explicitly (though closing the fd would do this too)
+                try:
+                    fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_UN)
+                except:
+                    pass  # Lock might already be released
+                
+                # Close file descriptor
+                self._lock_fd.close()
+                self._lock_fd = None
+                
+                # Log lock release with timing info
+                if self._lock_creation_time:
+                    lock_duration = time.time() - self._lock_creation_time
+                    self.logger.debug(f"Released lock after {lock_duration:.2f}s")
+                
+            # Clean up lock file
             if self.lock_file_path.exists():
                 self.lock_file_path.unlink()
+                
             self._lock_acquired = False
+            self._lock_creation_time = None
+            
         except Exception as e:
-            self.logger.warning(f"Failed to remove lock: {e}")
+            self.logger.warning(f"Failed to remove lock cleanly: {e}")
+            # Force cleanup even if there were errors
+            self._lock_acquired = False
+            self._lock_fd = None
+            self._lock_creation_time = None
             
     def cleanup(self):
         """Cleanup lock on exit"""
@@ -513,7 +586,10 @@ class SignalHandlingGuardrail(GuardrailComponent):
         super().__init__("signal_handling", config, logger)
         self._rollback_callbacks: List[callable] = []
         self._signal_handlers_installed = False
-        self._shutdown_initiated = False
+        # Thread-safe shutdown coordination using threading.Event
+        # Fixes race condition where multiple signals could trigger shutdown logic
+        self._shutdown_event = threading.Event()
+        self._shutdown_lock = threading.RLock()  # Reentrant lock for nested signal handling
         
     def install_signal_handlers(self):
         """Install signal handlers for graceful shutdown"""
@@ -550,14 +626,14 @@ class SignalHandlingGuardrail(GuardrailComponent):
         if not self._signal_handlers_installed:
             self.install_signal_handlers()
         
-        passed = self._signal_handlers_installed and not self._shutdown_initiated
+        passed = self._signal_handlers_installed and not self._shutdown_event.is_set()
         risk_level = "low" if passed else "medium"
         message = "Signal handlers ready" if passed else "Signal handling not ready"
         
         details = {
             'handlers_installed': self._signal_handlers_installed,
             'rollback_callbacks': len(self._rollback_callbacks),
-            'shutdown_initiated': self._shutdown_initiated
+            'shutdown_initiated': self._shutdown_event.is_set()
         }
         
         recommended_action = ("Signal handling ready for graceful shutdown" 
@@ -574,29 +650,58 @@ class SignalHandlingGuardrail(GuardrailComponent):
         )
         
     def _signal_handler(self, signum: int, frame):
-        """Handle termination signals"""
-        if self._shutdown_initiated:
-            # Force exit on second signal
-            self.logger.critical("Force exit on second signal")
-            import sys
-            sys.exit(128 + signum)
+        """
+        Thread-safe signal handler with atomic shutdown coordination.
+        
+        Fixes race condition by using threading.Event for atomic shutdown state
+        and RLock for coordinated access during signal handling.
+        
+        Performance: Minimal overhead - single atomic check + lock acquisition only on shutdown.
+        """
+        import threading
+        import time
+        
+        signal_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
+        thread_id = threading.current_thread().ident
+        
+        self.logger.debug(f"Signal {signal_name} received by thread {thread_id}")
+        
+        # Thread-safe shutdown coordination with atomic check-and-set
+        with self._shutdown_lock:
+            if self._shutdown_event.is_set():
+                # Shutdown already initiated by another thread/signal
+                # Force immediate exit on repeated signals within grace period
+                self.logger.critical(
+                    f"Force exit on repeated {signal_name} (thread {thread_id}) - "
+                    f"shutdown already in progress"
+                )
+                import sys
+                sys.exit(128 + signum)
             
-        self._shutdown_initiated = True
-        signal_name = signal.Signals(signum).name
+            # Atomically set shutdown state - first signal wins
+            self._shutdown_event.set()
+            shutdown_start_time = time.time()
+            
+        self.logger.warning(
+            f"Received {signal_name} (thread {thread_id}) - initiating graceful shutdown"
+        )
         
-        self.logger.warning(f"Received {signal_name} - initiating graceful shutdown")
-        
-        # Start rollback in separate thread to avoid blocking
+        # Start rollback in separate thread to avoid blocking signal handler
+        # Use specific thread naming for debugging race conditions
         rollback_thread = threading.Thread(
             target=self._perform_graceful_rollback,
-            args=(signum,),
-            name=f"rollback-{signal_name}"
+            args=(signum, shutdown_start_time, thread_id),
+            name=f"otto-rollback-{signal_name}-{thread_id}"
         )
         rollback_thread.daemon = True
         rollback_thread.start()
         
-        # Give rollback time to complete
-        rollback_thread.join(timeout=30)
+        # Give rollback time to complete with progress monitoring
+        rollback_completed = rollback_thread.join(timeout=30)
+        if rollback_thread.is_alive():
+            self.logger.error(
+                f"Rollback thread still running after 30s timeout (signal {signal_name})"
+            )
         
         # Exit with appropriate signal code
         exit_manager = get_exit_manager()
@@ -616,9 +721,32 @@ class SignalHandlingGuardrail(GuardrailComponent):
         # Implementation would reload configuration
         # For now, just log the event
         
-    def _perform_graceful_rollback(self, signum: int):
-        """Perform graceful rollback operations"""
-        self.logger.info("Starting graceful rollback procedures")
+    def _perform_graceful_rollback(self, signum: int, shutdown_start_time: float = None, 
+                                   initiating_thread_id: int = None):
+        """
+        Perform graceful rollback operations with enhanced logging for race condition debugging.
+        
+        Args:
+            signum: Signal number that initiated shutdown
+            shutdown_start_time: When shutdown was initiated (for timing analysis)
+            initiating_thread_id: Thread ID that received the signal
+        """
+        import threading
+        import time
+        
+        current_thread_id = threading.current_thread().ident
+        start_time = time.time()
+        
+        if shutdown_start_time:
+            delay_ms = (start_time - shutdown_start_time) * 1000
+            self.logger.info(
+                f"Starting graceful rollback (signal {signum}) - "
+                f"initiated by thread {initiating_thread_id}, "
+                f"executing in thread {current_thread_id}, "
+                f"delay: {delay_ms:.2f}ms"
+            )
+        else:
+            self.logger.info(f"Starting graceful rollback (signal {signum})")
         
         rollback_success = True
         

@@ -16,11 +16,21 @@ import re
 import os
 import fcntl
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import time
+import signal
+from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from typing import List, Set, Optional, Dict, Union, Any
 from pathlib import Path
 from enum import Enum
+
+# Import resource management
+from otto_bgp.utils.subprocess_manager import run_with_resource_management, ProcessState
+# Import timeout management
+from otto_bgp.utils.timeout_config import (
+    TimeoutManager, TimeoutType, TimeoutContext, ExponentialBackoff,
+    get_timeout, timeout_context
+)
 
 
 class BGPq4Mode(Enum):
@@ -84,12 +94,63 @@ def validate_as_number(as_number) -> int:
     return as_number
 
 
+class WorkerHealthMonitor:
+    """Monitor health and performance of worker processes"""
+    
+    def __init__(self, process_id: int = None):
+        self.process_id = process_id or os.getpid()
+        self.start_time = time.time()
+        self.last_heartbeat = time.time()
+        self.operation_count = 0
+        self.error_count = 0
+        self.timeout_count = 0
+        
+    def heartbeat(self):
+        """Update last heartbeat time"""
+        self.last_heartbeat = time.time()
+        
+    def record_operation(self, success: bool = True, timeout: bool = False):
+        """Record an operation result"""
+        self.operation_count += 1
+        if not success:
+            self.error_count += 1
+        if timeout:
+            self.timeout_count += 1
+        self.heartbeat()
+    
+    def is_healthy(self, max_error_rate: float = 0.8, max_silence_time: float = 60.0) -> bool:
+        """Check if worker is healthy"""
+        if self.operation_count == 0:
+            return time.time() - self.start_time < max_silence_time
+        
+        error_rate = self.error_count / self.operation_count
+        silence_time = time.time() - self.last_heartbeat
+        
+        return error_rate < max_error_rate and silence_time < max_silence_time
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get worker statistics"""
+        runtime = time.time() - self.start_time
+        return {
+            'process_id': self.process_id,
+            'runtime': runtime,
+            'operations': self.operation_count,
+            'errors': self.error_count,
+            'timeouts': self.timeout_count,
+            'error_rate': self.error_count / max(1, self.operation_count),
+            'ops_per_second': self.operation_count / max(1, runtime),
+            'last_heartbeat': self.last_heartbeat,
+            'silence_time': time.time() - self.last_heartbeat
+        }
+
+
 def _generate_policy_worker(args) -> PolicyGenerationResult:
     """
-    Worker function for parallel policy generation
+    Worker function for parallel policy generation with timeout protection
     
     This function is defined at module level to support pickling for ProcessPoolExecutor.
     It creates a new BGPq4Wrapper instance for each process to ensure process isolation.
+    Includes comprehensive timeout handling and process health monitoring.
     
     Args:
         args: Tuple containing (as_number, policy_name, wrapper_config)
@@ -99,36 +160,77 @@ def _generate_policy_worker(args) -> PolicyGenerationResult:
     """
     as_number, policy_name, wrapper_config = args
     
+    # Initialize health monitor for this worker
+    monitor = WorkerHealthMonitor()
+    
+    # Get timeout from configuration (no signal handling in worker processes)
+    process_timeout = get_timeout(TimeoutType.PROCESS_EXECUTION)
+    
     try:
-        # Create new wrapper instance for this process
-        # Disable cache to avoid file locking issues between processes
-        wrapper = BGPq4Wrapper(
-            mode=wrapper_config['mode'],
-            docker_image=wrapper_config['docker_image'],
-            command_timeout=wrapper_config['command_timeout'],
-            native_bgpq4_path=wrapper_config['native_bgpq4_path'],
-            proxy_manager=None,  # Proxy manager cannot be pickled
-            enable_cache=False   # Use file-based caching instead
-        )
-        
-        # Generate policy with process-safe file caching
-        result = wrapper.generate_policy_for_as(as_number, policy_name, use_cache=False)
-        
-        # Save to process-safe cache if successful
-        if result.success and result.policy_content:
-            _save_to_process_safe_cache(as_number, result.policy_content, policy_name, wrapper_config['cache_ttl'])
-        
-        return result
-        
-    except Exception as e:
-        # Return error result if process fails
+        monitor.heartbeat()
+    
+        try:
+            # Create new wrapper instance for this process
+            # Disable cache to avoid file locking issues between processes
+            wrapper = BGPq4Wrapper(
+                mode=wrapper_config['mode'],
+                docker_image=wrapper_config['docker_image'],
+                command_timeout=wrapper_config['command_timeout'],
+                native_bgpq4_path=wrapper_config['native_bgpq4_path'],
+                proxy_manager=None,  # Proxy manager cannot be pickled
+                enable_cache=False   # Use file-based caching instead
+            )
+            
+            monitor.heartbeat()
+            
+            # Generate policy with process-safe file caching
+            with timeout_context(TimeoutType.PROCESS_EXECUTION, f"bgpq4_AS{as_number}"):
+                result = wrapper.generate_policy_for_as(as_number, policy_name, use_cache=False)
+            
+            # Record operation result
+            monitor.record_operation(success=result.success)
+            
+            # Save to process-safe cache if successful
+            if result.success and result.policy_content:
+                _save_to_process_safe_cache(as_number, result.policy_content, policy_name, wrapper_config['cache_ttl'])
+            
+            return result
+            
+        except TimeoutError as e:
+            # Handle timeout specifically
+            monitor.record_operation(success=False, timeout=True)
+            return PolicyGenerationResult(
+                as_number=as_number,
+                policy_name=policy_name or f"AS{as_number}",
+                policy_content="",
+                success=False,
+                execution_time=process_timeout,
+                error_message=f"Process timeout: {str(e)}",
+                bgpq4_mode="unknown"
+            )
+            
+        except Exception as e:
+            # Handle other errors
+            monitor.record_operation(success=False)
+            return PolicyGenerationResult(
+                as_number=as_number,
+                policy_name=policy_name or f"AS{as_number}",
+                policy_content="",
+                success=False,
+                execution_time=0.0,
+                error_message=f"Process error: {str(e)}",
+                bgpq4_mode="unknown"
+            )
+            
+    except Exception as outer_e:
+        # Handle setup errors (wrapper creation, etc.)
         return PolicyGenerationResult(
             as_number=as_number,
             policy_name=policy_name or f"AS{as_number}",
             policy_content="",
             success=False,
             execution_time=0.0,
-            error_message=f"Process error: {str(e)}",
+            error_message=f"Worker setup error: {str(outer_e)}",
             bgpq4_mode="unknown"
         )
 
@@ -219,30 +321,58 @@ def _load_from_process_safe_cache(as_number: int, policy_name: str = None) -> Op
         if not cache_file.exists():
             return None
         
-        # Read cache file with lock
-        with open(cache_file, 'r') as f:
-            # Try to acquire shared lock for reading
-            try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
-            except OSError:
-                # File is locked, skip cache
-                return None
-            
-            data = json.load(f)
-            
-            # Check if expired
-            entry_data = data['entry']
-            age = time.time() - entry_data['timestamp']
-            if age > entry_data['ttl_seconds']:
-                # Entry expired, remove file
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        # Atomic cache read with proper expiration handling
+        # Fixes TOCTOU race condition by doing deletion while holding exclusive lock
+        try:
+            with open(cache_file, 'r+') as f:  # r+ allows both read and write for lock upgrade
+                # Try to acquire shared lock for reading
                 try:
-                    cache_file.unlink()
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
                 except OSError:
-                    pass
-                return None
-            
-            return entry_data['data']
+                    # File is locked, skip cache
+                    return None
+                
+                data = json.load(f)
+                
+                # Check if expired
+                entry_data = data['entry']
+                age = time.time() - entry_data['timestamp']
+                if age > entry_data['ttl_seconds']:
+                    # Entry expired - upgrade to exclusive lock for deletion
+                    try:
+                        # Upgrade to exclusive lock (atomic operation)
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        
+                        # Double-check expiration after acquiring exclusive lock
+                        # (another process might have updated the file)
+                        f.seek(0)
+                        try:
+                            data = json.load(f)
+                            entry_data = data['entry']
+                            age = time.time() - entry_data['timestamp']
+                            if age > entry_data['ttl_seconds']:
+                                # Still expired - safe to delete while holding exclusive lock
+                                f.close()  # Close before deletion
+                                cache_file.unlink()
+                                return None
+                            else:
+                                # File was updated, not expired anymore
+                                return entry_data['data']
+                        except (json.JSONDecodeError, KeyError):
+                            # File corrupted, delete it
+                            f.close()
+                            cache_file.unlink()
+                            return None
+                            
+                    except OSError:
+                        # Cannot upgrade lock, another process is handling expiration
+                        return None
+                
+                return entry_data['data']
+                
+        except FileNotFoundError:
+            # File was deleted by another process during our operation
+            return None
         
     except Exception:
         # Silently fail for cache operations
@@ -427,7 +557,8 @@ class BGPq4Wrapper:
                               as_number: int, 
                               policy_name: str = None,
                               irr_server: str = None,
-                              use_cache: bool = True) -> PolicyGenerationResult:
+                              use_cache: bool = True,
+                              timeout: int = None) -> PolicyGenerationResult:
         """
         Generate BGP policy for single AS number
         
@@ -436,6 +567,7 @@ class BGPq4Wrapper:
             policy_name: Custom policy name (default: AS<number>)
             irr_server: Optional IRR server preference for proxy selection
             use_cache: Use cached policy if available (default: True)
+            timeout: Custom timeout in seconds (overrides default command_timeout)
             
         Returns:
             PolicyGenerationResult with policy content and metadata
@@ -470,6 +602,9 @@ class BGPq4Wrapper:
             command = self._build_bgpq4_command(validated_as, policy_name, irr_server)
             start_time = time.time()
             
+            # Use custom timeout if provided, otherwise use default
+            effective_timeout = timeout if timeout is not None else self.command_timeout
+            
         except ValueError as e:
             # Return early for validation errors
             self.logger.error(f"Invalid input for AS policy generation: {e}")
@@ -484,17 +619,16 @@ class BGPq4Wrapper:
             )
         
         try:
-            result = subprocess.run(
-                command,
+            # Use managed subprocess execution for resource safety
+            result = run_with_resource_management(
+                command=command,
+                timeout=effective_timeout,
                 capture_output=True,
-                text=True,
-                timeout=self.command_timeout
+                text=True
             )
             
-            execution_time = time.time() - start_time
-            
-            if result.returncode == 0:
-                self.logger.debug(f"Successfully generated policy for AS{validated_as} in {execution_time:.2f}s")
+            if result.state == ProcessState.COMPLETED:
+                self.logger.debug(f"Successfully generated policy for AS{validated_as} in {result.execution_time:.2f}s")
                 
                 # Cache successful result
                 if self.cache and result.stdout.strip():
@@ -505,10 +639,24 @@ class BGPq4Wrapper:
                     policy_name=policy_name,
                     policy_content=result.stdout,
                     success=True,
-                    execution_time=execution_time,
+                    execution_time=result.execution_time,
                     bgpq4_mode=self.detected_mode.value
                 )
-            else:
+            
+            elif result.state == ProcessState.TIMEOUT:
+                self.logger.warning(f"Timeout generating policy for AS{validated_as}: {result.error_message}")
+                
+                return PolicyGenerationResult(
+                    as_number=validated_as,
+                    policy_name=policy_name,
+                    policy_content="",
+                    success=False,
+                    execution_time=result.execution_time,
+                    error_message=result.error_message,
+                    bgpq4_mode=self.detected_mode.value
+                )
+            
+            else:  # FAILED state
                 error_msg = f"bgpq4 error (code {result.returncode}): {result.stderr.strip()}"
                 self.logger.warning(f"Failed to generate policy for AS{validated_as}: {error_msg}")
                 
@@ -517,40 +665,11 @@ class BGPq4Wrapper:
                     policy_name=policy_name,
                     policy_content="",
                     success=False,
-                    execution_time=execution_time,
+                    execution_time=result.execution_time,
                     error_message=error_msg,
                     bgpq4_mode=self.detected_mode.value
                 )
                 
-        except subprocess.TimeoutExpired:
-            execution_time = time.time() - start_time
-            error_msg = f"Command timeout after {self.command_timeout}s"
-            self.logger.warning(f"Timeout generating policy for AS{validated_as}")
-            
-            return PolicyGenerationResult(
-                as_number=validated_as,
-                policy_name=policy_name,
-                policy_content="",
-                success=False,
-                execution_time=execution_time,
-                error_message=error_msg,
-                bgpq4_mode=self.detected_mode.value
-            )
-            
-        except OSError as e:
-            execution_time = time.time() - start_time
-            error_msg = f"System error: {str(e)}"
-            self.logger.error(f"System error generating policy for AS{validated_as}: {error_msg}")
-            
-            return PolicyGenerationResult(
-                as_number=validated_as,
-                policy_name=policy_name,
-                policy_content="",
-                success=False,
-                execution_time=execution_time,
-                error_message=error_msg,
-                bgpq4_mode=self.detected_mode.value
-            )
         except Exception as e:
             execution_time = time.time() - start_time
             error_msg = f"Unexpected error: {str(e)}"
@@ -668,53 +787,138 @@ class BGPq4Wrapper:
                     bgpq4_mode=self.detected_mode.value if self.detected_mode else "unknown"
                 ))
         
-        # Process remaining tasks in parallel
+        # Process remaining tasks in parallel with timeout protection
         if validated_tasks:
             self.logger.info(f"Processing {len(validated_tasks)} AS numbers in parallel ({len(results)} from cache)")
             
+            # Get timeout values
+            process_timeout = get_timeout(TimeoutType.PROCESS_EXECUTION)
+            batch_timeout = get_timeout(TimeoutType.BATCH_PROCESSING)
+            
             try:
-                with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit all tasks
-                    future_to_as = {
-                        executor.submit(_generate_policy_worker, task): task[0] 
-                        for task in validated_tasks
-                    }
-                    
-                    # Collect results as they complete
-                    for future in as_completed(future_to_as):
-                        as_number = future_to_as[future]
-                        try:
-                            result = future.result()
-                            results.append(result)
-                            
-                            # Log progress
-                            if result.success:
-                                self.logger.debug(f"Completed AS{as_number} in {result.execution_time:.2f}s")
-                            else:
-                                self.logger.warning(f"Failed AS{as_number}: {result.error_message}")
+                with timeout_context(TimeoutType.BATCH_PROCESSING, f"parallel_generation_{len(validated_tasks)}_AS") as ctx:
+                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        # Submit all tasks
+                        future_to_as = {
+                            executor.submit(_generate_policy_worker, task): task[0] 
+                            for task in validated_tasks
+                        }
+                        
+                        # Track completed and pending futures
+                        completed_count = 0
+                        pending_futures = set(future_to_as.keys())
+                        
+                        # Collect results with timeout and health monitoring
+                        while pending_futures and not ctx.check_timeout():
+                            try:
+                                # Use timeout to prevent indefinite blocking
+                                timeout_remaining = min(process_timeout, ctx.remaining_time())
+                                if timeout_remaining <= 0:
+                                    self.logger.warning("Batch timeout reached, cancelling remaining tasks")
+                                    break
                                 
-                        except Exception as e:
-                            # Handle process execution errors
-                            self.logger.error(f"Process error for AS{as_number}: {e}")
-                            results.append(PolicyGenerationResult(
-                                as_number=as_number,
-                                policy_name=f"AS{as_number}",
-                                policy_content="",
-                                success=False,
-                                execution_time=0.0,
-                                error_message=f"Process execution error: {str(e)}",
-                                bgpq4_mode=self.detected_mode.value if self.detected_mode else "unknown"
-                            ))
+                                # Wait for at least one future to complete
+                                for future in as_completed(pending_futures, timeout=timeout_remaining):
+                                    as_number = future_to_as[future]
+                                    pending_futures.discard(future)
+                                    
+                                    try:
+                                        # Get result with individual process timeout
+                                        result = future.result(timeout=process_timeout)
+                                        results.append(result)
+                                        completed_count += 1
+                                        
+                                        # Log progress
+                                        if result.success:
+                                            self.logger.debug(
+                                                f"Completed AS{as_number} in {result.execution_time:.2f}s "
+                                                f"({completed_count}/{len(validated_tasks)})"
+                                            )
+                                        else:
+                                            self.logger.warning(f"Failed AS{as_number}: {result.error_message}")
+                                    
+                                    except FuturesTimeoutError:
+                                        # Individual process timeout
+                                        self.logger.error(f"Process timeout for AS{as_number} after {process_timeout}s")
+                                        results.append(PolicyGenerationResult(
+                                            as_number=as_number,
+                                            policy_name=f"AS{as_number}",
+                                            policy_content="",
+                                            success=False,
+                                            execution_time=process_timeout,
+                                            error_message=f"Process timeout after {process_timeout}s",
+                                            bgpq4_mode=self.detected_mode.value if self.detected_mode else "unknown"
+                                        ))
+                                        # Cancel the timed-out future
+                                        future.cancel()
+                                    
+                                    except Exception as e:
+                                        # Handle other process execution errors
+                                        self.logger.error(f"Process error for AS{as_number}: {e}")
+                                        results.append(PolicyGenerationResult(
+                                            as_number=as_number,
+                                            policy_name=f"AS{as_number}",
+                                            policy_content="",
+                                            success=False,
+                                            execution_time=0.0,
+                                            error_message=f"Process execution error: {str(e)}",
+                                            bgpq4_mode=self.detected_mode.value if self.detected_mode else "unknown"
+                                        ))
+                                    
+                                    # Break from inner loop to check timeout
+                                    break
+                                    
+                            except FuturesTimeoutError:
+                                # No futures completed within timeout - check if we should continue
+                                if ctx.check_timeout():
+                                    self.logger.warning("Batch timeout reached while waiting for completions")
+                                    break
+                                # Continue waiting if batch timeout not reached
+                                continue
+                        
+                        # Handle any remaining pending futures
+                        if pending_futures:
+                            self.logger.warning(f"Cancelling {len(pending_futures)} pending tasks due to timeout")
+                            for future in pending_futures:
+                                future.cancel()
+                                as_number = future_to_as[future]
+                                results.append(PolicyGenerationResult(
+                                    as_number=as_number,
+                                    policy_name=f"AS{as_number}",
+                                    policy_content="",
+                                    success=False,
+                                    execution_time=0.0,
+                                    error_message="Task cancelled due to batch timeout",
+                                    bgpq4_mode=self.detected_mode.value if self.detected_mode else "unknown"
+                                ))
                             
             except Exception as e:
                 # Handle ProcessPoolExecutor initialization errors
                 self.logger.error(f"Failed to initialize parallel processing: {e}")
                 # Fallback to sequential processing for remaining tasks
                 self.logger.info("Falling back to sequential processing")
-                for task in validated_tasks:
+                
+                # Process remaining tasks sequentially with timeout protection
+                remaining_tasks = [task for task in validated_tasks 
+                                 if not any(r.as_number == task[0] for r in results)]
+                
+                for task in remaining_tasks:
                     as_number, policy_name, _ = task
-                    result = self.generate_policy_for_as(as_number, policy_name)
-                    results.append(result)
+                    try:
+                        with timeout_context(TimeoutType.PROCESS_EXECUTION, f"sequential_AS{as_number}"):
+                            result = self.generate_policy_for_as(as_number, policy_name)
+                            results.append(result)
+                    except Exception as seq_e:
+                        self.logger.error(f"Sequential processing failed for AS{as_number}: {seq_e}")
+                        results.append(PolicyGenerationResult(
+                            as_number=as_number,
+                            policy_name=policy_name,
+                            policy_content="",
+                            success=False,
+                            execution_time=0.0,
+                            error_message=f"Sequential fallback error: {str(seq_e)}",
+                            bgpq4_mode=self.detected_mode.value if self.detected_mode else "unknown"
+                        ))
         
         total_time = time.time() - start_time
         successful_count = sum(1 for r in results if r.success)
@@ -1031,3 +1235,7 @@ class BGPq4Wrapper:
             command_timeout=command_timeout,
             proxy_manager=proxy_manager
         )
+
+
+# Backward compatibility alias for existing imports  
+BgpQ4Wrapper = BGPq4Wrapper
