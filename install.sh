@@ -229,23 +229,23 @@ download_otto_bgp() {
     
     cd "$TEMP_DIR"
     
-    # Download with timeout
-    if ! timeout 120 curl -fsSL "$REPO_URL/archive/main.tar.gz" | tar xz; then
+    # Download with timeout (temporarily using feature branch for testing)
+    if ! timeout 120 curl -fsSL "$REPO_URL/archive/feature/optimizations.tar.gz" | tar xz; then
         log_error "Download failed or timed out"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
     # Verify download contents
-    if [[ ! -d "otto-bgp-main" ]]; then
-        log_error "Download verification failed - otto-bgp-main directory not found"
+    if [[ ! -d "otto-bgp-feature-optimizations" ]]; then
+        log_error "Download verification failed - otto-bgp-feature-optimizations directory not found"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
     # Move to lib directory (ensure directory exists first)
     mkdir -p "$LIB_DIR"
-    if ! mv otto-bgp-main/* "$LIB_DIR/"; then
+    if ! mv otto-bgp-feature-optimizations/* "$LIB_DIR/"; then
         log_error "Failed to move files to installation directory"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
