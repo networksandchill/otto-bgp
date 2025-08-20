@@ -96,4 +96,4 @@ test_known_hosts*
 internal_docs/
 
 # Archive directory (historical docs and old tests)
-archive/otto_venv/
+archive/
