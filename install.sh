@@ -351,63 +351,52 @@ create_config() {
         SERVICE_USER_CONFIG="$USER"
     fi
     
-    # Copy template from example-configs
-    if [[ ! -f "$LIB_DIR/example-configs/otto.env.example" ]]; then
-        log_error "Template file not found: $LIB_DIR/example-configs/otto.env.example"
+    # Select correct template based on mode
+    if [[ "$AUTONOMOUS_MODE" == true ]]; then
+        TEMPLATE_FILE="$LIB_DIR/systemd/otto.env.autonomous"
+        TEMPLATE_NAME="autonomous"
+    elif [[ "$INSTALL_MODE" == "system" ]]; then
+        TEMPLATE_FILE="$LIB_DIR/systemd/otto.env.system"
+        TEMPLATE_NAME="system"
+    else
+        TEMPLATE_FILE="$LIB_DIR/systemd/otto.env.user"
+        TEMPLATE_NAME="user"
+    fi
+    
+    # Verify template exists
+    if [[ ! -f "$TEMPLATE_FILE" ]]; then
+        log_error "Template file not found: $TEMPLATE_FILE"
         exit 1
     fi
     
-    # Copy template and customize with sed
-    cp "$LIB_DIR/example-configs/otto.env.example" "$CONFIG_DIR/otto.env"
+    log_info "Using $TEMPLATE_NAME template: $TEMPLATE_FILE"
+    
+    # Copy template
+    cp "$TEMPLATE_FILE" "$CONFIG_DIR/otto.env"
     
     # Add header with generation info
     sed -i "1i# Generated during installation - $(date)" "$CONFIG_DIR/otto.env"
     sed -i "2i# Customized for $INSTALL_MODE installation\\n" "$CONFIG_DIR/otto.env"
     
-    # Customize paths and settings based on installation mode
-    if [[ "$INSTALL_MODE" == "system" ]]; then
-        # System installation paths
-        sed -i "s|OTTO_BGP_ENVIRONMENT=user|OTTO_BGP_ENVIRONMENT=system|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|OTTO_BGP_INSTALLATION_MODE=user|OTTO_BGP_INSTALLATION_MODE=system|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|OTTO_BGP_SERVICE_USER=username|OTTO_BGP_SERVICE_USER=$SERVICE_USER_CONFIG|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|OTTO_BGP_SYSTEMD_ENABLED=false|OTTO_BGP_SYSTEMD_ENABLED=true|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|OTTO_BGP_OPTIMIZATION_LEVEL=basic|OTTO_BGP_OPTIMIZATION_LEVEL=enhanced|g" "$CONFIG_DIR/otto.env"
-        
-        # Update paths for system installation
-        sed -i "s|/home/username/.local/share/otto-bgp|$DATA_DIR|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|/home/username/.config/otto-bgp|$CONFIG_DIR|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|SSH_USERNAME=username|SSH_USERNAME=$SERVICE_USER_CONFIG|g" "$CONFIG_DIR/otto.env"
+    # Replace placeholders with actual values
+    if [[ "$INSTALL_MODE" == "user" ]]; then
+        # User mode: replace USERNAME_PLACEHOLDER with actual username
+        sed -i "s|USERNAME_PLACEHOLDER|$USER|g" "$CONFIG_DIR/otto.env"
     else
-        # User installation - just update username and paths
-        sed -i "s|username|$USER|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|/home/$USER/.local/share/otto-bgp|$DATA_DIR|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|/home/$USER/.config/otto-bgp|$CONFIG_DIR|g" "$CONFIG_DIR/otto.env"
+        # System/Autonomous mode: replace SERVICE_USER_PLACEHOLDER with service user
+        sed -i "s|SERVICE_USER_PLACEHOLDER|$SERVICE_USER_CONFIG|g" "$CONFIG_DIR/otto.env"
     fi
     
-    # Add autonomous mode configuration if enabled
+    # Additional customizations for autonomous mode
     if [[ "$AUTONOMOUS_MODE" == true ]]; then
-        # Enable autonomous mode in config
-        sed -i "s|OTTO_BGP_AUTONOMOUS_ENABLED=false|OTTO_BGP_AUTONOMOUS_ENABLED=true|g" "$CONFIG_DIR/otto.env"
-        
-        # Uncomment and set autonomous mode options
-        sed -i "s|# OTTO_BGP_AUTO_APPLY_THRESHOLD=100|OTTO_BGP_AUTO_APPLY_THRESHOLD=${AUTO_APPLY_THRESHOLD:-100}|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_REQUIRE_CONFIRMATION=true|OTTO_BGP_REQUIRE_CONFIRMATION=true|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_MAX_SESSION_LOSS_PERCENT=5.0|OTTO_BGP_MAX_SESSION_LOSS_PERCENT=5.0|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_MAX_ROUTE_LOSS_PERCENT=10.0|OTTO_BGP_MAX_ROUTE_LOSS_PERCENT=10.0|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_MONITORING_DURATION_SECONDS=300|OTTO_BGP_MONITORING_DURATION_SECONDS=300|g" "$CONFIG_DIR/otto.env"
-        
-        # Set email configuration
-        sed -i "s|# OTTO_BGP_EMAIL_ENABLED=true|OTTO_BGP_EMAIL_ENABLED=true|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_SMTP_SERVER=smtp.company.com|OTTO_BGP_SMTP_SERVER=$SMTP_SERVER|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_SMTP_PORT=587|OTTO_BGP_SMTP_PORT=$SMTP_PORT|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_SMTP_USE_TLS=true|OTTO_BGP_SMTP_USE_TLS=$SMTP_USE_TLS|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_EMAIL_FROM=otto-bgp@company.com|OTTO_BGP_EMAIL_FROM=$FROM_EMAIL|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_EMAIL_TO=network-team@company.com,ops@company.com|OTTO_BGP_EMAIL_TO=$TO_EMAILS|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_EMAIL_SUBJECT_PREFIX=\[Otto BGP Autonomous\]|OTTO_BGP_EMAIL_SUBJECT_PREFIX=[Otto BGP Autonomous]|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_EMAIL_SEND_ON_SUCCESS=true|OTTO_BGP_EMAIL_SEND_ON_SUCCESS=true|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_EMAIL_SEND_ON_FAILURE=true|OTTO_BGP_EMAIL_SEND_ON_FAILURE=true|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_ALERT_ON_MANUAL=true|OTTO_BGP_ALERT_ON_MANUAL=true|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|# OTTO_BGP_SUCCESS_NOTIFICATIONS=true|OTTO_BGP_SUCCESS_NOTIFICATIONS=true|g" "$CONFIG_DIR/otto.env"
+        # Replace autonomous-specific placeholders
+        sed -i "s|AUTO_APPLY_THRESHOLD_PLACEHOLDER|${AUTO_APPLY_THRESHOLD:-100}|g" "$CONFIG_DIR/otto.env"
+        sed -i "s|SMTP_ENABLED_PLACEHOLDER|true|g" "$CONFIG_DIR/otto.env"
+        sed -i "s|SMTP_SERVER_PLACEHOLDER|$SMTP_SERVER|g" "$CONFIG_DIR/otto.env"
+        sed -i "s|SMTP_PORT_PLACEHOLDER|$SMTP_PORT|g" "$CONFIG_DIR/otto.env"
+        sed -i "s|SMTP_USE_TLS_PLACEHOLDER|$SMTP_USE_TLS|g" "$CONFIG_DIR/otto.env"
+        sed -i "s|FROM_EMAIL_PLACEHOLDER|$FROM_EMAIL|g" "$CONFIG_DIR/otto.env"
+        sed -i "s|TO_EMAILS_PLACEHOLDER|$TO_EMAILS|g" "$CONFIG_DIR/otto.env"
     fi
     
     # Set appropriate permissions

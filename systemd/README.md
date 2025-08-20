@@ -9,7 +9,9 @@ This directory contains SystemD service and timer configurations for Otto BGP pr
 - **otto-bgp-autonomous.service**: Autonomous mode service (enhanced security hardening)
 - **otto-bgp-autonomous.timer**: Timer for autonomous mode scheduled execution
 - **otto-bgp-rpki-preflight.service**: RPKI VRP freshness validation (blocks autonomous mode if stale)
-- **otto.env.template**: Shared environment configuration template
+- **otto.env.user**: User installation environment template
+- **otto.env.system**: System installation environment template  
+- **otto.env.autonomous**: Autonomous mode environment template
 - **README.md**: This documentation file
 
 ## Dual-Service Architecture
@@ -52,7 +54,11 @@ sudo systemctl daemon-reload
 sudo mkdir -p /etc/otto-bgp
 
 # Copy and customize environment configuration
-sudo cp systemd/otto.env.template /etc/otto-bgp/otto.env
+# Choose appropriate template:
+# - otto.env.user for user installations
+# - otto.env.system for system installations  
+# - otto.env.autonomous for autonomous mode
+sudo cp systemd/otto.env.system /etc/otto-bgp/otto.env
 sudo nano /etc/otto-bgp/otto.env
 
 # Set proper permissions

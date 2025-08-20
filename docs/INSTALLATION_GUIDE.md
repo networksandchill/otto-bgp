@@ -108,6 +108,9 @@ cd otto-bgp
 - Basic safety controls only
 
 **Configuration created:**
+
+*Note: The following JSON represents the conceptual configuration. Actual configuration is stored in `~/.config/otto-bgp/otto.env` using KEY=value format.*
+
 ```json
 {
   "environment": "user",
@@ -157,6 +160,9 @@ sudo chmod 700 /var/lib/otto-bgp/ssh-keys
 ```
 
 **Configuration created:**
+
+*Note: The following JSON represents the conceptual configuration. Actual configuration is stored in `/etc/otto-bgp/otto.env` using KEY=value format.*
+
 ```json
 {
   "environment": "system",
@@ -238,6 +244,9 @@ Engineer email address(es) (comma-separated): network-team@company.com,ops@compa
 ```
 
 **Complete Configuration Created:**
+
+*Note: The following JSON represents the conceptual configuration. Actual configuration is stored in `/etc/otto-bgp/otto.env` using KEY=value format.*
+
 ```json
 {
   "environment": "system", 
@@ -468,35 +477,34 @@ sudo -u otto-bgp ssh -i /var/lib/otto-bgp/ssh-keys/otto-bgp \
 
 #### 5. Configuration Setup
 ```bash
-# Create main configuration file
-sudo tee /etc/otto-bgp/config.json << 'EOF'
-{
-  "ssh": {
-    "username": "bgp-read",
-    "key_path": "/var/lib/otto-bgp/ssh-keys/otto-bgp",
-    "connection_timeout": 30,
-    "command_timeout": 60
-  },
-  "bgpq4": {
-    "native_path": "/usr/bin/bgpq4",
-    "command_timeout": 45
-  },
-  "output": {
-    "default_output_dir": "/var/lib/otto-bgp/output",
-    "create_timestamps": true,
-    "backup_legacy_files": true
-  },
-  "logging": {
-    "level": "INFO",
-    "log_to_file": true,
-    "log_file": "/var/lib/otto-bgp/logs/otto-bgp.log"
-  }
-}
-EOF
+# Create environment configuration file (for system mode)
+sudo cp /opt/otto-bgp/systemd/otto.env.system /etc/otto-bgp/otto.env
+
+# Customize configuration
+sudo nano /etc/otto-bgp/otto.env
+
+# Replace placeholder values
+sudo sed -i "s|SERVICE_USER_PLACEHOLDER|otto-bgp|g" /etc/otto-bgp/otto.env
 
 # Set proper permissions
-sudo chown otto-bgp:otto-bgp /etc/otto-bgp/config.json
-sudo chmod 640 /etc/otto-bgp/config.json
+sudo chown otto-bgp:otto-bgp /etc/otto-bgp/otto.env
+sudo chmod 640 /etc/otto-bgp/otto.env
+```
+
+**Key configuration variables to customize:**
+```bash
+# SSH Configuration
+SSH_USERNAME=bgp-read
+OTTO_BGP_SSH_PRIVATE_KEY=/var/lib/otto-bgp/ssh-keys/otto-bgp
+OTTO_BGP_SSH_KNOWN_HOSTS=/var/lib/otto-bgp/ssh-keys/known_hosts
+
+# BGPq4 Configuration  
+OTTO_BGP_BGPQ4_MODE=auto
+OTTO_BGP_BGPQ4_TIMEOUT=45
+
+# Logging Configuration
+OTTO_BGP_LOG_LEVEL=INFO
+OTTO_BGP_LOG_FILE=/var/lib/otto-bgp/logs/otto-bgp.log
 ```
 
 #### 6. Device Inventory Setup
@@ -701,9 +709,9 @@ sudo journalctl -u otto-bgp.service | grep -i "stage.*complete"
 
 | Installation Mode | Configuration File | Data Directory | Log Directory |
 |------------------|-------------------|----------------|---------------|
-| User | `~/.otto-bgp/config.json` | `~/.otto-bgp/data` | `~/.otto-bgp/logs` |
-| System | `/etc/otto-bgp/otto-bgp.json` | `/var/lib/otto-bgp` | `/var/log/otto-bgp` |
-| Autonomous | `/etc/otto-bgp/otto-bgp.json` | `/var/lib/otto-bgp` | `/var/log/otto-bgp` |
+| User | `~/.config/otto-bgp/otto.env` | `~/.local/share/otto-bgp` | `~/.local/share/otto-bgp/logs` |
+| System | `/etc/otto-bgp/otto.env` | `/var/lib/otto-bgp` | `/var/lib/otto-bgp/logs` |
+| Autonomous | `/etc/otto-bgp/otto.env` | `/var/lib/otto-bgp` | `/var/lib/otto-bgp/logs` |
 
 ### Configuration Schema Validation
 
@@ -1147,8 +1155,8 @@ sudo journalctl -u otto-bgp.service --no-pager | grep -E "(ERROR|WARN|Failed)"
 - **System Logs**: `/var/log/syslog` (otto-bgp entries)
 
 ### Support Resources
-- **Configuration**: Check `/etc/otto-bgp/config.json` or `/etc/otto-bgp/otto-bgp.json`
-- **Environment**: Check `/etc/otto-bgp/environment`
+- **Configuration**: Check `/etc/otto-bgp/otto.env` (system) or `~/.config/otto-bgp/otto.env` (user)
+- **Environment**: Check installation-specific otto.env file
 - **Dependencies**: Ensure bgpq4, Python 3.9+, and paramiko are installed
 - **Network**: Verify SSH access to devices and internet connectivity for bgpq4
 - **Autonomous Mode**: Check email configuration and SMTP connectivity
