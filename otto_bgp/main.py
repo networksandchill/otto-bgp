@@ -2,18 +2,8 @@
 """
 Otto BGP - Orchestrated Transit Traffic Optimizer
 
-Autonomous BGP policy generation replacing legacy manual processes:
-- collect: BGP peer data collection from Juniper devices (replaces show-peers-juniper.py)
-- process: AS number extraction and text processing (replaces AS-info.py)
-- policy: BGP policy generation using bgpq4 (replaces bgpq3_processor.py)
-- pipeline: Full automated workflow
-
 Usage examples:
-    otto-bgp collect devices.csv
-    otto-bgp process bgp-data.txt -o cleaned.txt
-    otto-bgp policy input.txt -s
-    otto-bgp pipeline devices.csv --output-dir ./policies
-    otto-bgp --dev policy input.txt  # Use Podman for bgpq4
+otto-bgp pipeline devices.csv --output-dir ./policies    
 """
 
 import argparse
@@ -1128,8 +1118,12 @@ def create_common_flags_parent():
                              help='Use Podman for bgpq4 (development mode)')
     parent_parser.add_argument('--auto-threshold', type=int, default=100, metavar='N',
                              help='Reference prefix count for notification context (informational only, default: 100)')
+    parent_parser.add_argument('--no-rpki', action='store_true',
+                             help='Disable RPKI validation during policy generation (not recommended)')
+    
+    # Hidden deprecated flag for backward compatibility (not shown in help)
     parent_parser.add_argument('--production', action='store_true',
-                             help='(DEPRECATED) Use --system instead. Production mode flag for backward compatibility')
+                             help=argparse.SUPPRESS)
     
     return parent_parser
 
@@ -1198,8 +1192,6 @@ def create_parser():
                               help='Test bgpq4 connectivity and exit')
     policy_parser.add_argument('--test-as', type=int, default=7922,
                               help='AS number to use for connectivity test (default: 7922)')
-    policy_parser.add_argument('--no-rpki', action='store_true',
-                              help='Disable RPKI validation during policy generation (not recommended)')
     
     # discover subcommand
     discover_parser = subparsers.add_parser('discover',
@@ -1241,8 +1233,6 @@ def create_parser():
                              help='Format for configuration diff (default: text)')
     apply_parser.add_argument('--skip-safety', action='store_true',
                              help='Skip safety validation (NOT RECOMMENDED)')
-    apply_parser.add_argument('--no-rpki', action='store_true',
-                             help='Disable RPKI validation during policy application (not recommended)')
     apply_parser.add_argument('--force', action='store_true',
                              help='Force application despite high risk')
     apply_parser.add_argument('--yes', '-y', action='store_true',
@@ -1270,8 +1260,6 @@ def create_parser():
                                 help='Command timeout in seconds (default: 30)')
     pipeline_parser.add_argument('--command-timeout', type=int, default=60,
                                 help='SSH command timeout in seconds (default: 60)')
-    pipeline_parser.add_argument('--no-rpki', action='store_true',
-                                help='Disable RPKI validation during policy generation (not recommended)')
     
     # test-proxy subcommand
     test_proxy_parser = subparsers.add_parser('test-proxy',
@@ -1289,8 +1277,9 @@ def validate_autonomous_mode(args, config):
     """Validate autonomous mode settings and handle deprecated flags"""
     logger = logging.getLogger('otto-bgp.main')
     
-    # Handle deprecated --production flag
-    if getattr(args, 'production', False):
+    # Handle deprecated --production flag (backward compatibility)
+    # Note: Flag is not in help but still parsed for compatibility
+    if hasattr(args, 'production') and getattr(args, 'production', False):
         logger.warning("--production flag is deprecated, use --system instead")
         args.system = True
         print("Warning: --production flag is deprecated, use --system instead")
