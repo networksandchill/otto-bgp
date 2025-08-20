@@ -363,10 +363,17 @@ create_config() {
         TEMPLATE_NAME="user"
     fi
     
-    # Verify template exists
+    # Verify template exists, fallback to example config if needed
     if [[ ! -f "$TEMPLATE_FILE" ]]; then
-        log_error "Template file not found: $TEMPLATE_FILE"
-        exit 1
+        log_warn "New template not found: $TEMPLATE_FILE"
+        log_info "Using example config as fallback"
+        TEMPLATE_FILE="$LIB_DIR/example-configs/otto.env.example"
+        TEMPLATE_NAME="example"
+        
+        if [[ ! -f "$TEMPLATE_FILE" ]]; then
+            log_error "No template file found: $TEMPLATE_FILE"
+            exit 1
+        fi
     fi
     
     log_info "Using $TEMPLATE_NAME template: $TEMPLATE_FILE"
@@ -379,24 +386,38 @@ create_config() {
     sed -i "2i# Customized for $INSTALL_MODE installation\\n" "$CONFIG_DIR/otto.env"
     
     # Replace placeholders with actual values
-    if [[ "$INSTALL_MODE" == "user" ]]; then
-        # User mode: replace USERNAME_PLACEHOLDER with actual username
-        sed -i "s|USERNAME_PLACEHOLDER|$USER|g" "$CONFIG_DIR/otto.env"
+    if [[ "$TEMPLATE_NAME" == "example" ]]; then
+        # Using fallback template - apply basic transformations
+        if [[ "$INSTALL_MODE" == "system" ]]; then
+            sed -i "s|OTTO_BGP_ENVIRONMENT=user|OTTO_BGP_ENVIRONMENT=system|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|OTTO_BGP_SERVICE_USER=username|OTTO_BGP_SERVICE_USER=$SERVICE_USER_CONFIG|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|username|$SERVICE_USER_CONFIG|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|/home/$SERVICE_USER_CONFIG/.local/share/otto-bgp|/var/lib/otto-bgp|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|/home/$SERVICE_USER_CONFIG/.config/otto-bgp|/etc/otto-bgp|g" "$CONFIG_DIR/otto.env"
+        else
+            sed -i "s|username|$USER|g" "$CONFIG_DIR/otto.env"
+        fi
+        
+        if [[ "$AUTONOMOUS_MODE" == true ]]; then
+            sed -i "s|OTTO_BGP_AUTONOMOUS_ENABLED=false|OTTO_BGP_AUTONOMOUS_ENABLED=true|g" "$CONFIG_DIR/otto.env"
+        fi
     else
-        # System/Autonomous mode: replace SERVICE_USER_PLACEHOLDER with service user
-        sed -i "s|SERVICE_USER_PLACEHOLDER|$SERVICE_USER_CONFIG|g" "$CONFIG_DIR/otto.env"
-    fi
-    
-    # Additional customizations for autonomous mode
-    if [[ "$AUTONOMOUS_MODE" == true ]]; then
-        # Replace autonomous-specific placeholders
-        sed -i "s|AUTO_APPLY_THRESHOLD_PLACEHOLDER|${AUTO_APPLY_THRESHOLD:-100}|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|SMTP_ENABLED_PLACEHOLDER|true|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|SMTP_SERVER_PLACEHOLDER|$SMTP_SERVER|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|SMTP_PORT_PLACEHOLDER|$SMTP_PORT|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|SMTP_USE_TLS_PLACEHOLDER|$SMTP_USE_TLS|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|FROM_EMAIL_PLACEHOLDER|$FROM_EMAIL|g" "$CONFIG_DIR/otto.env"
-        sed -i "s|TO_EMAILS_PLACEHOLDER|$TO_EMAILS|g" "$CONFIG_DIR/otto.env"
+        # Using new templates - minimal placeholder replacement
+        if [[ "$INSTALL_MODE" == "user" ]]; then
+            sed -i "s|USERNAME_PLACEHOLDER|$USER|g" "$CONFIG_DIR/otto.env"
+        else
+            sed -i "s|SERVICE_USER_PLACEHOLDER|$SERVICE_USER_CONFIG|g" "$CONFIG_DIR/otto.env"
+        fi
+        
+        if [[ "$AUTONOMOUS_MODE" == true ]]; then
+            sed -i "s|AUTO_APPLY_THRESHOLD_PLACEHOLDER|${AUTO_APPLY_THRESHOLD:-100}|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|SMTP_ENABLED_PLACEHOLDER|true|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|SMTP_SERVER_PLACEHOLDER|$SMTP_SERVER|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|SMTP_PORT_PLACEHOLDER|$SMTP_PORT|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|SMTP_USE_TLS_PLACEHOLDER|$SMTP_USE_TLS|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|FROM_EMAIL_PLACEHOLDER|$FROM_EMAIL|g" "$CONFIG_DIR/otto.env"
+            sed -i "s|TO_EMAILS_PLACEHOLDER|$TO_EMAILS|g" "$CONFIG_DIR/otto.env"
+        fi
     fi
     
     # Set appropriate permissions
