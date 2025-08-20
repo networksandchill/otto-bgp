@@ -63,6 +63,31 @@ class BGPConfigParser:
     def __init__(self):
         """Initialize BGPConfigParser."""
         self.logger = logging.getLogger(__name__)
+        
+        # Pre-compile all regex patterns for performance optimization
+        self._compiled_patterns = {
+            # Group and neighbor patterns
+            'group_pattern': re.compile(r'group\s+(\S+)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}', re.DOTALL),
+            'neighbor_pattern': re.compile(r'neighbor\s+(\S+)\s*\{([^}]*)\}'),
+            
+            # Configuration element patterns
+            'type_pattern': re.compile(r'type\s+(\S+);'),
+            'import_pattern': re.compile(r'import\s+\[\s*([^\]]+)\s*\];'),
+            'export_pattern': re.compile(r'export\s+\[\s*([^\]]+)\s*\];'),
+            'peer_as_pattern': re.compile(r'peer-as\s+(\d+);'),
+            'external_as_pattern': re.compile(r'(?:peer-as|external-as)\s+(\d+);'),
+            'description_pattern': re.compile(r'description\s+"([^"]+)";'),
+            
+            # AS number extraction patterns
+            'local_as_pattern': re.compile(r'autonomous-system\s+(\d+);'),
+            'local_as_alt_pattern': re.compile(r'local-as\s+(\d+);'),
+            'as_path_prepend_pattern': re.compile(r'as-path-prepend\s+"(\d+(?:\s+\d+)*)"'),
+            
+            # Address family patterns
+            'family_inet_pattern': re.compile(r'family\s+inet\s*\{'),
+            'family_inet6_pattern': re.compile(r'family\s+inet6\s*\{'),
+            'ipv6_address_pattern': re.compile(r'[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}')
+        }
     
     def parse_config(self, config: str) -> Dict:
         """
@@ -127,9 +152,8 @@ class BGPConfigParser:
         
         # Pattern to match BGP groups with nested content
         # This handles both single-line and multi-line group definitions
-        group_pattern = r'group\s+(\S+)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}'
-        
-        for match in re.finditer(group_pattern, config, re.DOTALL):
+        # Use pre-compiled pattern for BGP groups
+        for match in self._compiled_patterns['group_pattern'].finditer(config):
             group_name = match.group(1)
             group_content = match.group(2)
             
@@ -153,19 +177,19 @@ class BGPConfigParser:
         """
         group = BGPGroup(name=name)
         
-        # Extract group type
-        type_match = re.search(r'type\s+(\S+);', content)
+        # Extract group type using pre-compiled pattern
+        type_match = self._compiled_patterns['type_pattern'].search(content)
         if type_match:
             group.type = type_match.group(1)
         
-        # Extract import policies
-        import_matches = re.findall(r'import\s+\[\s*([^\]]+)\s*\];', content)
+        # Extract import policies using pre-compiled pattern
+        import_matches = self._compiled_patterns['import_pattern'].findall(content)
         for match in import_matches:
             policies = [p.strip() for p in match.split()]
             group.import_policy.extend(policies)
         
-        # Extract export policies
-        export_matches = re.findall(r'export\s+\[\s*([^\]]+)\s*\];', content)
+        # Extract export policies using pre-compiled pattern
+        export_matches = self._compiled_patterns['export_pattern'].findall(content)
         for match in export_matches:
             policies = [p.strip() for p in match.split()]
             group.export_policy.extend(policies)
@@ -180,8 +204,8 @@ class BGPConfigParser:
             if neighbor.peer_as:
                 peer_as_set.add(neighbor.peer_as)
         
-        # Also check for group-level peer-as
-        group_peer_as = re.search(r'(?:peer-as|external-as)\s+(\d+);', content)
+        # Also check for group-level peer-as using pre-compiled pattern
+        group_peer_as = self._compiled_patterns['external_as_pattern'].search(content)
         if group_peer_as:
             as_num = int(group_peer_as.group(1))
             if self._is_valid_as_number(as_num):
@@ -204,34 +228,32 @@ class BGPConfigParser:
         """
         neighbors = []
         
-        # Pattern to match neighbor blocks
-        neighbor_pattern = r'neighbor\s+(\S+)\s*\{([^}]*)\}'
-        
-        for match in re.finditer(neighbor_pattern, content):
+        # Use pre-compiled pattern to match neighbor blocks
+        for match in self._compiled_patterns['neighbor_pattern'].finditer(content):
             address = match.group(1)
             neighbor_content = match.group(2)
             
             neighbor = BGPNeighbor(address=address, group=group_name)
             
-            # Extract peer AS
-            peer_as_match = re.search(r'peer-as\s+(\d+);', neighbor_content)
+            # Extract peer AS using pre-compiled pattern
+            peer_as_match = self._compiled_patterns['peer_as_pattern'].search(neighbor_content)
             if peer_as_match:
                 as_num = int(peer_as_match.group(1))
                 if self._is_valid_as_number(as_num):
                     neighbor.peer_as = as_num
             
-            # Extract description
-            desc_match = re.search(r'description\s+"([^"]+)";', neighbor_content)
+            # Extract description using pre-compiled pattern
+            desc_match = self._compiled_patterns['description_pattern'].search(neighbor_content)
             if desc_match:
                 neighbor.description = desc_match.group(1)
             
-            # Extract import policies
-            import_match = re.search(r'import\s+\[\s*([^\]]+)\s*\];', neighbor_content)
+            # Extract import policies using pre-compiled pattern
+            import_match = self._compiled_patterns['import_pattern'].search(neighbor_content)
             if import_match:
                 neighbor.import_policy = [p.strip() for p in import_match.group(1).split()]
             
-            # Extract export policies
-            export_match = re.search(r'export\s+\[\s*([^\]]+)\s*\];', neighbor_content)
+            # Extract export policies using pre-compiled pattern
+            export_match = self._compiled_patterns['export_pattern'].search(neighbor_content)
             if export_match:
                 neighbor.export_policy = [p.strip() for p in export_match.group(1).split()]
             
@@ -249,15 +271,15 @@ class BGPConfigParser:
         Returns:
             Local AS number if found, None otherwise
         """
-        # Look for autonomous-system statement
-        as_match = re.search(r'autonomous-system\s+(\d+);', config)
+        # Look for autonomous-system statement using pre-compiled pattern
+        as_match = self._compiled_patterns['local_as_pattern'].search(config)
         if as_match:
             as_num = int(as_match.group(1))
             if self._is_valid_as_number(as_num):
                 return as_num
         
-        # Alternative pattern for local-as
-        local_as_match = re.search(r'local-as\s+(\d+);', config)
+        # Alternative pattern for local-as using pre-compiled pattern
+        local_as_match = self._compiled_patterns['local_as_alt_pattern'].search(config)
         if local_as_match:
             as_num = int(local_as_match.group(1))
             if self._is_valid_as_number(as_num):
@@ -277,27 +299,28 @@ class BGPConfigParser:
         """
         as_numbers = set()
         
-        # Patterns for AS numbers in various contexts
-        patterns = [
-            r'peer-as\s+(\d+);',
-            r'external-as\s+(\d+);',
-            r'local-as\s+(\d+);',
-            r'autonomous-system\s+(\d+);',
-            r'as-path-prepend\s+"(\d+(?:\s+\d+)*)"'  # AS path prepend
+        # Extract AS numbers using pre-compiled patterns
+        # Single AS number patterns
+        single_as_patterns = [
+            self._compiled_patterns['peer_as_pattern'],
+            self._compiled_patterns['external_as_pattern'], 
+            self._compiled_patterns['local_as_alt_pattern'],
+            self._compiled_patterns['local_as_pattern']
         ]
         
-        for pattern in patterns:
-            for match in re.finditer(pattern, config):
-                if pattern == patterns[-1]:  # AS path prepend can have multiple AS numbers
-                    as_nums = match.group(1).split()
-                    for as_str in as_nums:
-                        as_num = int(as_str)
-                        if self._is_valid_as_number(as_num):
-                            as_numbers.add(as_num)
-                else:
-                    as_num = int(match.group(1))
-                    if self._is_valid_as_number(as_num):
-                        as_numbers.add(as_num)
+        for pattern in single_as_patterns:
+            for match in pattern.finditer(config):
+                as_num = int(match.group(1))
+                if self._is_valid_as_number(as_num):
+                    as_numbers.add(as_num)
+        
+        # AS path prepend can have multiple AS numbers
+        for match in self._compiled_patterns['as_path_prepend_pattern'].finditer(config):
+            as_nums = match.group(1).split()
+            for as_str in as_nums:
+                as_num = int(as_str)
+                if self._is_valid_as_number(as_num):
+                    as_numbers.add(as_num)
         
         return as_numbers
     
@@ -316,14 +339,14 @@ class BGPConfigParser:
             "export": []
         }
         
-        # Extract import policies
-        import_matches = re.findall(r'import\s+\[\s*([^\]]+)\s*\];', config)
+        # Extract import policies using pre-compiled pattern
+        import_matches = self._compiled_patterns['import_pattern'].findall(config)
         for match in import_matches:
             policy_names = [p.strip() for p in match.split()]
             policies["import"].extend(policy_names)
         
-        # Extract export policies
-        export_matches = re.findall(r'export\s+\[\s*([^\]]+)\s*\];', config)
+        # Extract export policies using pre-compiled pattern
+        export_matches = self._compiled_patterns['export_pattern'].findall(config)
         for match in export_matches:
             policy_names = [p.strip() for p in match.split()]
             policies["export"].extend(policy_names)
@@ -358,17 +381,17 @@ class BGPConfigParser:
         """
         families = []
         
-        # Look for family statements
-        if re.search(r'family\s+inet\s*\{', config):
+        # Look for family statements using pre-compiled patterns
+        if self._compiled_patterns['family_inet_pattern'].search(config):
             families.append("inet")
         
-        if re.search(r'family\s+inet6\s*\{', config):
+        if self._compiled_patterns['family_inet6_pattern'].search(config):
             families.append("inet6")
         
         # If no explicit family, check for IPv6 addresses
         if not families:
-            # Simple check for IPv6 address pattern
-            if re.search(r'[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}', config):
+            # Simple check for IPv6 address pattern using pre-compiled pattern
+            if self._compiled_patterns['ipv6_address_pattern'].search(config):
                 families.append("inet6")
             else:
                 families.append("inet")  # Default to IPv4

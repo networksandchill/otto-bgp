@@ -258,7 +258,7 @@ class UnifiedSafetyManager:
             'timestamp': datetime.now().isoformat(),
             'operation': self._current_operation,
             'safety_manager': 'unified',
-            'guardrails_active': len([g for g in self.guardrails.values() if g.is_enabled()])
+            'guardrails_active': sum(1 for g in self.guardrails.values() if g.is_enabled())
         }
         
         self.checkpoints.append(checkpoint)

@@ -37,6 +37,13 @@ class RouterInspector:
         """Initialize RouterInspector."""
         self.logger = logging.getLogger(__name__)
         
+        # Pre-compile all regex patterns for performance optimization
+        self._compiled_patterns = {
+            'group_pattern': re.compile(r'group\s+(\S+)\s*\{'),
+            'peer_as_pattern': re.compile(r'peer-as\s+(\d+);'),
+            'external_as_pattern': re.compile(r'external-as\s+(\d+);')
+        }
+        
     def discover_bgp_groups(self, bgp_config: str) -> Dict[str, List[int]]:
         """
         Discover BGP groups and their associated AS numbers from configuration.
@@ -63,10 +70,8 @@ class RouterInspector:
         """
         groups = {}
         
-        # Find all group statements
-        group_pattern = r'group\s+(\S+)\s*\{'
-        
-        for match in re.finditer(group_pattern, bgp_config):
+        # Find all group statements using pre-compiled pattern
+        for match in self._compiled_patterns['group_pattern'].finditer(bgp_config):
             group_name = match.group(1)
             start_pos = match.end() - 1  # Position of opening brace
             
@@ -98,10 +103,8 @@ class RouterInspector:
         """
         relationships = {}
         
-        # Find all group statements
-        group_pattern = r'group\s+(\S+)\s*\{'
-        
-        for match in re.finditer(group_pattern, bgp_config):
+        # Find all group statements using pre-compiled pattern
+        for match in self._compiled_patterns['group_pattern'].finditer(bgp_config):
             group_name = match.group(1)
             start_pos = match.end() - 1  # Position of opening brace
             
@@ -109,9 +112,8 @@ class RouterInspector:
             group_content = self._extract_block_content(bgp_config, start_pos)
             
             if group_content:
-                # Find all peer-as statements
-                peer_as_pattern = r'peer-as\s+(\d+);'
-                for as_match in re.finditer(peer_as_pattern, group_content):
+                # Find all peer-as statements using pre-compiled pattern
+                for as_match in self._compiled_patterns['peer_as_pattern'].finditer(group_content):
                     as_number = int(as_match.group(1))
                     if self._is_valid_as_number(as_number):
                         relationships[as_number] = group_name
@@ -195,17 +197,14 @@ class RouterInspector:
         """
         as_numbers = set()
         
-        # Pattern for peer-as statements
-        peer_as_pattern = r'peer-as\s+(\d+);'
-        
-        for match in re.finditer(peer_as_pattern, group_content):
+        # Find peer-as statements using pre-compiled pattern
+        for match in self._compiled_patterns['peer_as_pattern'].finditer(group_content):
             as_num = int(match.group(1))
             if self._is_valid_as_number(as_num):
                 as_numbers.add(as_num)
         
-        # Also look for external-as in Juniper configs
-        external_as_pattern = r'external-as\s+(\d+);'
-        for match in re.finditer(external_as_pattern, group_content):
+        # Also look for external-as in Juniper configs using pre-compiled pattern
+        for match in self._compiled_patterns['external_as_pattern'].finditer(group_content):
             as_num = int(match.group(1))
             if self._is_valid_as_number(as_num):
                 as_numbers.add(as_num)

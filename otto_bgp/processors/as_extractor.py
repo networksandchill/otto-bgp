@@ -15,8 +15,10 @@ Features:
 
 import re
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
-from typing import Set, List, Optional, Dict, Union
+from typing import Set, List, Optional, Dict, Union, Iterator
 from pathlib import Path
 
 
@@ -38,6 +40,358 @@ class BGPProcessingResult:
     processed_lines: int
     duplicates_removed: int
     substrings_removed: List[str] = None
+
+
+class MemoryEfficientASSet:
+    """Memory-optimized AS number collection with aggressive overflow management"""
+    
+    def __init__(self, max_memory_mb: int = 10):  # Much lower memory limit
+        self.max_memory = max_memory_mb * 1024 * 1024  # Convert to bytes
+        self._as_numbers = set()
+        self._overflow_file = None
+        self._overflow_count = 0
+        self._total_added = 0
+        self._flush_threshold = 1000  # Flush every 1000 AS numbers
+        self.logger = logging.getLogger(__name__)
+        
+    def add_as_numbers(self, as_numbers: Union[Set[int], List[int]]):
+        """Add AS numbers with aggressive memory management"""
+        for as_num in as_numbers:
+            self.add(as_num)
+            
+    def add(self, as_num: int):
+        """Add single AS number with frequent flushing"""
+        self._as_numbers.add(as_num)
+        self._total_added += 1
+        
+        # Flush frequently to keep memory low
+        if len(self._as_numbers) >= self._flush_threshold:
+            self._flush_to_disk()
+        
+    def get_all_as_numbers(self) -> Set[int]:
+        """Retrieve all AS numbers, consolidating from disk if needed"""
+        # Flush any remaining numbers
+        if self._as_numbers:
+            self._flush_to_disk()
+            
+        if self._overflow_file is None:
+            return set()  # No data
+            
+        # Read all numbers from disk and deduplicate
+        all_as_numbers = set()
+        
+        try:
+            self._overflow_file.seek(0)
+            for line in self._overflow_file:
+                try:
+                    as_num = int(line.strip())
+                    all_as_numbers.add(as_num)
+                except ValueError:
+                    continue
+        except IOError as e:
+            self.logger.warning(f"Error reading overflow file: {e}")
+            
+        return all_as_numbers
+        
+    def _estimate_memory_usage(self) -> int:
+        """Estimate current memory usage in bytes"""
+        # Conservative estimate: each int in set uses ~28 bytes (Python overhead)
+        return len(self._as_numbers) * 28
+        
+    def _flush_to_disk(self):
+        """Flush AS numbers to temporary file"""
+        if self._overflow_file is None:
+            self._overflow_file = tempfile.NamedTemporaryFile(mode='w+', delete=False)
+            self.logger.debug(f"Creating overflow file: {self._overflow_file.name}")
+            
+        # Write current AS numbers to disk
+        for as_num in self._as_numbers:
+            self._overflow_file.write(f"{as_num}\n")
+        self._overflow_file.flush()
+        
+        self._overflow_count += len(self._as_numbers)
+        self._as_numbers.clear()
+        
+        self.logger.debug(f"Flushed {self._overflow_count} AS numbers to disk (memory freed)")
+        
+    def __len__(self):
+        """Return total count including overflow"""
+        return len(self._as_numbers) + self._overflow_count
+        
+    def __del__(self):
+        """Cleanup overflow file"""
+        if self._overflow_file:
+            try:
+                os.unlink(self._overflow_file.name)
+            except (OSError, AttributeError):
+                pass
+
+
+class UltraMemoryEfficientASExtractor:
+    """Ultra memory-efficient AS extractor using minimal memory footprint"""
+    
+    def __init__(self, memory_limit_mb: int = 5):
+        self.memory_limit_mb = memory_limit_mb
+        self.logger = logging.getLogger(__name__)
+        
+    def extract_as_numbers_minimal_memory(self, 
+                                        file_path: Union[str, Path],
+                                        pattern: re.Pattern,
+                                        validator_func) -> Set[int]:
+        """Extract AS numbers with minimal memory usage using disk-based processing and external sort"""
+        file_path = Path(file_path)
+        
+        # Use temporary files for processing
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_as_file:
+            temp_as_path = temp_as_file.name
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_sorted_file:
+            temp_sorted_path = temp_sorted_file.name
+        
+        lines_processed = 0
+        
+        try:
+            # First pass: Extract all AS numbers to temporary file (no deduplication)
+            with open(file_path, 'r', encoding='utf-8', buffering=4096) as input_file:
+                with open(temp_as_path, 'w') as temp_file:
+                    
+                    for line in input_file:
+                        lines_processed += 1
+                        
+                        # Extract AS numbers from this line only
+                        matches = pattern.findall(line)
+                        for match in matches:
+                            try:
+                                as_num = int(match)
+                                if validator_func(as_num):
+                                    temp_file.write(f"{as_num}\n")
+                            except ValueError:
+                                continue
+                        
+                        # Periodic progress for very large files
+                        if lines_processed % 100000 == 0:
+                            self.logger.debug(f"Processed {lines_processed} lines")
+            
+            # Second pass: External sort using system sort command for efficiency
+            import subprocess
+            try:
+                # Use system sort with unique flag for memory-efficient deduplication
+                result = subprocess.run([
+                    'sort', '-n', '-u', temp_as_path
+                ], stdout=open(temp_sorted_path, 'w'), 
+                stderr=subprocess.PIPE, timeout=300)
+                
+                if result.returncode != 0:
+                    raise RuntimeError(f"Sort command failed: {result.stderr.decode()}")
+                    
+                self.logger.debug("External sort completed successfully")
+                
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                # Fallback to Python-based sorting if system sort unavailable
+                self.logger.warning("System sort unavailable, using Python fallback")
+                return self._fallback_disk_deduplication(temp_as_path)
+            
+            # Third pass: Read sorted unique numbers with minimal memory usage
+            final_as_numbers = set()
+            batch_size = 5000  # Very small batches
+            current_batch = []
+            
+            with open(temp_sorted_path, 'r') as sorted_file:
+                for line in sorted_file:
+                    try:
+                        as_num = int(line.strip())
+                        current_batch.append(as_num)
+                        
+                        if len(current_batch) >= batch_size:
+                            # Process small batch and immediately clear
+                            final_as_numbers.update(current_batch)
+                            current_batch.clear()
+                            
+                    except ValueError:
+                        continue
+                
+                # Process final batch
+                if current_batch:
+                    final_as_numbers.update(current_batch)
+            
+            self.logger.info(f"Ultra-efficient extraction complete: {lines_processed} lines processed, "
+                           f"{len(final_as_numbers)} unique AS numbers found")
+            
+            return final_as_numbers
+            
+        except Exception as e:
+            self.logger.error(f"Error during ultra-efficient extraction: {e}")
+            raise
+        finally:
+            # Clean up temporary files
+            for temp_path in [temp_as_path, temp_sorted_path]:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+    
+    def _fallback_disk_deduplication(self, temp_file_path: str) -> Set[int]:
+        """Fallback deduplication using disk-based approach when system sort unavailable"""
+        self.logger.info("Using disk-based deduplication fallback")
+        
+        # Read numbers in small batches, track in bloom filter approximation
+        seen_ranges = {}  # Range-based tracking to reduce memory
+        final_as_numbers = set()
+        batch_size = 1000
+        current_batch = []
+        
+        with open(temp_file_path, 'r') as temp_file:
+            for line in temp_file:
+                try:
+                    as_num = int(line.strip())
+                    
+                    # Range-based deduplication check
+                    range_key = as_num // 1000  # Group by thousands
+                    if range_key not in seen_ranges:
+                        seen_ranges[range_key] = set()
+                    
+                    if as_num not in seen_ranges[range_key]:
+                        seen_ranges[range_key].add(as_num)
+                        current_batch.append(as_num)
+                    
+                    if len(current_batch) >= batch_size:
+                        final_as_numbers.update(current_batch)
+                        current_batch.clear()
+                        
+                except ValueError:
+                    continue
+            
+            # Process final batch
+            if current_batch:
+                final_as_numbers.update(current_batch)
+        
+        return final_as_numbers
+
+
+class StreamingASExtractor:
+    """Memory-efficient streaming AS number extractor"""
+    
+    def __init__(self, 
+                 chunk_size: int = 8192,
+                 memory_limit_mb: int = 50,
+                 dedup_frequency: int = 10000):
+        """
+        Initialize streaming AS extractor
+        
+        Args:
+            chunk_size: Buffer size for file reading
+            memory_limit_mb: Memory limit for AS number collection
+            dedup_frequency: Lines processed before deduplication
+        """
+        self.chunk_size = chunk_size
+        self.memory_limit_mb = memory_limit_mb
+        self.dedup_frequency = dedup_frequency
+        self.logger = logging.getLogger(__name__)
+        
+    def extract_as_numbers_streaming(self, 
+                                   file_path: Union[str, Path],
+                                   pattern: re.Pattern,
+                                   validator_func) -> Set[int]:
+        """Extract AS numbers using streaming file processing with aggressive memory management"""
+        file_path = Path(file_path)
+        as_collection = MemoryEfficientASSet(self.memory_limit_mb)
+        lines_processed = 0
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8', buffering=self.chunk_size) as f:
+                for line in f:  # Process line-by-line, not entire file
+                    lines_processed += 1
+                    
+                    # Extract AS numbers from this line
+                    line_as_numbers = self._extract_from_line(line.strip(), pattern, validator_func)
+                    
+                    # Add to collection (with frequent disk flushing)
+                    for as_num in line_as_numbers:
+                        as_collection.add(as_num)
+                    
+                    # Periodic progress logging for large files
+                    if lines_processed % 50000 == 0:
+                        self.logger.debug(f"Processed {lines_processed} lines, {len(as_collection)} AS numbers found")
+                        
+        except Exception as e:
+            self.logger.error(f"Error during streaming extraction from {file_path}: {e}")
+            raise
+            
+        final_as_numbers = as_collection.get_all_as_numbers()
+        self.logger.info(f"Streaming extraction complete: {lines_processed} lines processed, "
+                        f"{len(final_as_numbers)} unique AS numbers found")
+        
+        return final_as_numbers
+    
+    def extract_as_numbers_ultra_efficient(self, 
+                                         file_path: Union[str, Path],
+                                         pattern: re.Pattern,
+                                         validator_func) -> Set[int]:
+        """Extract AS numbers using ultra-efficient minimal memory approach"""
+        ultra_extractor = UltraMemoryEfficientASExtractor(memory_limit_mb=5)
+        return ultra_extractor.extract_as_numbers_minimal_memory(file_path, pattern, validator_func)
+        
+    def _extract_from_line(self, line: str, pattern: re.Pattern, validator_func) -> List[int]:
+        """Extract AS numbers from a single line"""
+        as_numbers = []
+        
+        try:
+            matches = pattern.findall(line)
+            for match in matches:
+                try:
+                    as_num = int(match)
+                    if validator_func(as_num):
+                        as_numbers.append(as_num)
+                except ValueError:
+                    continue
+        except Exception as e:
+            self.logger.debug(f"Error processing line: {e}")
+            
+        return as_numbers
+
+
+class TextStreamProcessor:
+    """Memory-efficient text streaming processor for BGP configurations"""
+    
+    def __init__(self, buffer_lines: int = 1000):
+        self.buffer_lines = buffer_lines
+        self.logger = logging.getLogger(__name__)
+        
+    def process_text_streaming(self, file_path: Union[str, Path]) -> Iterator[str]:
+        """Stream text processing without loading entire file"""
+        file_path = Path(file_path)
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            current_buffer = []
+            
+            for line_num, line in enumerate(f, 1):
+                # Apply line-level preprocessing
+                processed_line = self._preprocess_line(line)
+                if processed_line.strip():  # Skip empty lines
+                    current_buffer.append(processed_line)
+                
+                # Process in chunks to manage memory
+                if len(current_buffer) >= self.buffer_lines:
+                    yield from self._process_text_chunk(current_buffer)
+                    current_buffer.clear()
+                    
+            # Process final chunk
+            if current_buffer:
+                yield from self._process_text_chunk(current_buffer)
+                
+    def _preprocess_line(self, line: str) -> str:
+        """Apply line-level preprocessing"""
+        # Remove control characters but preserve structure
+        cleaned = ''.join(char for char in line if ord(char) >= 32 or char in '\n\r\t')
+        
+        # Normalize whitespace but preserve indentation
+        cleaned = re.sub(r'[ \t]+', ' ', cleaned.rstrip())
+        
+        return cleaned
+        
+    def _process_text_chunk(self, lines: List[str]) -> Iterator[str]:
+        """Process a chunk of lines"""
+        for line in lines:
+            yield line
 
 
 class ASNumberExtractor:
@@ -73,9 +427,13 @@ class ASNumberExtractor:
                  max_as_number: int = 4294967295,
                  patterns: Optional[Dict[str, str]] = None,
                  warn_reserved: bool = True,
-                 strict_validation: bool = True):
+                 strict_validation: bool = True,
+                 enable_streaming: Optional[bool] = None,
+                 streaming_memory_limit_mb: int = 50,
+                 streaming_chunk_size: int = 8192,
+                 ultra_efficient_mode: bool = False):
         """
-        Initialize AS number extractor with enhanced security validation
+        Initialize AS number extractor with enhanced security validation and streaming support
         
         Args:
             min_as_number: Minimum valid AS number (default 256 to exclude IP octets)
@@ -83,6 +441,10 @@ class ASNumberExtractor:
             patterns: Custom regex patterns for AS extraction
             warn_reserved: Log warnings for reserved AS number ranges
             strict_validation: Enable strict RFC-compliant validation
+            enable_streaming: Enable streaming mode (auto-detect if None)
+            streaming_memory_limit_mb: Memory limit for streaming mode (MB)
+            streaming_chunk_size: Buffer size for streaming file reads
+            ultra_efficient_mode: Enable ultra-efficient mode for very large files
         """
         self.logger = logging.getLogger(__name__)
         
@@ -99,8 +461,42 @@ class ASNumberExtractor:
         self.warn_reserved = warn_reserved
         self.strict_validation = strict_validation
         
+        # Streaming configuration
+        self.enable_streaming = enable_streaming
+        self.streaming_memory_limit_mb = streaming_memory_limit_mb
+        self.streaming_chunk_size = streaming_chunk_size
+        self.ultra_efficient_mode = ultra_efficient_mode
+        
+        # Check environment variable for streaming preference
+        if self.enable_streaming is None:
+            env_streaming = os.environ.get('OTTO_BGP_AS_EXTRACTOR_STREAMING', 'auto').lower()
+            if env_streaming == 'true':
+                self.enable_streaming = True
+            elif env_streaming == 'false':
+                self.enable_streaming = False
+            else:  # 'auto' - will be determined per file
+                self.enable_streaming = None
+        
+        # Check environment variable for ultra-efficient mode
+        env_ultra = os.environ.get('OTTO_BGP_AS_EXTRACTOR_ULTRA', 'false').lower()
+        if env_ultra == 'true':
+            self.ultra_efficient_mode = True
+        
+        # Pre-compile all regex patterns for performance optimization
+        self._compiled_patterns = {
+            name: re.compile(pattern, re.IGNORECASE) 
+            for name, pattern in self.patterns.items()
+        }
+        
+        # Initialize streaming extractor
+        self._streaming_extractor = StreamingASExtractor(
+            chunk_size=streaming_chunk_size,
+            memory_limit_mb=streaming_memory_limit_mb
+        )
+        
         self.logger.info(f"AS extractor initialized: range {min_as_number}-{max_as_number}, "
-                        f"reserved_warnings={warn_reserved}, strict={strict_validation}")
+                        f"reserved_warnings={warn_reserved}, strict={strict_validation}, "
+                        f"streaming={self.enable_streaming if self.enable_streaming is not None else 'auto'}")
     
     def extract_as_numbers_from_text(self, 
                                    text: str, 
@@ -124,37 +520,36 @@ class ASNumberExtractor:
         
         self.logger.debug(f"Extracting AS numbers using pattern '{pattern_name}': {pattern}")
         
-        for line in text.split('\n'):
-            line = line.strip()
-            lines_processed += 1
-            
-            if not line:
-                continue
-            
-            # Find all AS number matches in the line
-            matches = re.findall(pattern, line, re.IGNORECASE)
-            
-            for match in matches:
-                try:
-                    as_num = int(match)
-                    
-                    # Apply strict validation if enabled
-                    if self.strict_validation:
-                        validation_result = self._validate_as_number_strict(as_num, line[:50])
-                        if validation_result['valid']:
-                            as_numbers.add(as_num)
-                            self.logger.debug(f"Extracted AS{as_num} from line: {line[:50]}...")
-                        # Logging handled in _validate_as_number_strict
+        # Optimize by processing entire text at once, then split for line counting
+        compiled_pattern = self._compiled_patterns[pattern_name]
+        all_matches = compiled_pattern.findall(text)
+        
+        # Count lines for reporting
+        lines = text.split('\n')
+        lines_processed = len(lines)
+        
+        # Process all matches efficiently
+        for match in all_matches:
+            try:
+                as_num = int(match)
+                
+                # Apply strict validation if enabled
+                if self.strict_validation:
+                    validation_result = self._validate_as_number_strict(as_num, "")
+                    if validation_result['valid']:
+                        as_numbers.add(as_num)
+                        self.logger.debug(f"Extracted AS{as_num}")
+                    # Logging handled in _validate_as_number_strict
+                else:
+                    # Legacy range-based filtering
+                    if self.min_as_number <= as_num <= self.max_as_number:
+                        as_numbers.add(as_num)
+                        self.logger.debug(f"Extracted AS{as_num}")
                     else:
-                        # Legacy range-based filtering
-                        if self.min_as_number <= as_num <= self.max_as_number:
-                            as_numbers.add(as_num)
-                            self.logger.debug(f"Extracted AS{as_num} from line: {line[:50]}...")
-                        else:
-                            self.logger.debug(f"Filtered AS{as_num} (out of range) from line: {line[:50]}...")
-                        
-                except ValueError:
-                    self.logger.warning(f"Invalid AS number format: {match}")
+                        self.logger.debug(f"Filtered AS{as_num} (out of range)")
+                    
+            except ValueError:
+                self.logger.warning(f"Invalid AS number format: {match}")
         
         result = ASExtractionResult(
             as_numbers=as_numbers,
@@ -170,7 +565,94 @@ class ASNumberExtractor:
                                    file_path: Union[str, Path], 
                                    pattern_name: str = 'standard') -> ASExtractionResult:
         """
-        Extract AS numbers from file
+        Extract AS numbers from file with automatic streaming optimization
+        
+        Args:
+            file_path: Path to input file
+            pattern_name: Name of regex pattern to use
+            
+        Returns:
+            ASExtractionResult with extracted AS numbers
+        """
+        file_path = Path(file_path)
+        
+        # Determine if streaming should be used
+        use_streaming = self._should_use_streaming(file_path)
+        
+        if use_streaming:
+            return self.extract_as_numbers_from_file_streaming(file_path, pattern_name)
+        else:
+            return self._extract_as_numbers_from_file_legacy(file_path, pattern_name)
+    
+    def extract_as_numbers_from_file_streaming(self, 
+                                             file_path: Union[str, Path], 
+                                             pattern_name: str = 'standard') -> ASExtractionResult:
+        """
+        Extract AS numbers from file using memory-efficient streaming
+        
+        Args:
+            file_path: Path to input file
+            pattern_name: Name of regex pattern to use
+            
+        Returns:
+            ASExtractionResult with extracted AS numbers
+        """
+        file_path = Path(file_path)
+        
+        if pattern_name not in self.patterns:
+            raise ValueError(f"Unknown pattern: {pattern_name}. Available: {list(self.patterns.keys())}")
+        
+        try:
+            # Determine extraction method based on file size and configuration
+            use_ultra_efficient = self._should_use_ultra_efficient(file_path)
+            
+            if use_ultra_efficient:
+                self.logger.debug(f"Using ultra-efficient extraction for {file_path}")
+                extraction_method = f"{pattern_name}_ultra_efficient"
+            else:
+                self.logger.debug(f"Using standard streaming extraction for {file_path}")
+                extraction_method = f"{pattern_name}_streaming"
+            
+            # Get compiled pattern and validation function
+            pattern = self._compiled_patterns[pattern_name]
+            validator_func = self._create_validator_function()
+            
+            # Choose extraction method
+            if use_ultra_efficient:
+                as_numbers = self._streaming_extractor.extract_as_numbers_ultra_efficient(
+                    file_path, pattern, validator_func
+                )
+            else:
+                as_numbers = self._streaming_extractor.extract_as_numbers_streaming(
+                    file_path, pattern, validator_func
+                )
+            
+            # Count lines for reporting (lightweight pass)
+            lines_processed = self._count_file_lines(file_path)
+            
+            result = ASExtractionResult(
+                as_numbers=as_numbers,
+                source_file=str(file_path),
+                total_lines_processed=lines_processed,
+                extraction_method=extraction_method,
+                filters_applied=[f"range_{self.min_as_number}_{self.max_as_number}"]
+            )
+            
+            self.logger.info(f"Processed file {file_path} ({extraction_method}): {len(result.as_numbers)} AS numbers extracted")
+            return result
+            
+        except FileNotFoundError:
+            self.logger.error(f"File not found: {file_path}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error reading file {file_path}: {e}")
+            raise
+
+    def _extract_as_numbers_from_file_legacy(self, 
+                                           file_path: Union[str, Path], 
+                                           pattern_name: str = 'standard') -> ASExtractionResult:
+        """
+        Extract AS numbers from file using legacy memory-intensive method
         
         Args:
             file_path: Path to input file
@@ -182,13 +664,15 @@ class ASNumberExtractor:
         file_path = Path(file_path)
         
         try:
+            self.logger.debug(f"Using legacy extraction for {file_path}")
+            
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read()
             
             result = self.extract_as_numbers_from_text(text, pattern_name)
             result.source_file = str(file_path)
             
-            self.logger.info(f"Processed file {file_path}: {len(result.as_numbers)} AS numbers extracted")
+            self.logger.info(f"Processed file {file_path} (legacy): {len(result.as_numbers)} AS numbers extracted")
             return result
             
         except FileNotFoundError:
@@ -197,6 +681,92 @@ class ASNumberExtractor:
         except Exception as e:
             self.logger.error(f"Error reading file {file_path}: {e}")
             raise
+    
+    def _should_use_streaming(self, file_path: Path) -> bool:
+        """
+        Determine if streaming should be used based on file size and configuration
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            True if streaming should be used
+        """
+        # If explicitly configured, use that setting
+        if self.enable_streaming is not None:
+            return self.enable_streaming
+        
+        try:
+            # Auto-detect based on file size
+            file_size = file_path.stat().st_size
+            
+            # Use streaming for files larger than 10MB
+            size_threshold = 10 * 1024 * 1024  # 10MB
+            
+            use_streaming = file_size > size_threshold
+            
+            self.logger.debug(f"File size: {file_size:,} bytes, "
+                            f"threshold: {size_threshold:,} bytes, "
+                            f"using streaming: {use_streaming}")
+            
+            return use_streaming
+            
+        except OSError:
+            # If we can't get file size, default to legacy mode
+            self.logger.warning(f"Could not determine file size for {file_path}, using legacy mode")
+            return False
+    
+    def _should_use_ultra_efficient(self, file_path: Path) -> bool:
+        """
+        Determine if ultra-efficient mode should be used based on file size and configuration
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            True if ultra-efficient mode should be used
+        """
+        # If explicitly configured, use that setting
+        if self.ultra_efficient_mode:
+            return True
+        
+        try:
+            # Auto-detect based on file size
+            file_size = file_path.stat().st_size
+            
+            # Use ultra-efficient for files larger than 25MB
+            size_threshold = 25 * 1024 * 1024  # 25MB
+            
+            use_ultra = file_size > size_threshold
+            
+            self.logger.debug(f"File size: {file_size:,} bytes, "
+                            f"ultra threshold: {size_threshold:,} bytes, "
+                            f"using ultra-efficient: {use_ultra}")
+            
+            return use_ultra
+            
+        except OSError:
+            # If we can't get file size, default to standard streaming
+            return False
+    
+    def _create_validator_function(self):
+        """Create a validator function for streaming extraction"""
+        def validator(as_num: int) -> bool:
+            if self.strict_validation:
+                validation_result = self._validate_as_number_strict(as_num)
+                return validation_result['valid']
+            else:
+                return self.min_as_number <= as_num <= self.max_as_number
+        
+        return validator
+    
+    def _count_file_lines(self, file_path: Path) -> int:
+        """Count lines in file efficiently for reporting"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return sum(1 for _ in f)
+        except Exception:
+            return 0
     
     def extract_as_numbers_multi_pattern(self, 
                                        text: str, 
@@ -339,6 +909,41 @@ class BGPTextProcessor:
         
         self.logger.info(f"BGP text processor initialized with {len(self.remove_substrings)} removal patterns")
     
+    def _batch_replace(self, text: str, substrings: List[str]) -> str:
+        """
+        Optimized batch replacement of multiple substrings
+        
+        Args:
+            text: Input text
+            substrings: List of substrings to remove
+            
+        Returns:
+            Text with all substrings removed
+        """
+        if not substrings:
+            return text
+        
+        # For small numbers of substrings or short text, simple string replacement is faster
+        # For larger datasets, regex can be more efficient
+        if len(substrings) <= 3 or len(text) < 10000:
+            # Use simple string replacement for small operations
+            result = text
+            for substring in substrings:
+                result = result.replace(substring, "")
+            return result
+        else:
+            # Use regex for larger operations
+            import re
+            
+            # Escape special regex characters in substrings
+            escaped_substrings = [re.escape(sub) for sub in substrings]
+            
+            # Create pattern that matches any of the substrings
+            pattern = '|'.join(escaped_substrings)
+            
+            # Replace all matches with empty string
+            return re.sub(pattern, '', text)
+    
     def clean_bgp_text(self, text: str) -> BGPProcessingResult:
         """
         Clean BGP configuration text by removing unwanted substrings
@@ -349,13 +954,14 @@ class BGPTextProcessor:
         Returns:
             BGPProcessingResult with cleaned text
         """
-        original_lines = len(text.split('\n'))
-        processed_text = text
+        # Cache split result to avoid redundant operations
+        original_lines_list = text.split('\n')
+        original_lines = len(original_lines_list)
         
-        # Remove specified substrings
-        for substring in self.remove_substrings:
-            processed_text = processed_text.replace(substring, "")
+        # Optimize multiple replace operations using batch processing
+        processed_text = self._batch_replace(text, self.remove_substrings)
         
+        # Split once for processed text
         processed_lines = len(processed_text.split('\n'))
         
         result = BGPProcessingResult(
@@ -434,31 +1040,108 @@ class BGPTextProcessor:
     
     def process_file(self, 
                     input_path: Union[str, Path], 
-                    output_path: Optional[Union[str, Path]] = None) -> BGPProcessingResult:
+                    output_path: Optional[Union[str, Path]] = None,
+                    use_streaming: Optional[bool] = None) -> BGPProcessingResult:
         """
-        Process BGP text file and optionally write results
+        Process BGP text file and optionally write results with streaming support
         
         Args:
             input_path: Path to input file
             output_path: Path to output file (optional)
+            use_streaming: Force streaming mode (auto-detect if None)
             
         Returns:
             BGPProcessingResult with processing results
         """
         input_path = Path(input_path)
         
+        # Determine if streaming should be used (same logic as AS extractor)
+        should_stream = use_streaming
+        if should_stream is None:
+            try:
+                file_size = input_path.stat().st_size
+                should_stream = file_size > (10 * 1024 * 1024)  # 10MB threshold
+            except OSError:
+                should_stream = False
+        
+        if should_stream:
+            return self._process_file_streaming(input_path, output_path)
+        else:
+            return self._process_file_legacy(input_path, output_path)
+    
+    def _process_file_streaming(self, 
+                               input_path: Path, 
+                               output_path: Optional[Path]) -> BGPProcessingResult:
+        """Process file using streaming approach"""
         try:
+            self.logger.debug(f"Using streaming BGP processing for {input_path}")
+            
+            processed_lines = []
+            original_count = 0
+            seen_lines = set()
+            duplicates_removed = 0
+            
+            with open(input_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    original_count += 1
+                    
+                    # Apply text processing line by line
+                    processed_line = self._batch_replace(line, self.remove_substrings)
+                    
+                    # Deduplication
+                    stripped_line = processed_line.strip()
+                    if not stripped_line:
+                        processed_lines.append(processed_line)
+                        continue
+                    
+                    if stripped_line not in seen_lines:
+                        seen_lines.add(stripped_line)
+                        processed_lines.append(processed_line)
+                    else:
+                        duplicates_removed += 1
+            
+            # Join processed lines
+            processed_text = ''.join(processed_lines)
+            processed_count = len(processed_lines)
+            
+            result = BGPProcessingResult(
+                processed_text=processed_text,
+                original_lines=original_count,
+                processed_lines=processed_count,
+                duplicates_removed=duplicates_removed,
+                substrings_removed=self.remove_substrings.copy()
+            )
+            
+            if output_path:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write(result.processed_text)
+                self.logger.info(f"Processed BGP file (streaming): {input_path} -> {output_path}")
+            
+            return result
+            
+        except FileNotFoundError:
+            self.logger.error(f"Input file not found: {input_path}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error processing file {input_path}: {e}")
+            raise
+    
+    def _process_file_legacy(self, 
+                            input_path: Path, 
+                            output_path: Optional[Path]) -> BGPProcessingResult:
+        """Process file using legacy memory-intensive approach"""
+        try:
+            self.logger.debug(f"Using legacy BGP processing for {input_path}")
+            
             with open(input_path, 'r', encoding='utf-8') as f:
                 text = f.read()
             
             result = self.process_bgp_text_full(text)
             
             if output_path:
-                output_path = Path(output_path)
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write(result.processed_text)
-                
-                self.logger.info(f"Processed BGP file: {input_path} -> {output_path}")
+                self.logger.info(f"Processed BGP file (legacy): {input_path} -> {output_path}")
             
             return result
             
@@ -489,25 +1172,78 @@ class ASProcessor:
     
     def process_bgp_file_to_as_numbers(self, 
                                      file_path: Union[str, Path],
-                                     pattern_name: str = 'peer_as') -> ASExtractionResult:
+                                     pattern_name: str = 'peer_as',
+                                     use_streaming: Optional[bool] = None) -> ASExtractionResult:
         """
-        Process BGP file: clean text and extract AS numbers
+        Process BGP file: clean text and extract AS numbers with optional streaming
         
         Args:
             file_path: Path to BGP configuration file
             pattern_name: AS extraction pattern to use
+            use_streaming: Force streaming mode (auto-detect if None)
             
         Returns:
             ASExtractionResult with extracted AS numbers
         """
         file_path = Path(file_path)
         
+        # Determine if streaming should be used
+        should_stream = use_streaming
+        if should_stream is None:
+            try:
+                file_size = file_path.stat().st_size
+                should_stream = file_size > (10 * 1024 * 1024)  # 10MB threshold
+            except OSError:
+                should_stream = False
+        
+        if should_stream:
+            return self._process_bgp_file_streaming(file_path, pattern_name)
+        else:
+            return self._process_bgp_file_legacy(file_path, pattern_name)
+    
+    def _process_bgp_file_streaming(self, 
+                                   file_path: Path,
+                                   pattern_name: str) -> ASExtractionResult:
+        """Process BGP file using streaming approach"""
         try:
+            self.logger.info(f"Processing BGP file for AS extraction (streaming): {file_path}")
+            
+            # Use temporary file for intermediate processing
+            with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+                temp_path = Path(temp_file.name)
+                
+                # First pass: Clean BGP text using streaming
+                bgp_result = self.bgp_processor._process_file_streaming(file_path, temp_path)
+                
+                # Second pass: Extract AS numbers using streaming
+                as_result = self.as_extractor.extract_as_numbers_from_file_streaming(
+                    temp_path, pattern_name
+                )
+                as_result.source_file = str(file_path)
+                
+                # Clean up temporary file
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            
+            self.logger.info(f"Extracted {len(as_result.as_numbers)} AS numbers from {file_path} (streaming)")
+            return as_result
+            
+        except Exception as e:
+            self.logger.error(f"Error processing BGP file {file_path}: {e}")
+            raise
+    
+    def _process_bgp_file_legacy(self, 
+                                file_path: Path,
+                                pattern_name: str) -> ASExtractionResult:
+        """Process BGP file using legacy memory-intensive approach"""
+        try:
+            self.logger.info(f"Processing BGP file for AS extraction (legacy): {file_path}")
+            
             # Read and clean BGP text
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read()
-            
-            self.logger.info(f"Processing BGP file for AS extraction: {file_path}")
             
             # Clean the BGP text first
             bgp_result = self.bgp_processor.process_bgp_text_full(text)
@@ -519,7 +1255,7 @@ class ASProcessor:
             )
             as_result.source_file = str(file_path)
             
-            self.logger.info(f"Extracted {len(as_result.as_numbers)} AS numbers from {file_path}")
+            self.logger.info(f"Extracted {len(as_result.as_numbers)} AS numbers from {file_path} (legacy)")
             return as_result
             
         except Exception as e:
@@ -529,3 +1265,172 @@ class ASProcessor:
     def get_sorted_as_list(self, as_numbers: Set[int]) -> List[int]:
         """Get sorted list of AS numbers"""
         return sorted(as_numbers)
+
+
+class MemoryBenchmark:
+    """Memory usage monitoring and benchmarking utilities"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        try:
+            import psutil
+            self.psutil = psutil
+            self.memory_monitoring_available = True
+        except ImportError:
+            self.psutil = None
+            self.memory_monitoring_available = False
+            self.logger.warning("psutil not available, memory monitoring disabled")
+    
+    def get_memory_usage(self) -> Dict[str, float]:
+        """Get current memory usage in MB"""
+        if not self.memory_monitoring_available:
+            return {"rss": 0, "vms": 0, "percent": 0}
+        
+        try:
+            process = self.psutil.Process()
+            memory_info = process.memory_info()
+            memory_percent = process.memory_percent()
+            
+            return {
+                "rss": memory_info.rss / 1024 / 1024,  # Resident Set Size in MB
+                "vms": memory_info.vms / 1024 / 1024,  # Virtual Memory Size in MB
+                "percent": memory_percent
+            }
+        except Exception as e:
+            self.logger.warning(f"Error getting memory usage: {e}")
+            return {"rss": 0, "vms": 0, "percent": 0}
+    
+    def compare_extraction_methods(self, 
+                                  file_path: Union[str, Path],
+                                  pattern_name: str = 'standard') -> Dict[str, any]:
+        """Compare memory usage between streaming and legacy extraction methods"""
+        file_path = Path(file_path)
+        
+        if not file_path.exists():
+            raise FileNotFoundError(f"Test file not found: {file_path}")
+        
+        results = {
+            "file_path": str(file_path),
+            "file_size_mb": file_path.stat().st_size / 1024 / 1024,
+            "legacy": {},
+            "streaming": {}
+        }
+        
+        # Test legacy method
+        self.logger.info("Testing legacy extraction method...")
+        extractor_legacy = ASNumberExtractor(enable_streaming=False)
+        
+        memory_before = self.get_memory_usage()
+        import time
+        start_time = time.time()
+        
+        try:
+            result_legacy = extractor_legacy.extract_as_numbers_from_file(file_path, pattern_name)
+            end_time = time.time()
+            memory_after = self.get_memory_usage()
+            
+            results["legacy"] = {
+                "success": True,
+                "as_count": len(result_legacy.as_numbers),
+                "processing_time": end_time - start_time,
+                "memory_before_mb": memory_before["rss"],
+                "memory_after_mb": memory_after["rss"],
+                "memory_delta_mb": memory_after["rss"] - memory_before["rss"],
+                "peak_memory_mb": memory_after["rss"]
+            }
+            
+        except Exception as e:
+            results["legacy"] = {
+                "success": False,
+                "error": str(e),
+                "memory_before_mb": memory_before["rss"],
+                "memory_after_mb": self.get_memory_usage()["rss"]
+            }
+        
+        # Clean up memory before testing streaming
+        import gc
+        gc.collect()
+        
+        # Test streaming method
+        self.logger.info("Testing streaming extraction method...")
+        extractor_streaming = ASNumberExtractor(enable_streaming=True)
+        
+        memory_before = self.get_memory_usage()
+        start_time = time.time()
+        
+        try:
+            result_streaming = extractor_streaming.extract_as_numbers_from_file(file_path, pattern_name)
+            end_time = time.time()
+            memory_after = self.get_memory_usage()
+            
+            results["streaming"] = {
+                "success": True,
+                "as_count": len(result_streaming.as_numbers),
+                "processing_time": end_time - start_time,
+                "memory_before_mb": memory_before["rss"],
+                "memory_after_mb": memory_after["rss"],
+                "memory_delta_mb": memory_after["rss"] - memory_before["rss"],
+                "peak_memory_mb": memory_after["rss"]
+            }
+            
+            # Compare results for accuracy
+            if (results["legacy"].get("success") and 
+                result_legacy.as_numbers == result_streaming.as_numbers):
+                results["accuracy_check"] = "PASS - Identical results"
+            elif results["legacy"].get("success"):
+                results["accuracy_check"] = f"FAIL - Different results (legacy: {len(result_legacy.as_numbers)}, streaming: {len(result_streaming.as_numbers)})"
+            else:
+                results["accuracy_check"] = "UNABLE TO VERIFY - Legacy method failed"
+                
+        except Exception as e:
+            results["streaming"] = {
+                "success": False,
+                "error": str(e),
+                "memory_before_mb": memory_before["rss"],
+                "memory_after_mb": self.get_memory_usage()["rss"]
+            }
+        
+        # Calculate memory savings
+        if (results["legacy"].get("success") and results["streaming"].get("success")):
+            legacy_peak = results["legacy"]["peak_memory_mb"]
+            streaming_peak = results["streaming"]["peak_memory_mb"]
+            
+            if legacy_peak > 0:
+                memory_reduction = ((legacy_peak - streaming_peak) / legacy_peak) * 100
+                results["memory_reduction_percent"] = memory_reduction
+                results["memory_savings_mb"] = legacy_peak - streaming_peak
+        
+        return results
+    
+    def generate_test_file(self, 
+                          output_path: Union[str, Path],
+                          size_mb: int = 10,
+                          as_density: int = 100) -> Path:
+        """Generate a test BGP configuration file for benchmarking"""
+        output_path = Path(output_path)
+        
+        self.logger.info(f"Generating test file: {output_path} ({size_mb}MB)")
+        
+        # Calculate approximate lines needed
+        avg_line_length = 50  # bytes per line
+        target_bytes = size_mb * 1024 * 1024
+        target_lines = target_bytes // avg_line_length
+        
+        as_number = 10000
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            for i in range(target_lines):
+                if i % as_density == 0:
+                    # BGP neighbor configuration line with AS
+                    line = f"neighbor 192.168.{(i//256)%256}.{i%256} {{ peer-as {as_number}; }}\n"
+                    as_number += 1
+                else:
+                    # Filler configuration line
+                    line = f"interface ge-0/0/{i%48} {{ description \"Link {i}\"; }}\n"
+                
+                f.write(line)
+        
+        actual_size = output_path.stat().st_size / 1024 / 1024
+        self.logger.info(f"Generated test file: {actual_size:.1f}MB with ~{(target_lines//as_density)} AS numbers")
+        
+        return output_path

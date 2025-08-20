@@ -1,0 +1,277 @@
+[
+  {
+    "dataset_size": 1000,
+    "legacy_mode": {
+      "memory_usage_mb": 0.484375,
+      "processing_time_seconds": 0.0054666996002197266,
+      "validation_results": 4,
+      "stats": {
+        "mode": "legacy",
+        "allowlist_entries": 0,
+        "vrp_data_age": "230 days, 20:03:58.908819",
+        "vrp_data_stale": true,
+        "memory_optimization": {
+          "streaming_enabled": false,
+          "memory_usage_mb": 0.19073486328125,
+          "memory_reduction_percent": 0,
+          "cache_performance": null
+        },
+        "vrp_entries": 1000
+      }
+    },
+    "streaming_mode": {
+      "memory_usage_mb": 0.390625,
+      "processing_time_seconds": 0.18344593048095703,
+      "validation_results": 4,
+      "stats": {
+        "mode": "streaming",
+        "allowlist_entries": 0,
+        "vrp_data_age": "Available via streaming",
+        "vrp_data_stale": false,
+        "memory_optimization": {
+          "streaming_enabled": true,
+          "memory_usage_mb": 0.0,
+          "memory_limit_mb": 5.0,
+          "memory_reduction_percent": 100,
+          "cache_performance": {
+            "hit_rate_percent": 0.0,
+            "total_requests": 4,
+            "cache_hits": 0,
+            "cache_misses": 4,
+            "evictions": 0,
+            "memory_pressure_events": 0,
+            "cached_prefix_keys": 0,
+            "cached_asn_keys": 0
+          }
+        },
+        "vrp_entries": 1000
+      }
+    },
+    "memory_reduction": {
+      "absolute_mb": 0.09375,
+      "percentage": 19.35483870967742,
+      "target_achieved": false,
+      "performance_impact_percent": 3255.698024335994
+    }
+  },
+  {
+    "dataset_size": 5000,
+    "legacy_mode": {
+      "memory_usage_mb": 3.25,
+      "processing_time_seconds": 0.028666019439697266,
+      "validation_results": 4,
+      "stats": {
+        "mode": "legacy",
+        "allowlist_entries": 0,
+        "vrp_data_age": "230 days, 20:03:59.150900",
+        "vrp_data_stale": true,
+        "memory_optimization": {
+          "streaming_enabled": false,
+          "memory_usage_mb": 0.95367431640625,
+          "memory_reduction_percent": 0,
+          "cache_performance": null
+        },
+        "vrp_entries": 5000
+      }
+    },
+    "streaming_mode": {
+      "memory_usage_mb": 0.65625,
+      "processing_time_seconds": 0.10118699073791504,
+      "validation_results": 4,
+      "stats": {
+        "mode": "streaming",
+        "allowlist_entries": 0,
+        "vrp_data_age": "Available via streaming",
+        "vrp_data_stale": false,
+        "memory_optimization": {
+          "streaming_enabled": true,
+          "memory_usage_mb": 0.0,
+          "memory_limit_mb": 5.0,
+          "memory_reduction_percent": 100,
+          "cache_performance": {
+            "hit_rate_percent": 0.0,
+            "total_requests": 4,
+            "cache_hits": 0,
+            "cache_misses": 4,
+            "evictions": 0,
+            "memory_pressure_events": 0,
+            "cached_prefix_keys": 0,
+            "cached_asn_keys": 0
+          }
+        },
+        "vrp_entries": 5000
+      }
+    },
+    "memory_reduction": {
+      "absolute_mb": 2.59375,
+      "percentage": 79.8076923076923,
+      "target_achieved": true,
+      "performance_impact_percent": 252.98584427033953
+    }
+  },
+  {
+    "dataset_size": 10000,
+    "legacy_mode": {
+      "memory_usage_mb": 3.984375,
+      "processing_time_seconds": 0.053114891052246094,
+      "validation_results": 4,
+      "stats": {
+        "mode": "legacy",
+        "allowlist_entries": 0,
+        "vrp_data_age": "230 days, 20:03:59.354485",
+        "vrp_data_stale": true,
+        "memory_optimization": {
+          "streaming_enabled": false,
+          "memory_usage_mb": 1.9073486328125,
+          "memory_reduction_percent": 0,
+          "cache_performance": null
+        },
+        "vrp_entries": 10000
+      }
+    },
+    "streaming_mode": {
+      "memory_usage_mb": 2.390625,
+      "processing_time_seconds": 0.20276403427124023,
+      "validation_results": 4,
+      "stats": {
+        "mode": "streaming",
+        "allowlist_entries": 0,
+        "vrp_data_age": "Available via streaming",
+        "vrp_data_stale": false,
+        "memory_optimization": {
+          "streaming_enabled": true,
+          "memory_usage_mb": 0.0,
+          "memory_limit_mb": 5.0,
+          "memory_reduction_percent": 100,
+          "cache_performance": {
+            "hit_rate_percent": 0.0,
+            "total_requests": 4,
+            "cache_hits": 0,
+            "cache_misses": 4,
+            "evictions": 0,
+            "memory_pressure_events": 0,
+            "cached_prefix_keys": 0,
+            "cached_asn_keys": 0
+          }
+        },
+        "vrp_entries": 10000
+      }
+    },
+    "memory_reduction": {
+      "absolute_mb": 1.59375,
+      "percentage": 40.0,
+      "target_achieved": false,
+      "performance_impact_percent": 281.74611724571326
+    }
+  },
+  {
+    "dataset_size": 25000,
+    "legacy_mode": {
+      "memory_usage_mb": 16.0625,
+      "processing_time_seconds": 0.13148713111877441,
+      "validation_results": 4,
+      "stats": {
+        "mode": "legacy",
+        "allowlist_entries": 0,
+        "vrp_data_age": "230 days, 20:03:59.812011",
+        "vrp_data_stale": true,
+        "memory_optimization": {
+          "streaming_enabled": false,
+          "memory_usage_mb": 4.76837158203125,
+          "memory_reduction_percent": 0,
+          "cache_performance": null
+        },
+        "vrp_entries": 25000
+      }
+    },
+    "streaming_mode": {
+      "memory_usage_mb": 5.8125,
+      "processing_time_seconds": 0.506005048751831,
+      "validation_results": 4,
+      "stats": {
+        "mode": "streaming",
+        "allowlist_entries": 0,
+        "vrp_data_age": "Available via streaming",
+        "vrp_data_stale": false,
+        "memory_optimization": {
+          "streaming_enabled": true,
+          "memory_usage_mb": 0.0,
+          "memory_limit_mb": 5.0,
+          "memory_reduction_percent": 100,
+          "cache_performance": {
+            "hit_rate_percent": 0.0,
+            "total_requests": 4,
+            "cache_hits": 0,
+            "cache_misses": 4,
+            "evictions": 0,
+            "memory_pressure_events": 0,
+            "cached_prefix_keys": 0,
+            "cached_asn_keys": 0
+          }
+        },
+        "vrp_entries": 25000
+      }
+    },
+    "memory_reduction": {
+      "absolute_mb": 10.25,
+      "percentage": 63.81322957198443,
+      "target_achieved": false,
+      "performance_impact_percent": 284.8323744281474
+    }
+  },
+  {
+    "dataset_size": 50000,
+    "legacy_mode": {
+      "memory_usage_mb": 21.5625,
+      "processing_time_seconds": 0.2804858684539795,
+      "validation_results": 4,
+      "stats": {
+        "mode": "legacy",
+        "allowlist_entries": 0,
+        "vrp_data_age": "230 days, 20:04:00.844207",
+        "vrp_data_stale": true,
+        "memory_optimization": {
+          "streaming_enabled": false,
+          "memory_usage_mb": 9.5367431640625,
+          "memory_reduction_percent": 0,
+          "cache_performance": null
+        },
+        "vrp_entries": 50000
+      }
+    },
+    "streaming_mode": {
+      "memory_usage_mb": 11.5,
+      "processing_time_seconds": 1.0193958282470703,
+      "validation_results": 4,
+      "stats": {
+        "mode": "streaming",
+        "allowlist_entries": 0,
+        "vrp_data_age": "Available via streaming",
+        "vrp_data_stale": false,
+        "memory_optimization": {
+          "streaming_enabled": true,
+          "memory_usage_mb": 0.0,
+          "memory_limit_mb": 5.0,
+          "memory_reduction_percent": 100,
+          "cache_performance": {
+            "hit_rate_percent": 0.0,
+            "total_requests": 4,
+            "cache_hits": 0,
+            "cache_misses": 4,
+            "evictions": 0,
+            "memory_pressure_events": 0,
+            "cached_prefix_keys": 0,
+            "cached_asn_keys": 0
+          }
+        },
+        "vrp_entries": 50000
+      }
+    },
+    "memory_reduction": {
+      "absolute_mb": 10.0625,
+      "percentage": 46.666666666666664,
+      "target_achieved": false,
+      "performance_impact_percent": 263.4392826511782
+    }
+  }
+]

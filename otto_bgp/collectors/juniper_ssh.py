@@ -25,6 +25,9 @@ from otto_bgp.utils.ssh_security import get_host_key_policy
 # Import v0.3.0 models
 from otto_bgp.models import DeviceInfo, RouterProfile
 
+# Import parallel execution utilities
+from otto_bgp.utils.parallel import ParallelExecutor
+
 
 @dataclass
 class BGPPeerData:
@@ -44,7 +47,8 @@ class JuniperSSHCollector:
                  ssh_key_path: Optional[str] = None,
                  connection_timeout: int = 30,
                  command_timeout: int = 60,
-                 setup_mode: bool = False):
+                 setup_mode: bool = False,
+                 max_workers: Optional[int] = None):
         """
         Initialize SSH collector with credentials and timeouts
         
@@ -55,6 +59,7 @@ class JuniperSSHCollector:
             connection_timeout: SSH connection timeout in seconds
             command_timeout: Command execution timeout in seconds
             setup_mode: If True, collect host keys on first connection (for initial setup only)
+            max_workers: Maximum parallel workers (defaults to OTTO_BGP_SSH_MAX_WORKERS env var or 5)
         """
         self.logger = logging.getLogger(__name__)
         
@@ -66,6 +71,16 @@ class JuniperSSHCollector:
         self.connection_timeout = connection_timeout
         self.command_timeout = command_timeout
         self.setup_mode = setup_mode or (os.getenv('OTTO_BGP_SETUP_MODE', '').lower() == 'true')
+        
+        # Configure parallel execution
+        if max_workers is None:
+            # Get from environment or use default of 5
+            try:
+                max_workers = int(os.getenv('OTTO_BGP_SSH_MAX_WORKERS', '5'))
+            except ValueError:
+                max_workers = 5
+        
+        self.max_workers = max(1, max_workers)  # Ensure at least 1 worker
         
         # Validate credentials
         if not self.ssh_username:
@@ -79,6 +94,9 @@ class JuniperSSHCollector:
             self.logger.info(f"Using SSH key authentication: {self.ssh_key_path}")
         else:
             self.logger.info("Using SSH password authentication")
+        
+        # Log parallel configuration
+        self.logger.info(f"Parallel collection configured: max_workers={self.max_workers}")
         
         # Log security mode
         if self.setup_mode:
@@ -324,34 +342,129 @@ class JuniperSSHCollector:
             except (paramiko.SSHException, OSError) as e:
                 self.logger.debug(f"SSH cleanup warning for {device.address}: {e}")
     
-    def collect_bgp_data_from_csv(self, csv_path: str) -> List[BGPPeerData]:
+    def collect_bgp_data_from_csv(self, csv_path: str, 
+                                  use_parallel: bool = True) -> List[BGPPeerData]:
         """
         Collect BGP data from all devices in CSV file
         
         Args:
             csv_path: Path to CSV file with device addresses
+            use_parallel: Use parallel collection (default: True for performance)
             
         Returns:
             List of BGPPeerData objects
         """
         devices = self.load_devices_from_csv(csv_path)
-        results = []
         
-        self.logger.info(f"Starting BGP data collection from {len(devices)} devices")
-        
-        for i, device in enumerate(devices, 1):
-            self.logger.info(f"Processing {device.address} ({i}/{len(devices)})")
+        if use_parallel and len(devices) > 1:
+            # Use parallel collection for multiple devices
+            self.logger.info(f"Using parallel collection for {len(devices)} devices")
+            return self.collect_from_devices(devices)
+        else:
+            # Use sequential collection (single device or parallel disabled)
+            if not use_parallel:
+                self.logger.info(f"Using sequential collection (parallel disabled)")
+            else:
+                self.logger.info(f"Using sequential collection (single device)")
             
-            result = self.collect_bgp_data_from_device(device)
-            results.append(result)
+            results = []
             
-            if not result.success:
-                self.logger.warning(f"Failed to collect data from {device.address}: {result.error_message}")
+            for i, device in enumerate(devices, 1):
+                self.logger.info(f"Processing {device.address} ({i}/{len(devices)})")
+                
+                result = self.collect_bgp_data_from_device(device)
+                results.append(result)
+                
+                if not result.success:
+                    self.logger.warning(f"Failed to collect data from {device.address}: {result.error_message}")
+            
+            successful_count = sum(1 for r in results if r.success)
+            self.logger.info(f"BGP data collection complete: {successful_count}/{len(devices)} devices successful")
+            
+            return results
+    
+    def collect_from_devices(self, devices: List[DeviceInfo], 
+                           show_progress: bool = True) -> List[BGPPeerData]:
+        """
+        Collect BGP data from multiple devices in parallel
         
-        successful_count = sum(1 for r in results if r.success)
-        self.logger.info(f"BGP data collection complete: {successful_count}/{len(devices)} devices successful")
+        This method maintains all security features of single-device collection
+        while executing in parallel for improved performance.
         
-        return results
+        Args:
+            devices: List of DeviceInfo objects to collect from
+            show_progress: Display progress indicators
+            
+        Returns:
+            List of BGPPeerData objects with results from all devices
+        """
+        if not devices:
+            self.logger.warning("No devices provided for collection")
+            return []
+        
+        # Auto-scale worker count based on device count
+        optimal_workers = min(self.max_workers, len(devices))
+        
+        self.logger.info(f"Starting parallel BGP data collection from {len(devices)} devices using {optimal_workers} workers")
+        
+        # Create parallel executor
+        executor = ParallelExecutor(
+            max_workers=optimal_workers, 
+            show_progress=show_progress
+        )
+        
+        # Execute parallel collection
+        parallel_results = executor.execute_batch(
+            items=devices,
+            task_func=self.collect_bgp_data_from_device,
+            task_name="Collecting BGP data"
+        )
+        
+        # Extract BGPPeerData results from ParallelResult objects
+        bgp_results = []
+        successful_count = 0
+        failed_devices = []
+        
+        for parallel_result in parallel_results:
+            if parallel_result.success and parallel_result.result:
+                bgp_data = parallel_result.result
+                bgp_results.append(bgp_data)
+                
+                if bgp_data.success:
+                    successful_count += 1
+                else:
+                    failed_devices.append(bgp_data.device.hostname)
+            else:
+                # Handle case where the parallel execution itself failed
+                device = parallel_result.item
+                bgp_results.append(BGPPeerData(
+                    device=device,
+                    bgp_config="",
+                    success=False,
+                    error_message=parallel_result.error or "Parallel execution failed"
+                ))
+                failed_devices.append(device.hostname)
+        
+        # Log comprehensive results
+        total_devices = len(devices)
+        self.logger.info(f"Parallel collection completed: {successful_count}/{total_devices} devices successful")
+        
+        if failed_devices:
+            self.logger.warning(f"Failed devices: {', '.join(failed_devices[:5])}" + 
+                              (f" (and {len(failed_devices) - 5} more)" if len(failed_devices) > 5 else ""))
+        
+        # Calculate and log performance metrics
+        if show_progress and parallel_results:
+            total_duration = sum(result.duration for result in parallel_results)
+            avg_duration = total_duration / len(parallel_results)
+            estimated_sequential = avg_duration * len(devices)
+            actual_duration = max(result.duration for result in parallel_results)
+            speedup = estimated_sequential / actual_duration if actual_duration > 0 else 1.0
+            
+            self.logger.info(f"Performance: estimated sequential={estimated_sequential:.1f}s, "
+                           f"actual parallel={actual_duration:.1f}s, speedup={speedup:.1f}x")
+        
+        return bgp_results
     
     def write_legacy_output_files(self, bgp_data: List[BGPPeerData], 
                                 output_dir: str = ".") -> Dict[str, str]:
