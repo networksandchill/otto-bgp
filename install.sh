@@ -361,8 +361,8 @@ create_config() {
     cp "$LIB_DIR/example-configs/otto.env.example" "$CONFIG_DIR/otto.env"
     
     # Add header with generation info
-    sed -i '1i# Generated during installation - '$(date)'' "$CONFIG_DIR/otto.env"
-    sed -i '2i# Customized for '$INSTALL_MODE' installation\n' "$CONFIG_DIR/otto.env"
+    sed -i "1i# Generated during installation - $(date)" "$CONFIG_DIR/otto.env"
+    sed -i "2i# Customized for $INSTALL_MODE installation\\n" "$CONFIG_DIR/otto.env"
     
     # Customize paths and settings based on installation mode
     if [[ "$INSTALL_MODE" == "system" ]]; then

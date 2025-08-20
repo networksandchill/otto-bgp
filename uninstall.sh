@@ -198,7 +198,11 @@ perform_uninstall() {
     
     # Remove binary
     if [[ -f "$BIN_DIR/otto-bgp" ]]; then
-        rm -f "$BIN_DIR/otto-bgp"
+        if [[ "$INSTALL_MODE" == "system" ]]; then
+            sudo rm -f "$BIN_DIR/otto-bgp"
+        else
+            rm -f "$BIN_DIR/otto-bgp"
+        fi
         echo -e "${GREEN}✓${NC} Binary removed"
     fi
     
