@@ -17,18 +17,10 @@ Otto BGP v0.3.2 provides a router-aware pipeline to collect BGP context via SSH,
 
 ## Known Gaps and Limitations
 
-**Fixed in this release:**
-- ✅ Systemd service user name: Resolved mismatch; all services run as `otto-bgp` consistently.
-- ✅ IRR proxy integration: `policy` and `pipeline` automatically use the proxy when `irr_proxy.enabled` is true.
-- ✅ Apply-confirm reference: Removed references to non-existent `apply-confirm` subcommand.
-- ✅ Discover command: `discover` is operational with CSV input, `--output-dir`, `--show-diff`, and `--timeout` options.
-- ✅ RPKI preflight: Implemented `rpki-check` subcommand and wired `otto-bgp-rpki-preflight.service` to enforce VRP freshness.
-- ✅ Router-aware RPKI: Router-aware pipeline performs RPKI validation and annotates per-router outputs.
-
 **Design decisions (working as intended):**
 - Autonomous mode enablement: Two-key design (config + CLI flag) for safety. Requires both `autonomous_mode.enabled = true` and `--autonomous` at runtime.
 
-**Remaining limitations:**
+**Current limitations:**
 - File logging: Console logging is default; file logging requires explicit configuration (`logging.log_to_file: true`, `logging.log_file`). Use `journalctl -u ...` for systemd logs.
 - PyEZ dependency: Policy application and autonomous NETCONF operations require PyEZ libraries (`junos-eznc`, `jxmlease`, `lxml`, `ncclient`). Without these, `apply` and autonomous application will fail.
 - Device CSV fields: Router‑aware paths expect an `address` column (with optional `hostname`). The legacy loader accepts `address`/`ip`/`host`. Prefer `address[,hostname]` for consistency.

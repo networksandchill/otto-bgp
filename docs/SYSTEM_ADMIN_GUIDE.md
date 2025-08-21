@@ -11,8 +11,6 @@ For Juniper router configuration and network engineering topics, see the Network
 Create the Otto BGP system user for service operations:
 
 ```bash
-# Note: The installer creates 'otto-bgp' (hyphen). If you use the provided unit files (which default to 'otto.bgp'),
-# either change the unit User/Group to 'otto-bgp' or create the 'otto.bgp' account explicitly.
 useradd -r -s /bin/bash -d /var/lib/otto-bgp otto-bgp
 
 # Create required directories
@@ -25,23 +23,24 @@ chmod 700 /var/lib/otto-bgp/ssh-keys
 chmod 600 /var/lib/otto-bgp/ssh-keys/*
 
 # Configure sudo for specific operations (if needed)
-echo "otto.bgp ALL=(root) NOPASSWD: /bin/systemctl reload otto-bgp" >> /etc/sudoers.d/otto-bgp
+echo "otto-bgp ALL=(root) NOPASSWD: /bin/systemctl reload otto-bgp" >> /etc/sudoers.d/otto-bgp
 ```
 
 ## Systemd Service Configuration
 
-Otto BGP operates as systemd service with timer:
+Otto BGP provides two operation modes via systemd units: a standard policy generation service (system mode) and an autonomous pipeline service with preflight gating.
 
 ```ini
-# /etc/systemd/system/otto-bgp.service
+# /etc/systemd/system/otto-bgp.service (System Mode)
 [Unit]
-Description=Otto BGP Policy Generator
-After=network.target
+Description=Otto BGP - System Mode (Manual/Scheduled Policy Generation)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=otto.bgp
-Group=otto.bgp
+User=otto-bgp
+Group=otto-bgp
 ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output
 WorkingDirectory=/opt/otto-bgp
 Environment=PYTHONPATH=/opt/otto-bgp
@@ -75,18 +74,125 @@ WantedBy=multi-user.target
 ```
 
 ```ini
-# /etc/systemd/system/otto-bgp.timer
+# /etc/systemd/system/otto-bgp.timer (System Mode schedule)
 [Unit]
-Description=Otto BGP Policy Generator Timer
+Description=Otto BGP System Mode Timer (Manual Scheduling)
 Requires=otto-bgp.service
 
 [Timer]
-OnCalendar=daily
-Persistent=true
+OnCalendar=hourly
+Persistent=yes
+AccuracySec=1min
 RandomizedDelaySec=300
 
 [Install]
 WantedBy=timers.target
+```
+
+### Autonomous Service and Preflight
+
+Autonomous mode runs end-to-end policy generation and application with safety guardrails. It is gated by an RPKI preflight service that validates VRP cache freshness before each run.
+
+```ini
+# /etc/systemd/system/otto-bgp-rpki-preflight.service
+[Unit]
+Description=Otto BGP RPKI Preflight - VRP Freshness Check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=otto-bgp
+Group=otto-bgp
+WorkingDirectory=/opt/otto-bgp
+ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py rpki-check --max-age 86400
+Environment=PYTHONPATH=/opt/otto-bgp
+Environment=OTTO_BGP_MODE=preflight
+EnvironmentFile=-/etc/otto-bgp/otto.env
+
+# Hardened permissions (read-only code/config; no home/root access)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /etc/systemd/system/otto-bgp-autonomous.service (Autonomous Mode)
+[Unit]
+Description=Otto BGP - Autonomous Mode (Scheduled Operations)
+After=network-online.target otto-bgp-rpki-preflight.service
+Wants=network-online.target
+Requires=otto-bgp-rpki-preflight.service
+
+[Service]
+Type=oneshot
+User=otto-bgp
+Group=otto-bgp
+WorkingDirectory=/opt/otto-bgp
+ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output --autonomous
+Environment=PYTHONPATH=/opt/otto-bgp
+Environment=OTTO_BGP_MODE=autonomous
+Environment=OTTO_BGP_AUTONOMOUS=true
+EnvironmentFile=-/etc/otto-bgp/otto.env
+
+# Network segmentation (allow local + RFC1918 by default)
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=10.0.0.0/8
+IPAddressAllow=172.16.0.0/12
+IPAddressAllow=192.168.0.0/16
+
+# Filesystem restrictions as above
+ReadWritePaths=/var/lib/otto-bgp/output
+ReadWritePaths=/var/lib/otto-bgp/logs
+ReadWritePaths=/var/lib/otto-bgp/cache
+ReadOnlyPaths=/etc/otto-bgp
+ReadOnlyPaths=/opt/otto-bgp
+ReadOnlyPaths=/var/lib/otto-bgp/ssh-keys
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /etc/systemd/system/otto-bgp-autonomous.timer (Autonomous schedule)
+[Unit]
+Description=Otto BGP Autonomous Mode Scheduler
+Requires=otto-bgp-autonomous.service
+
+[Timer]
+OnCalendar=*-*-* 08,12,16,20:00:00
+Persistent=yes
+AccuracySec=1min
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable and start the timers:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now otto-bgp.timer
+sudo systemctl enable --now otto-bgp-autonomous.timer
+```
+
+Monitoring logs:
+
+```bash
+sudo journalctl -u otto-bgp.service -f
+sudo journalctl -u otto-bgp-autonomous.service -f | grep -Ei "autonomous|netconf|commit|rpki"
+sudo systemctl status otto-bgp-rpki-preflight.service
 ```
 
 ## SSH Host Key Management Operations
