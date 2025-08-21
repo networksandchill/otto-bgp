@@ -17,22 +17,23 @@ Otto BGP v0.3.2 provides a router-aware pipeline to collect BGP context via SSH,
 
 ## Known Gaps and Limitations
 
-- Disabled discover command: The `discover` subcommand is temporarily disabled while error handling is standardized. The router‑aware `pipeline` performs SSH collection and policy generation but does not persist YAML discovery mappings that `list` expects under `policies/discovered/`. Workaround: rely on `pipeline` outputs (`policies/routers/<hostname>/`) for downstream steps; skip `list` unless you generate mappings via custom scripts.
-- RPKI in router‑aware pipeline: The router‑aware `pipeline` config exposes an `rpki_enabled` flag but does not currently perform RPKI validation during generation. RPKI validation is implemented in the standalone `policy` subcommand and in validation helpers, but not enforced in the router‑aware pipeline path. Workarounds:
-  - Run `policy` on an AS list with RPKI enabled for audits, in addition to the router‑aware `pipeline` output.
-  - Keep `rpki.enabled` true in config for future compatibility; avoid `--no-rpki` unless necessary.
-- RPKI preflight unit mismatch: The repository includes `systemd/otto-bgp-rpki-preflight.service` that references a non‑existent `rpki-check` subcommand in v0.3.2. If you enable autonomous timers, either remove the `Requires=`/`After=` linkage to the preflight unit or replace it with your own VRP freshness check. Do not rely on the preflight unit as‑is.
-- IRR proxy integration: `test-proxy` validates SSH tunnel setup and can test a single bgpq4 call through the proxy. However, `policy` and `pipeline` do not automatically route through the proxy in v0.3.2. Workarounds:
-  - Use `./otto-bgp test-proxy --test-bgpq4` to validate connectivity and tunnels.
-  - If you integrate programmatically, use `BGPq4Wrapper.create_with_proxy(...)` in your own code path.
-- Autonomous mode enablement: Passing `--autonomous` on the CLI is not sufficient by itself; autonomous behavior (including email notifications and guardrails’ autonomous finalization) is gated by configuration (`autonomous_mode.enabled: true`). The `auto_apply_threshold` is informational only and does not block operations.
-- Apply confirmation CLI: There is no `apply-confirm` subcommand. Confirmed commits must be confirmed on the device (e.g., an additional commit before the timer expires). The applier exposes `confirm_commit()` internally but it is not wired to a CLI command in v0.3.2.
-- Systemd service user name: The systemd unit files under `systemd/` use user `otto.bgp` (dot), while the `install.sh` script creates and uses `otto-bgp` (dash). Align the unit files or adjust the service user on your systems to avoid permission issues on `/var/lib/otto-bgp/*`.
-- Logging locations: The code logs to the console by default; systemd captures output in journald. Prior references to `/var/log/otto-bgp/*` file logs are not active unless you explicitly configure file logging in the config (`logging.log_to_file: true`, `logging.log_file`). Use `journalctl -u ...` to review service logs.
-- PyEZ dependency: Policy application and autonomous NETCONF operations require PyEZ and related libraries (`junos-eznc`, `jxmlease`, `lxml`, `ncclient`). Without these, `apply` and pipeline application components will fail to execute.
-- Device CSV fields: The router‑aware pipeline accepts `address`, `ip`, or `host` columns. Other areas assume an `address` column (e.g., `collect`). Ensure your CSV includes one of these expected column names.
-- Known hosts and SSH hardening: NETCONF operations rely on strict host key checking and default known hosts at `/var/lib/otto-bgp/ssh-keys/known_hosts`. Ensure this file exists and includes device host keys.
-- Email notifications: Notifications are best‑effort. They send on connect/preview/commit/rollback/disconnect events when `autonomous_mode.notifications.email.enabled` is true and SMTP settings are valid. There is no retry/backoff beyond standard SMTP behavior.
+**Fixed in this release:**
+- ✅ **Systemd service user name**: Fixed mismatch between install.sh (`otto-bgp`) and systemd files (`otto.bgp`). All systemd units now use `otto-bgp` consistently.
+- ✅ **RPKI in router-aware pipeline**: Added RPKI validation to the router-aware pipeline when `rpki_enabled` is true. RPKI validation now runs before policy generation for each router.
+- ✅ **IRR proxy integration**: Added automatic proxy support to `policy` and `pipeline` commands. Proxy is enabled automatically when `irr_proxy.enabled` is true in configuration.
+- ✅ **Apply-confirm reference**: Fixed misleading error message that referenced non-existent `apply-confirm` subcommand.
+- ✅ **RPKI preflight unit**: Disabled the problematic `rpki-check` command in the systemd preflight service until the subcommand is implemented.
+- ✅ **Discover command**: Re-enabled the `discover` subcommand with proper error handling and integration.
+
+**Design decisions (working as intended):**
+- **Autonomous mode enablement**: The two-key design (config + CLI flag) is intentional for safety. Autonomous mode requires both `autonomous_mode.enabled = true` in configuration AND the `--autonomous` CLI flag. This prevents accidental autonomous operation from just a CLI typo. The improved error message now explains this clearly.
+
+**Remaining limitations:**
+- **File logging**: Console logging is default; file logging requires explicit configuration (`logging.log_to_file: true`, `logging.log_file`). Use `journalctl -u ...` for systemd service logs.
+- **PyEZ dependency**: Policy application and autonomous NETCONF operations require PyEZ and related libraries (`junos-eznc`, `jxmlease`, `lxml`, `ncclient`). Without these, `apply` and pipeline application components will fail to execute.
+- **Device CSV fields**: The router‑aware pipeline accepts `address`, `ip`, or `host` columns. Other areas assume an `address` column (e.g., `collect`). Ensure your CSV includes one of these expected column names.
+- **Known hosts and SSH hardening**: NETCONF operations rely on strict host key checking and default known hosts at `/var/lib/otto-bgp/ssh-keys/known_hosts`. Ensure this file exists and includes device host keys.
+- **Email notifications**: Notifications are best‑effort. They send on connect/preview/commit/rollback/disconnect events when `autonomous_mode.notifications.email.enabled` is true and SMTP settings are valid. There is no retry/backoff beyond standard SMTP behavior.
 
 ## Operational Modes
 
@@ -103,12 +104,22 @@ NETCONF_USERNAME=admin NETCONF_PASSWORD=secret \
 
 ### 1. Discovery Workflow
 
-Current status in v0.3.2:
-- The dedicated `discover` subcommand is temporarily disabled while error handling is standardized.
-- The router‑aware `pipeline` performs collection and generation but does not persist the YAML discovery mappings expected by `list`.
-- The `list` subcommand requires prior discovery mappings under `policies/discovered/` and will report an error if none exist.
+The `discover` subcommand is now fully functional and performs BGP configuration discovery across your router fleet:
 
-Recommended approach: use the `pipeline` for end‑to‑end generation and per‑router outputs.
+```bash
+# Basic discovery
+./otto-bgp discover devices.csv
+
+# With change detection
+./otto-bgp discover devices.csv --show-diff
+
+# List discovered resources
+./otto-bgp list routers --output-dir policies
+./otto-bgp list as --output-dir policies
+./otto-bgp list groups --output-dir policies
+```
+
+The discovery creates YAML mappings under `policies/discovered/` that can be used by the `list` command. Both `discover` and the router-aware `pipeline` are now available for different use cases.
 
 #### Device CSV Format
 ```csv

@@ -211,12 +211,38 @@ def cmd_policy(args):
     """BGP policy generation using bgpq4"""
     logger = logging.getLogger('otto-bgp.policy')
     
-    # Initialize bgpq4 wrapper
+    # Initialize bgpq4 wrapper with proxy support
     from otto_bgp.generators.bgpq4_wrapper import BGPq4Mode
     mode = BGPq4Mode.PODMAN if getattr(args, 'dev', False) else BGPq4Mode.AUTO
+    
+    # Check for proxy configuration
+    proxy_manager = None
+    try:
+        config_manager = get_config_manager()
+        config = config_manager.get_config()
+        
+        if config.irr_proxy and config.irr_proxy.enabled:
+            logger.info("IRR proxy enabled - initializing proxy manager")
+            from otto_bgp.proxy import IRRProxyManager, ProxyConfig
+            
+            proxy_config = ProxyConfig(
+                enabled=config.irr_proxy.enabled,
+                method=config.irr_proxy.method,
+                jump_host=config.irr_proxy.jump_host,
+                jump_user=config.irr_proxy.jump_user,
+                ssh_key_file=config.irr_proxy.ssh_key_file,
+                known_hosts_file=config.irr_proxy.known_hosts_file,
+                connection_timeout=config.irr_proxy.connection_timeout,
+                tunnels=config.irr_proxy.tunnels
+            )
+            proxy_manager = IRRProxyManager(proxy_config, logger)
+    except Exception as e:
+        logger.warning(f"Failed to initialize proxy manager: {e}")
+    
     bgpq4 = BGPq4Wrapper(
         mode=mode,
-        command_timeout=getattr(args, 'timeout', 30)
+        command_timeout=getattr(args, 'timeout', 30),
+        proxy_manager=proxy_manager
     )
     
     # Test connection if requested  
@@ -320,11 +346,75 @@ def cmd_discover(args):
     """Discover BGP configurations and generate mappings"""
     logger = logging.getLogger('otto-bgp.discover')
     
-    # TODO: This function needs to be updated with proper error handling
-    # For now, using legacy error handling to allow testing of other functions
-    print_error("Discovery command temporarily disabled for error handling standardization",
-               "Please use other commands to test the new error handling")
-    return 1
+    try:
+        from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
+        from otto_bgp.discovery import RouterInspector, YAMLGenerator
+        from pathlib import Path
+        
+        # Initialize components
+        collector = JuniperSSHCollector()
+        inspector = RouterInspector()
+        yaml_gen = YAMLGenerator(output_dir=Path(args.output_dir) / "discovered")
+        
+        # Load devices from CSV
+        devices = collector.load_devices_from_csv(args.devices_csv)
+        if not devices:
+            print_error("No devices found in CSV file", f"Check {args.devices_csv}")
+            return 1
+        
+        logger.info(f"Discovering BGP configurations for {len(devices)} devices")
+        profiles = []
+        
+        # Collect BGP configurations from each device
+        for device in devices:
+            try:
+                logger.info(f"Collecting from {device.hostname or device.address}")
+                bgp_config = collector.collect_bgp_config(device.address)
+                
+                # Create router profile
+                profile = device.to_router_profile()
+                profile.bgp_config = bgp_config
+                
+                # Inspect BGP configuration
+                inspection_result = inspector.inspect_router(profile)
+                profiles.append(profile)
+                
+                logger.info(f"  Discovered {inspection_result.total_as_numbers} AS numbers")
+                
+            except Exception as e:
+                logger.error(f"Failed to discover {device.hostname or device.address}: {e}")
+                print_error(f"Discovery failed for {device.hostname or device.address}", str(e))
+        
+        if not profiles:
+            print_error("No profiles discovered", "Check device connectivity and credentials")
+            return 1
+        
+        # Generate and save mappings
+        mappings = yaml_gen.generate_mappings(profiles)
+        yaml_gen.save_with_history(mappings)
+        
+        # Show diff if requested
+        if getattr(args, 'show_diff', False):
+            diff_content = yaml_gen.generate_diff_report()
+            if diff_content:
+                print("\nChanges detected:")
+                print(diff_content)
+            else:
+                print("\nNo changes detected since last discovery")
+        
+        # Summary
+        total_as_numbers = sum(len(profile.discovered_as_numbers) for profile in profiles)
+        print_success("Discovery completed:")
+        print(f"  Routers discovered: {len(profiles)}")
+        print(f"  Total AS numbers: {total_as_numbers}")
+        print(f"  Output directory: {yaml_gen.output_dir}")
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f"Discovery command failed: {e}")
+        print_error("Discovery command failed", str(e))
+        return 1
 
 
 def cmd_list(args):
@@ -570,7 +660,7 @@ def cmd_apply(args):
             
             if args.confirm:
                 print(f"\n⚠ CONFIRMATION REQUIRED within {args.confirm_timeout} seconds!")
-                print("  Run: otto-bgp apply-confirm --router " + args.router)
+                print("  Confirm the commit on the router within the timeout period")
                 print("  Or changes will be automatically rolled back")
         else:
             print(f"\n✗ Failed to apply policies: {result.error_message}")
@@ -1290,8 +1380,13 @@ def validate_autonomous_mode(args, config):
         
         if not autonomous_config.enabled:
             logger.warning("Autonomous mode requested but not enabled in configuration")
-            print("Error: Autonomous mode requested but not enabled in configuration")
-            print("Run: ./install.sh --autonomous to enable autonomous mode")
+            print("⚠ Autonomous mode requires both configuration and runtime approval")
+            print("  1. Configuration: autonomous_mode.enabled must be true")
+            print("  2. Runtime flag: --autonomous (which you provided)")
+            print("")
+            print("To enable in configuration, either:")
+            print("  • Run: ./install.sh --autonomous")
+            print("  • Or edit config: autonomous_mode.enabled = true")
             return False
         
         # Recommend system installation for autonomous mode

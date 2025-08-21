@@ -65,9 +65,34 @@ class BGPPolicyPipeline:
         from ..generators.bgpq4_wrapper import BGPq4Mode
         bgpq4_mode = BGPq4Mode.PODMAN if config.dev_mode else BGPq4Mode.AUTO
         
+        # Initialize proxy manager if configured
+        proxy_manager = None
+        try:
+            from ..utils.config import get_config_manager
+            config_manager = get_config_manager()
+            irr_config = config_manager.get_config()
+            
+            if irr_config.irr_proxy and irr_config.irr_proxy.enabled:
+                self.logger.info("Pipeline: IRR proxy enabled - initializing proxy manager")
+                from ..proxy import IRRProxyManager, ProxyConfig
+                
+                proxy_config = ProxyConfig(
+                    enabled=irr_config.irr_proxy.enabled,
+                    method=irr_config.irr_proxy.method,
+                    jump_host=irr_config.irr_proxy.jump_host,
+                    jump_user=irr_config.irr_proxy.jump_user,
+                    ssh_key_file=irr_config.irr_proxy.ssh_key_file,
+                    known_hosts_file=irr_config.irr_proxy.known_hosts_file,
+                    connection_timeout=irr_config.irr_proxy.connection_timeout,
+                    tunnels=irr_config.irr_proxy.tunnels
+                )
+                proxy_manager = IRRProxyManager(proxy_config, self.logger)
+        except Exception as e:
+            self.logger.warning(f"Pipeline: Failed to initialize proxy manager: {e}")
+        
         self.ssh_collector = JuniperSSHCollector()
         self.as_extractor = ASNumberExtractor()
-        self.bgp_generator = BGPq4Wrapper(mode=bgpq4_mode)
+        self.bgp_generator = BGPq4Wrapper(mode=bgpq4_mode, proxy_manager=proxy_manager)
         self.router_inspector = RouterInspector()
         
         # Pipeline state - properly isolated between runs
@@ -429,6 +454,42 @@ class BGPPolicyPipeline:
                 # Create router-specific output directory
                 router_dir = self._create_router_directory(profile)
                 router_directories.append(str(router_dir))
+                
+                # RPKI validation if enabled
+                if self.config.rpki_enabled and profile.discovered_as_numbers:
+                    self.logger.info(f"Performing RPKI validation for {profile.hostname}")
+                    try:
+                        from ..validators.rpki import RPKIValidator
+                        from ..utils.config import get_config_manager
+                        
+                        config_mgr = get_config_manager()
+                        rpki_config = config_mgr.get_config().rpki
+                        
+                        if rpki_config and rpki_config.enabled:
+                            rpki_validator = RPKIValidator(
+                                vrp_cache_path=rpki_config.vrp_cache_path,
+                                allowlist_path=rpki_config.allowlist_path,
+                                fail_closed=rpki_config.fail_closed,
+                                max_vrp_age_hours=rpki_config.max_vrp_age_hours
+                            )
+                            
+                            # Validate all AS numbers for this router
+                            as_list = list(profile.discovered_as_numbers)
+                            rpki_results = {}
+                            for as_number in as_list:
+                                result = rpki_validator.validate_as_number(as_number)
+                                rpki_results[as_number] = result
+                                if result.status == "invalid":
+                                    self.logger.warning(f"  AS{as_number}: RPKI validation failed - {result.details}")
+                                elif result.status == "valid":
+                                    self.logger.debug(f"  AS{as_number}: RPKI validation passed")
+                            
+                            # Store RPKI results in profile for metadata
+                            profile.rpki_validation_results = rpki_results
+                    except ImportError:
+                        self.logger.warning("RPKI validation requested but RPKIValidator not available")
+                    except Exception as e:
+                        self.logger.error(f"RPKI validation failed for {profile.hostname}: {e}")
                 
                 # Generate policies for this router's AS numbers
                 self.logger.info(f"Generating policies for {profile.hostname}: {len(profile.discovered_as_numbers)} AS numbers")
