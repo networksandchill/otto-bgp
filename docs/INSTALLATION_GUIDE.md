@@ -64,6 +64,7 @@ sudo apt-get install -y python3-dev python3-pip openssh-client
 sudo yum install -y python3-devel python3-pip openssh-clients
 
 # bgpq4 (required for policy generation)
+# install.sh accepts native bgpq4 OR docker/podman for containerized bgpq4
 # Installation instructions: https://github.com/bgp/bgpq4
 ```
 
@@ -101,9 +102,10 @@ cd otto-bgp
 ```
 
 **What it does:**
-- Installs to `~/.local/bin/otto-bgp`
-- Creates configuration in `~/.otto-bgp/`
-- Uses local Python environment
+- Installs binary to `~/.local/bin/otto-bgp`
+- Installs libraries to `~/.local/lib/otto-bgp`
+- Creates configuration in `~/.config/otto-bgp/`
+- Creates a virtual environment at `~/.local/venv`
 - No system modifications
 - Basic safety controls only
 
@@ -135,12 +137,15 @@ cd otto-bgp
 ```
 
 **What it does:**
-- Installs to `/opt/otto-bgp/`
+- Installs binary to `/usr/local/bin/otto-bgp`
+- Installs libraries to `/usr/local/lib/otto-bgp`
 - Creates configuration in `/etc/otto-bgp/`
+- Creates data directories in `/var/lib/otto-bgp`
+- Creates a virtual environment at `/usr/local/venv`
 - Creates service user `otto-bgp`
-- Sets up systemd service and timer (system mode)
-- Enhanced security and performance optimizations
-- Autonomous mode available but disabled
+- Sets up systemd service and (in non‑autonomous) a systemd timer
+- Enhanced security and performance hardening
+- Autonomous mode available but disabled by default
 
 **System Setup:**
 ```bash
@@ -252,7 +257,7 @@ Engineer email address(es) (comma-separated): network-team@company.com,ops@compa
   "environment": "system", 
   "installation_mode": {
     "type": "system",
-    "service_user": "otto.bgp",
+    "service_user": "otto-bgp",
     "systemd_enabled": true,
     "optimization_level": "enhanced"
   },
@@ -320,11 +325,20 @@ OPTIONS:
 
 For environments requiring manual installation or custom configurations, follow these detailed production deployment steps.
 
+Note: install.sh installs to `/usr/local` for system mode by default. The steps below have been aligned to those locations to avoid path mismatches.
+
 ### Production System Requirements
 
 **Operating System**: Debian 12 (Bookworm) or Ubuntu 22.04+
 **Hardware**: 4 vCPU, 8GB RAM, 100GB storage
 **Network**: Outbound HTTPS (bgpq4 queries), SSH to target devices
+
+### IRR Proxy Compatibility
+
+- Proxy support requires native `bgpq4` (host binary). Docker/Podman modes do not work with SSH tunnels because container `127.0.0.1` cannot reach host-bound tunnel ports.
+- When using the IRR proxy, disable parallel policy generation so the proxy is honored: set `OTTO_BGP_DISABLE_PARALLEL=true` before running `otto-bgp policy` or use commands that operate sequentially.
+- Validate the proxy setup with: `otto-bgp test-proxy --test-bgpq4`.
+- Ensure a dedicated SSH key and `known_hosts` for the jump host are present and readable by the `otto-bgp` user.
 
 ### Step-by-Step Deployment
 
@@ -374,32 +388,40 @@ sudo useradd --system --shell /bin/false --home /var/lib/otto-bgp \
     --create-home otto-bgp
 
 # Create directory structure
-sudo mkdir -p /opt/otto-bgp
+sudo mkdir -p /usr/local/lib/otto-bgp
 sudo mkdir -p /var/lib/otto-bgp/{logs,policies,ssh-keys}
 sudo mkdir -p /etc/otto-bgp
 
 # Set ownership
 sudo chown -R otto-bgp:otto-bgp /var/lib/otto-bgp
-sudo chown otto-bgp:otto-bgp /opt/otto-bgp
+sudo chown otto-bgp:otto-bgp /usr/local/lib/otto-bgp
 ```
 
 #### 3. Application Deployment
 ```bash
 # Clone repository
-sudo git clone https://github.com/networksandchill/otto-bgp.git /opt/otto-bgp
-cd /opt/otto-bgp
+sudo git clone https://github.com/networksandchill/otto-bgp.git /usr/local/lib/otto-bgp
+cd /usr/local/lib/otto-bgp
 
-# Create virtual environment as otto-bgp user
-sudo -u otto-bgp python3 -m venv /var/lib/otto-bgp/venv
+# Create virtual environment
+sudo python3 -m venv /usr/local/venv
 
 # Install dependencies
-sudo -u otto-bgp /var/lib/otto-bgp/venv/bin/pip install -r requirements.txt
+sudo /usr/local/venv/bin/pip install -r requirements.txt
 
-# Make CLI executable
-sudo chmod +x /opt/otto-bgp/otto-bgp
-
-# Create symlink for system-wide access
-sudo ln -sf /opt/otto-bgp/otto-bgp /usr/local/bin/otto-bgp
+# Create CLI wrapper
+sudo tee /usr/local/bin/otto-bgp >/dev/null <<'EOF'
+#!/bin/bash
+VENV_PYTHON="/usr/local/venv/bin/python"
+export OTTO_BGP_CONFIG_DIR="/etc/otto-bgp"
+export OTTO_BGP_DATA_DIR="/var/lib/otto-bgp"
+if [[ -f "$OTTO_BGP_CONFIG_DIR/otto.env" ]]; then
+  source "$OTTO_BGP_CONFIG_DIR/otto.env"
+fi
+cd "/usr/local/lib/otto-bgp"
+exec "$VENV_PYTHON" -m otto_bgp.main "$@"
+EOF
+sudo chmod +x /usr/local/bin/otto-bgp
 ```
 
 #### 4. SSH Key Configuration
@@ -424,14 +446,14 @@ sudo cat /var/lib/otto-bgp/ssh-keys/otto-bgp.pub
 # to your devices but BEFORE production deployment.
 
 # Method 1: Use the provided setup script (recommended)
-sudo chmod +x /opt/otto-bgp/scripts/setup-host-keys.sh
-sudo /opt/otto-bgp/scripts/setup-host-keys.sh \
+sudo chmod +x /usr/local/lib/otto-bgp/scripts/setup-host-keys.sh
+sudo /usr/local/lib/otto-bgp/scripts/setup-host-keys.sh \
     /etc/otto-bgp/devices.csv \
     /var/lib/otto-bgp/ssh-keys/known_hosts
 
 # Method 2: Use Python setup script with Otto
-sudo -u otto-bgp /var/lib/otto-bgp/venv/bin/python \
-    /opt/otto-bgp/scripts/setup_host_keys.py \
+sudo /usr/local/venv/bin/python \
+    /usr/local/lib/otto-bgp/scripts/setup_host_keys.py \
     --devices /etc/otto-bgp/devices.csv \
     --output /var/lib/otto-bgp/ssh-keys/known_hosts
 
@@ -451,7 +473,7 @@ sudo -u otto-bgp ssh -i /var/lib/otto-bgp/ssh-keys/otto-bgp \
 #### 5. Configuration Setup
 ```bash
 # Create environment configuration file (for system mode)
-sudo cp /opt/otto-bgp/systemd/otto.env.system /etc/otto-bgp/otto.env
+sudo cp /usr/local/lib/otto-bgp/systemd/otto.env.system /etc/otto-bgp/otto.env
 
 # Customize configuration
 sudo nano /etc/otto-bgp/otto.env
@@ -491,7 +513,7 @@ address,hostname
 EOF
 
 # Set ownership
-sudo chown otto-bgp:otto-bgp /var/lib/otto-bgp/devices.csv
+sudo chown otto-bgp:otto-bgp /etc/otto-bgp/devices.csv
 ```
 
 ## SSH Host Key Setup
@@ -543,7 +565,7 @@ done < devices.csv
 
 # Set secure permissions
 chmod 600 "$KNOWN_HOSTS_FILE"
-chown otto.bgp:otto.bgp "$KNOWN_HOSTS_FILE"
+chown otto-bgp:otto-bgp "$KNOWN_HOSTS_FILE"
 
 echo "✅ Host key setup complete"
 echo "⚠️  IMPORTANT: Disable setup mode immediately"
@@ -574,55 +596,70 @@ ssh-keygen -l -f /var/lib/otto-bgp/ssh-keys/known_hosts
 # Add new router (requires setup mode)
 OTTO_BGP_SETUP_MODE=true ssh-keyscan -H new-router.company.com >> /var/lib/otto-bgp/ssh-keys/known_hosts
 
-# Validate host key file
-otto-bgp config validate --section ssh
+# Validate known_hosts entries for a router (example)
+ssh-keygen -F new-router.company.com -f /var/lib/otto-bgp/ssh-keys/known_hosts || true
 ```
 
 ## Systemd Integration
 
 ### Service Configuration
 
-**Service File (`/etc/systemd/system/otto-bgp.service`):**
+**Service File (`/etc/systemd/system/otto-bgp.service` generated by install.sh):**
 ```ini
 [Unit]
-Description=Otto BGP Autonomous Policy Manager
-Documentation=https://docs.otto-bgp.com
+Description=Otto BGP v0.3.2 - Orchestrated Transit Traffic Optimizer
+Documentation=file:///usr/local/lib/otto-bgp/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-User=otto.bgp
-Group=otto.bgp
-WorkingDirectory=/var/lib/otto-bgp
-ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=30
-TimeoutStopSec=60
+Type=oneshot
+User=otto-bgp
+Group=otto-bgp
+WorkingDirectory=/usr/local/lib/otto-bgp
+ExecStart=/usr/local/bin/otto-bgp pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/policies
+Environment=PYTHONPATH=/usr/local/lib/otto-bgp
+EnvironmentFile=-/etc/otto-bgp/otto.env
 
 # Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
+NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/otto-bgp /var/log/otto-bgp
-CapabilityBoundingSet=CAP_NET_RAW
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
 
-# Environment
-Environment=OTTO_BGP_CONFIG_DIR=/etc/otto-bgp
-Environment=OTTO_BGP_DATA_DIR=/var/lib/otto-bgp
-Environment=OTTO_BGP_LOG_DIR=/var/log/otto-bgp
-Environment=PYTHONPATH=/opt/otto-bgp
+# Directory access
+ReadWritePaths=/var/lib/otto-bgp/policies
+ReadWritePaths=/var/lib/otto-bgp/logs
+ReadOnlyPaths=/etc/otto-bgp
+ReadOnlyPaths=/usr/local/lib/otto-bgp
+
+# Logging and limits
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otto-bgp
+TimeoutStartSec=300
+TimeoutStopSec=60
+MemoryMax=1G
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-**Timer for Scheduled Operations (`/etc/systemd/system/otto-bgp.timer`):**
+**Timer for Scheduled Operations (`/etc/systemd/system/otto-bgp.timer` when not in autonomous mode):**
 ```ini
 [Unit]
-Description=Otto BGP Scheduled Policy Update
+Description=Otto BGP v0.3.2 Scheduled Policy Update
 Requires=otto-bgp.service
 
 [Timer]
@@ -688,31 +725,22 @@ sudo journalctl -u otto-bgp.service | grep -i "stage.*complete"
 
 ### Configuration Schema Validation
 
-```bash
-# Validate configuration
-otto-bgp config validate
-
-# Validate specific sections
-otto-bgp config validate --section autonomous_mode
-otto-bgp config validate --section installation_mode
-
-# Show configuration
-otto-bgp config show
-otto-bgp config show --section email
-```
+The CLI does not currently include `config` subcommands. Review or edit the environment file directly (`/etc/otto-bgp/otto.env` or `~/.config/otto-bgp/otto.env`). For advanced configuration, create `/etc/otto-bgp/config.json` and populate the JSON structure shown in this guide; the application will load it automatically when present.
 
 ### Environment Variable Overrides
 
 ```bash
-# Override autonomous mode settings
+# Autonomous mode
 export OTTO_BGP_AUTONOMOUS_ENABLED=true
-export OTTO_BGP_AUTO_APPLY_THRESHOLD=200
+export OTTO_BGP_AUTO_THRESHOLD=200   # Informational threshold used in notifications
 
-# Override email settings
+# Email (via environment)
 export OTTO_BGP_SMTP_SERVER=smtp.newserver.com
-export OTTO_BGP_EMAIL_TO=newteam@company.com
+export OTTO_BGP_SMTP_PORT=587
+export OTTO_BGP_FROM_ADDRESS=otto-bgp@company.com
+# Note: recipients are not read from env; see Known Gaps for how to set recipients
 
-# Override installation settings
+# Installation (read by application config, not the installer)
 export OTTO_BGP_SERVICE_USER=custom-user
 export OTTO_BGP_DATA_DIR=/custom/data/dir
 ```
@@ -789,39 +817,36 @@ sudo systemctl daemon-reload
 ```bash
 # Verify installation
 otto-bgp --version
-otto-bgp config validate
 
 # Test basic functionality
-otto-bgp policy sample_as.txt --test
+otto-bgp policy sample_input.txt --test
 
 # Test discovery (if devices available)
-otto-bgp discover test_devices.csv --dry-run
+otto-bgp discover test_devices.csv --show-diff
 
-# Verify autonomous mode (if enabled)
-otto-bgp apply --autonomous --dry-run
+# Preview application on a router (dry run)
+otto-bgp apply --router 192.0.2.1 --policy-dir policies --dry-run
 ```
 
 ### Diagnostic Commands
 
 ```bash
-# System information
-otto-bgp config show --section installation_mode
-
-# Check file permissions
-ls -la /var/lib/otto-bgp/
+# Check configuration and permissions
 ls -la /etc/otto-bgp/
+cat /etc/otto-bgp/otto.env | sed -n '1,80p'
+ls -la /var/lib/otto-bgp/
 
 # Check service user
 id otto-bgp
 sudo -u otto-bgp otto-bgp --version
 
 # Network connectivity
-ping router1.company.com
-ssh otto-bgp@router1.company.com "show version"
+ping -c1 router1.company.com
+ssh otto-bgp@router1.company.com "show version" || true
 
-# Log analysis
-sudo tail -f /var/log/otto-bgp/otto-bgp.log
-sudo grep -i error /var/log/otto-bgp/otto-bgp.log
+# Journal log analysis
+sudo journalctl -u otto-bgp.service --no-pager | tail -n 100
+sudo journalctl -u otto-bgp.service | grep -i error | tail -n 50
 ```
 
 ## Uninstallation
@@ -899,9 +924,10 @@ sudo rm -f /etc/systemd/system/otto-bgp.service
 sudo rm -f /etc/systemd/system/otto-bgp.timer
 sudo systemctl daemon-reload
 
-# Remove binary and libraries
+# Remove binary, libraries, and virtual environment
 sudo rm -f /usr/local/bin/otto-bgp
-sudo rm -rf /opt/otto-bgp
+sudo rm -rf /usr/local/lib/otto-bgp
+sudo rm -rf /usr/local/venv
 
 # Remove configuration (optional)
 sudo rm -rf /etc/otto-bgp
@@ -912,6 +938,16 @@ sudo rm -rf /var/lib/otto-bgp
 # Remove service user (optional)
 sudo userdel otto-bgp
 ```
+
+## Known Gaps and Limitations
+
+- Systemd service: install.sh generates a oneshot service that runs the unified pipeline and, when not in autonomous mode, a daily timer. Earlier examples with Type=notify, ExecReload, and different paths are outdated and have been replaced with the exact service shape created by install.sh.
+- Directory locations: install.sh installs into `/usr/local/bin`, `/usr/local/lib/otto-bgp`, and `/usr/local/venv` for system mode; and into `~/.local/bin`, `~/.local/lib/otto-bgp`, and `~/.local/venv` for user mode. Any references to `/opt/otto-bgp` are for manual deployment and are not used by the installer.
+- Config CLI: There is no `otto-bgp config ...` CLI at this time. Prior references to `otto-bgp config show/validate` were removed. Edit `/etc/otto-bgp/otto.env` directly or create `/etc/otto-bgp/config.json` for advanced settings.
+- Environment variable names: The application reads `OTTO_BGP_AUTONOMOUS_ENABLED`, `OTTO_BGP_AUTO_THRESHOLD`, `OTTO_BGP_SMTP_SERVER`, `OTTO_BGP_SMTP_PORT`, and `OTTO_BGP_FROM_ADDRESS`. The commonly referenced `OTTO_BGP_EMAIL_TO` is not consumed by the code. To set recipients, create `/etc/otto-bgp/config.json` and set `autonomous_mode.notifications.email.to_addresses`.
+- Email recipients in autonomous mode: The autonomous installer prompts write recipients into the environment template, but the code does not read recipients from env. Without a JSON config, recipients default to `["network-engineers@company.com"]`.
+- bgpq4 configuration via env: Runtime selection of bgpq4 is done via CLI and auto‑detection (native, docker, podman). The code does not read `OTTO_BGP_BGPQ4_*` environment variables. Ensure native `bgpq4` or Docker/Podman is available; use `otto-bgp policy --test` to verify.
+- Devices file: The systemd service expects `/etc/otto-bgp/devices.csv` to exist. The installer does not create this file; you must supply it.
 
 ### Data Backup Before Uninstall
 
@@ -1005,6 +1041,9 @@ ls -la /var/lib/otto-bgp/ssh-keys/
 ```bash
 # Test bgpq4 manually
 bgpq4 -Jl 13335 AS13335
+
+# Test bgpq4 via IRR proxy (native bgpq4 only)
+OTTO_BGP_DISABLE_PARALLEL=true otto-bgp test-proxy --test-bgpq4
 
 # Check network connectivity
 curl -I https://bgp.tools/

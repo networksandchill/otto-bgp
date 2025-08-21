@@ -19,12 +19,15 @@ Global flags can be positioned either before or after the subcommand.
 
 | Command | Purpose | Autonomous Support |
 |---------|---------|-------------------|
-| `discover` | Collect BGP configurations from routers | Temporarily disabled |
-| `policy` | Generate BGP prefix-list policies | ✅ |
+| `collect` | Collect raw BGP peer data over SSH | ❌ |
+| `process` | Process text or extract AS numbers | ❌ |
+| `discover` | Discover BGP configs and mappings | ❌ |
+| `policy` | Generate BGP prefix‑list policies | ✅ |
 | `apply` | Apply policies to routers via NETCONF | ✅ |
-| `pipeline` | Run complete workflow (discover → generate → apply) | ✅ |
-| `list` | List discovered resources | ❌ |
+| `pipeline` | Run complete workflow (collect → process → policy) | ✅ |
+| `list` | List discovered routers/AS/groups | ❌ |
 | `test-proxy` | Test IRR proxy connectivity | ❌ |
+| `rpki-check` | Validate RPKI cache freshness | ❌ |
 
 ## Global Flags
 
@@ -53,36 +56,76 @@ Global flags can be positioned either before or after the subcommand.
 --quiet, -q             # Suppress info messages (conflicts with --verbose)
 --help, -h              # Show help message
 --version               # Show version information
---dev                   # Use containerized bgpq4 for development
+--dev                   # Use Podman for bgpq4 (development)
+--no-rpki               # Disable RPKI validation (policy/pipeline)
 ```
 
 ## Command Reference
 
-### 1. discover - Router Discovery
+### 1. collect - BGP Data Collection
 
-Collect BGP configurations from Juniper routers via SSH.
+Collect BGP peer data from Juniper devices via SSH.
+
+```bash
+otto-bgp collect <devices.csv> [options]
+```
+
+#### Arguments
+- `devices.csv` - CSV with an `address` column (required)
+
+#### Options
+```bash
+--output-dir DIR          # Output directory (default: .)
+--timeout SECONDS         # SSH connection timeout (default: 30)
+--command-timeout SECONDS # SSH command timeout (default: 60)
+```
+
+#### Example
+```bash
+otto-bgp collect devices.csv --output-dir ./collected
+```
+
+### 2. process - Text Processing / AS Extraction
+
+Process text files or extract AS numbers.
+
+```bash
+otto-bgp process <input_file> [options]
+```
+
+#### Options
+```bash
+-o FILE, --output FILE    # Write processed output to file
+--extract-as              # Extract AS numbers (one per line)
+--pattern PATTERN         # standard|peer_as|explicit_as|autonomous_system
+```
+
+#### Example
+```bash
+otto-bgp process bgp.txt --extract-as -o asns.txt
+```
+
+### 3. discover - Router Discovery
+
+Discover BGP configurations and generate YAML mappings.
 
 ```bash
 otto-bgp discover <devices.csv> [options]
 ```
 
-#### Arguments
-- `devices.csv` - CSV file with router information (required)
-
-> Note: The `discover` command is temporarily disabled in this version while error handling is standardized. Running it exits with an error message. Supported parser options are present but the command does not execute discovery at this time.
-
-#### Examples
-No-op while disabled.
-
-#### CSV Format
-```csv
-hostname,address,username,model,location
-edge-router1,10.1.1.1,admin,MX960,datacenter1
-core-router1,10.1.2.1,admin,MX480,datacenter1
-transit-router1,10.1.3.1,admin,MX240,datacenter2
+#### Options
+```bash
+--output-dir DIR          # Output dir for discovered data (default: policies)
+--show-diff               # Show diff report when changes detected
+--timeout SECONDS         # SSH connection timeout (default: 30)
 ```
 
-### 2. policy - Policy Generation
+#### Example
+```bash
+otto-bgp discover devices.csv --show-diff --output-dir ./policies
+```
+
+### 4. policy - Policy Generation
 
 Generate BGP prefix-list policies using bgpq4 and IRR data with RPKI validation enabled by default.
 
@@ -104,12 +147,7 @@ otto-bgp policy <input_file> [options]
 --no-rpki                # Disable RPKI validation during policy generation (not recommended)
 ```
 
-#### Autonomous Mode Options
-```bash
---autonomous               # Enable autonomous mode for generation
---system                  # Use system-wide configuration
---auto-threshold N        # Reference threshold for notifications (default: 100)
-```
+Note: `--no-rpki` is available as a global flag and applies to this command.
 
 #### Examples
 ```bash
@@ -143,7 +181,7 @@ AS13335
 AS8075
 ```
 
-### 3. apply - Policy Application
+### 5. apply - Policy Application
 
 Apply BGP policies to routers via NETCONF with safety controls.
 
@@ -170,12 +208,7 @@ otto-bgp apply [options]
 --comment TEXT            # Commit comment
 ```
 
-#### Autonomous Mode Options (v0.3.2)
-```bash
---autonomous               # Enable autonomous mode with risk-based decisions
---system                  # Use system-wide configuration
---auto-threshold N        # Reference prefix count for notification context
-```
+Global `--autonomous/--system/--auto-threshold` flags apply here.
 
 #### Examples
 
@@ -225,7 +258,7 @@ otto-bgp apply --router router1 --confirm --confirm-timeout 600
 - Threshold informational only (never blocks)
 - Automatic fallback to manual approval for high-risk changes
 
-### 4. pipeline - Complete Workflow
+### 6. pipeline - Complete Workflow
 
 Execute the complete Otto BGP workflow: discover → generate → apply.
 
@@ -245,12 +278,7 @@ otto-bgp pipeline <devices.csv> [options]
 --no-rpki                 # Disable RPKI validation during policy generation (not recommended)
 ```
 
-#### Autonomous Mode Options
-```bash
---autonomous              # Enable full autonomous pipeline (global flag)
---system                 # Use system-wide configuration (global flag)
---auto-threshold N       # Reference threshold for notifications (global flag)
-```
+Global autonomous flags apply (`--autonomous/--system/--auto-threshold`).
 
 #### Examples
 
@@ -266,7 +294,7 @@ otto-bgp pipeline devices.csv --output-dir /var/lib/otto-bgp/output
 otto-bgp --autonomous --auto-threshold 150 pipeline devices.csv --output-dir /var/lib/otto-bgp/output
 ```
 
-### 5. list - Resource Listing
+### 7. list - Resource Listing
 
 List discovered routers, AS numbers, and BGP groups.
 
@@ -277,16 +305,13 @@ otto-bgp list <resource_type> [options]
 #### Resource Types
 ```bash
 routers                   # List discovered routers
-as                       # List discovered AS numbers
-groups                   # List BGP groups
-policies                 # List generated policies
+as                        # List discovered AS numbers
+groups                    # List BGP groups
 ```
 
 #### Options
 ```bash
---output-dir DIR         # Directory to scan (default: ./policies)
---format FORMAT          # Output format: table, json, csv (default: table)
---filter PATTERN         # Filter results by pattern
+--output-dir DIR          # Directory containing discovered data (default: policies)
 ```
 
 #### Examples
@@ -294,14 +319,14 @@ policies                 # List generated policies
 # List all discovered routers
 otto-bgp list routers
 
-# List AS numbers in JSON format
-otto-bgp list as --format json
+# List AS numbers
+otto-bgp list as --output-dir ./policies
 
-# List policies with filtering
-otto-bgp list policies --filter "AS133*" --output-dir /var/lib/otto-bgp/policies
+# List BGP groups
+otto-bgp list groups
 ```
 
-### 6. test-proxy - Proxy Testing
+### 8. test-proxy - Proxy Testing
 
 Test IRR proxy connectivity and configuration.
 
@@ -311,9 +336,8 @@ otto-bgp test-proxy [options]
 
 #### Options
 ```bash
---test-bgpq4             # Test bgpq4 through proxy
---test-as AS_NUMBER      # Test with specific AS number
---verbose               # Show detailed connectivity information
+--test-bgpq4              # Test bgpq4 through proxy
+--timeout SECONDS         # Proxy connection timeout (default: 10)
 ```
 
 #### Examples
@@ -321,9 +345,18 @@ otto-bgp test-proxy [options]
 # Test proxy connectivity
 otto-bgp test-proxy
 
-# Test bgpq4 through proxy
-otto-bgp test-proxy --test-bgpq4 --test-as 13335 --verbose
+# Test bgpq4 through proxy (use -v for details)
+otto-bgp -v test-proxy --test-bgpq4
 ```
+
+### 9. rpki-check - RPKI Cache Validation
+
+Validate RPKI cache freshness and readability.
+
+```bash
+otto-bgp rpki-check [--max-age SECONDS]
+```
+Outputs a success/failure and cache age summary.
 
 
 ## Flag Validation and Behavior
@@ -384,59 +417,47 @@ INFO: Check SSH connectivity and credentials
 ### Configuration Override
 
 ```bash
-# SSH Configuration
-export OTTO_BGP_SSH_USERNAME=admin
-export OTTO_BGP_SSH_KEY_FILE=/var/lib/otto-bgp/ssh-keys/otto-bgp
-export OTTO_BGP_SSH_TIMEOUT=30
+# SSH (used by collectors)
+export SSH_USERNAME=admin
+export SSH_PASSWORD=…
+export SSH_KEY_PATH=/var/lib/otto-bgp/ssh-keys/otto-bgp
 
-# BGPq4 Configuration  
-export OTTO_BGP_BGPQ4_PATH=/usr/local/bin/bgpq4
-export OTTO_BGP_BGPQ4_TIMEOUT=45
-
-# Autonomous Mode Configuration
+# Autonomous Mode
 export OTTO_BGP_AUTONOMOUS_ENABLED=true
-export OTTO_BGP_AUTO_APPLY_THRESHOLD=100
+export OTTO_BGP_AUTO_THRESHOLD=100   # Informational only
 
-# Email Notification Configuration
+# Email (autonomous notifications)
 export OTTO_BGP_SMTP_SERVER=smtp.company.com
 export OTTO_BGP_SMTP_PORT=587
-export OTTO_BGP_EMAIL_FROM=otto-bgp@company.com
-export OTTO_BGP_EMAIL_TO=network-team@company.com
+export OTTO_BGP_SMTP_USERNAME=otto-bgp@company.com
+export OTTO_BGP_SMTP_PASSWORD=…
+export OTTO_BGP_FROM_ADDRESS=otto-bgp@company.com
+# Note: recipients (to_addresses) are not read from env; set in config.json
 
-# Directory Configuration
+# Directories and logging
 export OTTO_BGP_OUTPUT_DIR=/var/lib/otto-bgp
 export OTTO_BGP_CONFIG_DIR=/etc/otto-bgp
-export OTTO_BGP_LOG_DIR=/var/log/otto-bgp
+export OTTO_BGP_LOG_LEVEL=INFO
+export OTTO_BGP_LOG_FILE=/var/lib/otto-bgp/logs/otto-bgp.log
 
-# Development/Testing
-export OTTO_BGP_DEV_MODE=true
-export OTTO_BGP_TEST_MODE=true
-export OTTO_BGP_DEBUG=true
+# Installation mode hints (read by app config)
+export OTTO_BGP_INSTALL_MODE=system   # user|system
+export OTTO_BGP_SERVICE_USER=otto-bgp
 ```
 
 ### Installation Mode Variables
 
-```bash
-# Installation mode selection
-export OTTO_BGP_INSTALLATION_MODE=system  # user, system
-export OTTO_BGP_SERVICE_USER=otto-bgp
-export OTTO_BGP_SYSTEMD_ENABLED=true
-
-# Autonomous mode setup
-export OTTO_BGP_SETUP_MODE=false  # NEVER set to true in production
-```
+Use `OTTO_BGP_INSTALL_MODE=system|user` and `OTTO_BGP_SERVICE_USER` to hint configuration in environments where a JSON config is used. The installer (install.sh) determines actual paths and ownership at install time.
 
 ## Configuration File Integration
 
 ### CLI Flag to Config Mapping
 
-| CLI Flag | Configuration Path | Default |
-|----------|-------------------|---------|
-| `--autonomous` | `autonomous_mode.enabled` | `false` |
-| `--auto-threshold` | `autonomous_mode.auto_apply_threshold` | `100` |
-| `--system` | `installation_mode.type` | `"user"` |
-| `--timeout` | `ssh.connection_timeout` | `30` |
-| `--parallel` | `discovery.max_workers` | `5` |
+Common relationships used by the app:
+- `--autonomous` (global) requires `autonomous_mode.enabled=true` in config to take effect.
+- `--auto-threshold` maps to `autonomous_mode.auto_apply_threshold` (informational only).
+- `--system` influences installation_mode/type at runtime.
+- `--timeout` flags map to command‑specific timeouts.
 
 ### Configuration Precedence
 
@@ -470,26 +491,19 @@ done
 
 ### Scheduled Operations
 
-```bash
-# Daily autonomous pipeline (cron)
-0 2 * * * /usr/local/bin/otto-bgp pipeline /etc/otto-bgp/devices.csv --autonomous --output-dir /var/lib/otto-bgp/daily
-
-# Hourly discovery for change detection
-0 * * * * /usr/local/bin/otto-bgp discover /etc/otto-bgp/devices.csv --show-diff --output-dir /var/lib/otto-bgp/monitoring
-```
+Prefer the systemd timer created by install.sh for scheduled runs. For cron-like scheduling, invoke the `pipeline` or `policy` commands directly with required arguments.
 
 ### Monitoring and Alerting
 
-```bash
-# Check autonomous operation status
-otto-bgp pipeline devices.csv --autonomous --dry-run
+Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CLI does not emit JSON for `list`, and `pipeline` has no `--dry-run` flag.
 
-# Generate status report
-otto-bgp list routers --format json | jq '.[] | select(.last_update > "2025-08-16")'
+## Known Gaps and Limitations
 
-# Monitor for failed operations
-grep "FAILED" /var/log/otto-bgp/otto-bgp.log | tail -10
-```
+- No `config` subcommands: The CLI does not include `config show/validate`. Edit `/etc/otto-bgp/otto.env` or use `/etc/otto-bgp/config.json`.
+- BGPQ4 env vars: `OTTO_BGP_BGPQ4_*` variables are not read by the code. Selection is automatic or via `--dev` (Podman) for development.
+- Email recipients: `to_addresses` are not read from environment variables. Set them in config.json under `autonomous_mode.notifications.email.to_addresses`.
+- list command: Only supports `routers|as|groups` and plain‑text output. No `--format` or `--filter` options.
+- test-proxy: Has `--test-bgpq4` and `--timeout`. There is no `--test-as` flag; test uses a built‑in AS.
 
 ## Exit Codes
 

@@ -33,10 +33,11 @@ Otto BGP v0.3.2 Enhanced Application Stack
 │   └── Transforms policies for router contexts
 ├── NETCONF Applier (otto_bgp/appliers/juniper_netconf.py)
 │   └── PyEZ-based policy application with event notifications
-├── Safety Validator (otto_bgp/appliers/safety.py)
-│   ├── Risk-based autonomous decision logic
-│   ├── Email notification system for NETCONF events (when enabled)
-│   └── Comprehensive pre-application validation
+├── Unified Safety Manager (otto_bgp/appliers/safety.py)
+│   ├── Always-on guardrails (prefix counts, bogons, optional RPKI)
+│   ├── Risk-based autonomous decision logic (low risk auto-apply)
+│   ├── Confirmed commit with automatic rollback
+│   └── Email notifier for NETCONF events (when autonomous email enabled)
 └── Configuration Manager (otto_bgp/utils/config.py)
     └── Autonomous mode configuration and email settings
 ```
@@ -51,15 +52,27 @@ Otto BGP v0.3.2 Enhanced Application Stack
 6. **Audit Trail**: Email notifications for all NETCONF operations (success/failure)
 7. **Verification**: Post-application validation with monitoring recommendations
 
-## Discovery Status
+### RPKI Validation (optional)
 
-The `discover` command is temporarily disabled while error handling is standardized. Use one of these approaches for inputs:
+When enabled in configuration, Otto validates generated policies using a local VRP cache (routinator/rpki-client JSON):
 
-- Extract AS numbers from existing configuration text:
-  - `otto-bgp process <input_file> --extract-as -o as_numbers.txt`
-  - `otto-bgp policy as_numbers.txt --output-dir policies`
-- Use the unified pipeline with a devices CSV for collection and generation:
-  - `otto-bgp pipeline devices.csv --output-dir bgp_pipeline_output`
+- Fail-closed and freshness checks are configurable (`rpki.fail_closed`, `rpki.max_vrp_age_hours`).
+- Guardrail enforces thresholds for INVALID/NOTFOUND rates before apply.
+- Autonomous mode considers RPKI results in the risk assessment.
+
+## Discovery & Router Mapping
+
+Otto can discover router BGP configuration via SSH and build router-aware mappings and inventories.
+
+- Discover and persist mappings (YAML + history):
+  - `otto-bgp discover --devices-csv devices.csv --output-dir policies`
+  - Mappings saved under `policies/discovered/` with history and diff support
+- List discovered data:
+  - `otto-bgp list routers --output-dir policies`
+  - `otto-bgp list as --output-dir policies`
+  - `otto-bgp list groups --output-dir policies`
+- Unified pipeline (collect → generate):
+  - `otto-bgp pipeline devices.csv --output-dir policies`
 
 ## Environment Setup
 
@@ -112,23 +125,26 @@ otto-bgp apply --router lab-router1 --username otto-lab --ssh-key /var/lib/otto-
 ```bash
 # Generate policies from ASN list
 otto-bgp policy as_numbers.txt --output-dir lab_policies --separate
+
+# Router-aware layout (used by apply):
+# lab_policies/routers/<hostname>/AS<asn>_policy.txt
 ```
 
 #### Step 2: Preview Changes
 
 ```bash
 # Dry run to see what would change
-otto-bgp apply --router lab-router1 --dry-run
+otto-bgp apply --router lab-router1 --policy-dir lab_policies --dry-run
 
 # Review the diff
-otto-bgp apply --router lab-router1 --dry-run > changes.diff
+otto-bgp apply --router lab-router1 --policy-dir lab_policies --dry-run > changes.diff
 ```
 
 #### Step 3: Apply with Confirmation
 
 ```bash
 # Apply with 2-minute confirmation window
-otto-bgp apply --router lab-router1 --confirm --confirm-timeout 120
+otto-bgp apply --router lab-router1 --policy-dir lab_policies --confirm --confirm-timeout 120
 
 # Monitor BGP sessions
 ssh otto-lab@lab-router1 "show bgp summary"
@@ -183,6 +199,8 @@ From email address [otto-bgp@company.com]: otto-bgp@company.com
 Engineer email address(es) (comma-separated): network-team@company.com,ops@company.com
 ```
 
+Note: If storing SMTP secrets in files, ensure your service environment exports `OTTO_BGP_SMTP_PASSWORD` (the code reads the password from this env var). Systemd units can use an EnvironmentFile to populate it.
+
 #### 3. Verify Configuration
 
 ```bash
@@ -203,9 +221,9 @@ sudo journalctl -u otto-bgp.service | grep -i email
 Otto BGP autonomous mode only applies changes that meet strict safety criteria:
 
 - **Risk Level**: Only `low` risk changes are auto-applied
-- **Safety Validation**: All existing safety checks must pass
+- **Safety Validation**: All configured guardrails (incl. optional RPKI) must pass
 - **Confirmation Timeout**: Confirmed commits with automatic rollback
-- **Email Notifications**: NETCONF operation notifications are sent when autonomous email notifications are enabled in configuration
+- **Email Notifications**: Sent when BOTH autonomous mode and autonomous email notifications are enabled
 
 #### Example Autonomous Commands
 
@@ -222,6 +240,8 @@ otto-bgp --autonomous --system pipeline devices.csv --output-dir /var/lib/otto-b
 # Preview autonomous decisions (dry run)
 otto-bgp apply --autonomous --dry-run
 ```
+
+Note: Point `--policy-dir` to the directory where policies are generated (e.g., `/var/lib/otto-bgp/output`) if you are not using the default `policies/`.
 
 #### Safety Thresholds and Configuration
 
@@ -346,7 +366,6 @@ sudo systemctl enable --now otto-bgp-autonomous.timer
 # Check autonomous timer status and next run time
 systemctl list-timers | grep otto-bgp-autonomous
 
-# Default schedule (from otto-bgp-autonomous.timer): 08:00, 12:00, 16:00, 20:00 daily
 # To adjust schedule, create a systemd drop-in override:
 sudo systemctl edit otto-bgp-autonomous.timer
 # Then set a different OnCalendar= value and reload

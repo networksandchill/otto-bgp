@@ -8,10 +8,10 @@ For Juniper router configuration and network engineering topics, see the Network
 
 ## Service Account Setup
 
-Create the Otto BGP system user for service operations:
+Create the Otto BGP system user for service operations (aligns with install.sh defaults):
 
 ```bash
-useradd -r -s /bin/bash -d /var/lib/otto-bgp otto-bgp
+useradd -r -s /bin/false -d /var/lib/otto-bgp otto-bgp
 
 # Create required directories
 mkdir -p /var/lib/otto-bgp/{ssh-keys,policies,logs}
@@ -28,12 +28,12 @@ echo "otto-bgp ALL=(root) NOPASSWD: /bin/systemctl reload otto-bgp" >> /etc/sudo
 
 ## Systemd Service Configuration
 
-Otto BGP provides two operation modes via systemd units: a standard policy generation service (system mode) and an autonomous pipeline service with preflight gating.
+Otto BGP provides a standard policy generation service (system mode) and optional autonomous units. The installer (install.sh) creates only the main service and, when not in autonomous mode, a daily timer. The autonomous and RPKI preflight units below are optional manual deployments.
 
 ```ini
 # /etc/systemd/system/otto-bgp.service (System Mode)
 [Unit]
-Description=Otto BGP - System Mode (Manual/Scheduled Policy Generation)
+Description=Otto BGP v0.3.2 - System Mode (Policy Generation)
 After=network-online.target
 Wants=network-online.target
 
@@ -41,10 +41,10 @@ Wants=network-online.target
 Type=oneshot
 User=otto-bgp
 Group=otto-bgp
-ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output
-WorkingDirectory=/opt/otto-bgp
-Environment=PYTHONPATH=/opt/otto-bgp
-Environment=OTTO_BGP_MODE=system
+WorkingDirectory=/usr/local/lib/otto-bgp
+ExecStart=/usr/local/bin/otto-bgp pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/policies
+Environment=PYTHONPATH=/usr/local/lib/otto-bgp
+EnvironmentFile=-/etc/otto-bgp/otto.env
 EnvironmentFile=-/etc/otto-bgp/otto.env
 
 # Security hardening
@@ -62,11 +62,10 @@ LockPersonality=yes
 RemoveIPC=yes
 
 # File system access
-ReadWritePaths=/var/lib/otto-bgp/output
+ReadWritePaths=/var/lib/otto-bgp/policies
 ReadWritePaths=/var/lib/otto-bgp/logs
-ReadWritePaths=/var/lib/otto-bgp/cache
 ReadOnlyPaths=/etc/otto-bgp
-ReadOnlyPaths=/opt/otto-bgp
+ReadOnlyPaths=/usr/local/lib/otto-bgp
 ReadOnlyPaths=/var/lib/otto-bgp/ssh-keys
 
 [Install]
@@ -76,12 +75,12 @@ WantedBy=multi-user.target
 ```ini
 # /etc/systemd/system/otto-bgp.timer (System Mode schedule)
 [Unit]
-Description=Otto BGP System Mode Timer (Manual Scheduling)
+Description=Otto BGP v0.3.2 System Mode Timer
 Requires=otto-bgp.service
 
 [Timer]
-OnCalendar=hourly
-Persistent=yes
+OnCalendar=daily
+Persistent=true
 AccuracySec=1min
 RandomizedDelaySec=300
 
@@ -94,7 +93,7 @@ WantedBy=timers.target
 Autonomous mode runs end-to-end policy generation and application with safety guardrails. It is gated by an RPKI preflight service that validates VRP cache freshness before each run.
 
 ```ini
-# /etc/systemd/system/otto-bgp-rpki-preflight.service
+# /etc/systemd/system/otto-bgp-rpki-preflight.service (Optional)
 [Unit]
 Description=Otto BGP RPKI Preflight - VRP Freshness Check
 After=network-online.target
@@ -104,10 +103,9 @@ Wants=network-online.target
 Type=oneshot
 User=otto-bgp
 Group=otto-bgp
-WorkingDirectory=/opt/otto-bgp
-ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py rpki-check --max-age 86400
-Environment=PYTHONPATH=/opt/otto-bgp
-Environment=OTTO_BGP_MODE=preflight
+WorkingDirectory=/usr/local/lib/otto-bgp
+ExecStart=/usr/local/bin/otto-bgp rpki-check --max-age 86400
+Environment=PYTHONPATH=/usr/local/lib/otto-bgp
 EnvironmentFile=-/etc/otto-bgp/otto.env
 
 # Hardened permissions (read-only code/config; no home/root access)
@@ -126,7 +124,7 @@ WantedBy=multi-user.target
 ```
 
 ```ini
-# /etc/systemd/system/otto-bgp-autonomous.service (Autonomous Mode)
+# /etc/systemd/system/otto-bgp-autonomous.service (Optional Autonomous Mode)
 [Unit]
 Description=Otto BGP - Autonomous Mode (Scheduled Operations)
 After=network-online.target otto-bgp-rpki-preflight.service
@@ -137,11 +135,9 @@ Requires=otto-bgp-rpki-preflight.service
 Type=oneshot
 User=otto-bgp
 Group=otto-bgp
-WorkingDirectory=/opt/otto-bgp
-ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output --autonomous
-Environment=PYTHONPATH=/opt/otto-bgp
-Environment=OTTO_BGP_MODE=autonomous
-Environment=OTTO_BGP_AUTONOMOUS=true
+WorkingDirectory=/usr/local/lib/otto-bgp
+ExecStart=/usr/local/bin/otto-bgp pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/policies --autonomous
+Environment=PYTHONPATH=/usr/local/lib/otto-bgp
 EnvironmentFile=-/etc/otto-bgp/otto.env
 
 # Network segmentation (allow local + RFC1918 by default)
@@ -152,11 +148,11 @@ IPAddressAllow=172.16.0.0/12
 IPAddressAllow=192.168.0.0/16
 
 # Filesystem restrictions as above
-ReadWritePaths=/var/lib/otto-bgp/output
+ReadWritePaths=/var/lib/otto-bgp/policies
 ReadWritePaths=/var/lib/otto-bgp/logs
 ReadWritePaths=/var/lib/otto-bgp/cache
 ReadOnlyPaths=/etc/otto-bgp
-ReadOnlyPaths=/opt/otto-bgp
+ReadOnlyPaths=/usr/local/lib/otto-bgp
 ReadOnlyPaths=/var/lib/otto-bgp/ssh-keys
 
 [Install]
@@ -184,15 +180,17 @@ Enable and start the timers:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now otto-bgp.timer
-sudo systemctl enable --now otto-bgp-autonomous.timer
+# Optional autonomous scheduling (only if optional autonomous units are installed)
+# sudo systemctl enable --now otto-bgp-autonomous.timer
 ```
 
 Monitoring logs:
 
 ```bash
 sudo journalctl -u otto-bgp.service -f
-sudo journalctl -u otto-bgp-autonomous.service -f | grep -Ei "autonomous|netconf|commit|rpki"
-sudo systemctl status otto-bgp-rpki-preflight.service
+# Optional units (if installed):
+# sudo journalctl -u otto-bgp-autonomous.service -f | grep -Ei "autonomous|netconf|commit|rpki"
+# sudo systemctl status otto-bgp-rpki-preflight.service
 ```
 
 ## SSH Host Key Management Operations
@@ -223,7 +221,7 @@ sudo cat /var/lib/otto-bgp/ssh-keys/otto-bgp.pub
 **Step 3: Collect Host Key from New Device**
 ```bash
 # Method 1: Use setup script for single device
-sudo /opt/otto-bgp/scripts/setup-host-keys.sh \
+sudo /usr/local/lib/otto-bgp/scripts/setup-host-keys.sh \
     <(echo "192.168.1.100,new-core-router") \
     /tmp/new-host-key.tmp
 
@@ -269,7 +267,7 @@ sudo -u otto-bgp ssh -i /var/lib/otto-bgp/ssh-keys/otto-bgp \
     bgp-read@192.168.1.100 "show version | match Model"
 
 # If successful, test collection with Otto BGP using the CSV file
-sudo -u otto-bgp /opt/otto-bgp/otto-bgp collect /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output
+otto-bgp collect /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/policies
 ```
 
 ### Handling Host Key Changes
@@ -411,10 +409,15 @@ When network engineers perform router maintenance that regenerates keys:
 
 **Regular Maintenance Schedule**
 ```bash
-# Monthly: Verify all host keys are still valid
-sudo -u otto-bgp /opt/otto-bgp/scripts/verify-host-keys.sh \
-    /etc/otto-bgp/devices.csv \
-    /var/lib/otto-bgp/ssh-keys/known_hosts
+# Monthly: Re-validate host keys against devices
+sudo /usr/local/lib/otto-bgp/scripts/setup_host_keys.py \
+    --devices /etc/otto-bgp/devices.csv \
+    --output /tmp/known_hosts.revalidated
+
+# Compare fingerprints before replacing known_hosts
+ssh-keygen -l -f /var/lib/otto-bgp/ssh-keys/known_hosts > /tmp/known_hosts.current.fps
+ssh-keygen -l -f /tmp/known_hosts.revalidated > /tmp/known_hosts.new.fps
+diff -u /tmp/known_hosts.current.fps /tmp/known_hosts.new.fps || true
 
 # Weekly: Create known_hosts backup
 sudo cp /var/lib/otto-bgp/ssh-keys/known_hosts \
@@ -476,7 +479,7 @@ sudo chmod 644 /var/lib/otto-bgp/ssh-keys/otto-bgp.pub
 sudo chmod 644 /var/lib/otto-bgp/ssh-keys/known_hosts
 
 # Test recovery
-sudo -u otto-bgp /opt/otto-bgp/otto-bgp collect /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output
+otto-bgp collect /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/policies
 ```
 
 **Security Audit & Verification**
@@ -503,7 +506,7 @@ echo "Otto BGP SSH Host Key Report - $(date)"
 echo "=============================================="
 echo ""
 echo "Known Hosts File: /var/lib/otto-bgp/ssh-keys/known_hosts"
-echo "Devices File: /var/lib/otto-bgp/config/devices.csv"
+echo "Devices File: /etc/otto-bgp/devices.csv"
 echo ""
 echo "Host Key Summary:"
 wc -l /var/lib/otto-bgp/ssh-keys/known_hosts
@@ -636,6 +639,75 @@ Both modes use NETCONF for policy application. System mode requires operator con
 - `/var/lib/otto-bgp/ssh-keys/known_hosts` - SSH host keys
 - `/var/lib/otto-bgp/rpki/vrp_cache.csv` - RPKI cache
 
+## IRR Proxy (bgpq4 via SSH Tunnels)
+
+Use the IRR proxy when direct whois/IRR access is blocked. Otto establishes SSH local-port tunnels to IRR servers and points bgpq4 at `127.0.0.1:<local_port>`.
+
+-
+  - Enabled: Configure `irr_proxy` in `/etc/otto-bgp/config.json` or via env.
+  - Tunnels: One or more to IRR servers (port 43) through a jump host.
+  - Security: Strict host key checking; dedicated key/known_hosts for the jump host.
+
+Example `irr_proxy` in `/etc/otto-bgp/config.json`:
+
+```json
+{
+  "irr_proxy": {
+    "enabled": true,
+    "jump_host": "bastion.example.com",
+    "jump_user": "admin",
+    "ssh_key_file": "/var/lib/otto-bgp/ssh-keys/proxy-key",
+    "known_hosts_file": "/var/lib/otto-bgp/ssh-keys/proxy-known-hosts",
+    "connection_timeout": 30,
+    "health_check_interval": 300,
+    "max_retries": 3,
+    "tunnels": [
+      { "name": "whois-radb", "local_port": 43001, "remote_host": "whois.radb.net", "remote_port": 43 },
+      { "name": "whois-ripe", "local_port": 43002, "remote_host": "whois.ripe.net", "remote_port": 43 }
+    ]
+  }
+}
+```
+
+Optional environment variables (read on startup):
+
+- `OTTO_BGP_PROXY_ENABLED`: `true|1|yes` to enable
+- `OTTO_BGP_PROXY_JUMP_HOST`: proxy jump host
+- `OTTO_BGP_PROXY_JUMP_USER`: proxy jump user
+- `OTTO_BGP_PROXY_SSH_KEY`: path to private key
+- `OTTO_BGP_PROXY_KNOWN_HOSTS`: path to known_hosts for the jump host
+
+Key and host key setup for the proxy jump host:
+
+```bash
+# Create dedicated files for the proxy (separate from router keys)
+sudo install -d -m 700 -o otto-bgp -g otto-bgp /var/lib/otto-bgp/ssh-keys
+sudo -u otto-bgp ssh-keyscan -t ed25519,rsa bastion.example.com > /var/lib/otto-bgp/ssh-keys/proxy-known-hosts
+sudo chown otto-bgp:otto-bgp /var/lib/otto-bgp/ssh-keys/proxy-known-hosts
+sudo chmod 644 /var/lib/otto-bgp/ssh-keys/proxy-known-hosts
+
+# Place the proxy private key and set permissions
+sudo chown otto-bgp:otto-bgp /var/lib/otto-bgp/ssh-keys/proxy-key
+sudo chmod 600 /var/lib/otto-bgp/ssh-keys/proxy-key
+```
+
+Validation and diagnostics:
+
+```bash
+# Validate config and establish tunnels to each IRR server
+otto-bgp test-proxy --timeout 15
+
+# Optionally run a bgpq4 test through the proxy
+otto-bgp test-proxy --test-bgpq4 --timeout 20
+```
+
+Operational notes:
+
+- Proxy-aware bgpq4: The CLI wires the proxy manager into bgpq4; tunnels must be established to be used. Use `otto-bgp test-proxy` to validate connectivity per-tunnel.
+- Multiple tunnels: Used for redundancy. When generating policies, the first CONNECTED tunnel is selected automatically; no load balancing between tunnels.
+- Containerized bgpq4: Proxy use requires native bgpq4. Docker/Podman modes do not include host networking, so `-h 127.0.0.1 -p <port>` from inside a container will not reach host SSH tunnels.
+- Parallelism: See the Known Gaps section regarding proxy interaction with parallel policy generation.
+
 ## Log Management
 
 ### Log File Locations
@@ -673,7 +745,7 @@ $InputRunFileMonitor
 
 ```bash
 # Test SSH connectivity
-ssh -i /var/lib/otto-bgp/ssh-keys/otto-bgp otto-bgp@router.example.com "show version"
+ssh -i /var/lib/otto-bgp/ssh-keys/otto-bgp bgp-read@router.example.com "show version"
 
 # Verify host key
 ssh-keygen -l -f /var/lib/otto-bgp/ssh-keys/known_hosts | grep router.example.com
@@ -686,10 +758,10 @@ ssh -vvv -i /var/lib/otto-bgp/ssh-keys/otto-bgp otto-bgp@router.example.com
 
 ```bash
 # Test NETCONF subsystem
-ssh -p 830 otto-bgp@router.example.com -s netconf
+ssh -p 830 bgp-read@router.example.com -s netconf
 
 # Verify NETCONF service on router
-ssh otto-bgp@router.example.com "show configuration system services netconf"
+ssh bgp-read@router.example.com "show configuration system services netconf"
 
 # Check PyEZ installation
 python3 -c "from jnpr.junos import Device; print('PyEZ available')"
@@ -699,13 +771,13 @@ python3 -c "from jnpr.junos import Device; print('PyEZ available')"
 
 ```bash
 # Verify user permissions on router
-ssh otto-bgp@router.example.com "show cli authorization"
+ssh bgp-read@router.example.com "show cli authorization"
 
 # Test configuration access
-ssh otto-bgp@router.example.com "show configuration policy-options | display set"
+ssh bgp-read@router.example.com "show configuration policy-options | display set"
 
 # Verify commit capability
-ssh otto-bgp@router.example.com "configure private; commit check; exit"
+ssh bgp-read@router.example.com "configure private; commit check; exit"
 ```
 
 ### Service Status and Diagnostics
@@ -722,10 +794,10 @@ sudo journalctl -u otto-bgp.service -f
 sudo systemctl show otto-bgp.service
 
 # Test manual execution
-sudo -u otto.bgp /opt/otto-bgp/otto-bgp --help
+otto-bgp --help
 
 # Verify environment variables
-sudo -u otto-bgp env | grep OTTO_BGP
+sudo -u otto-bgp env | grep -E '^(SSH_|OTTO_BGP_)'
 ```
 
 ### File System Permissions
@@ -741,7 +813,7 @@ ls -la /var/lib/otto-bgp/ssh-keys/
 sudo -u otto-bgp cat /etc/otto-bgp/otto.env
 
 # Test log file access
-sudo -u otto.bgp touch /var/lib/otto-bgp/logs/test.log
+sudo -u otto-bgp touch /var/lib/otto-bgp/logs/test.log
 ```
 
 ### Security Event Analysis
@@ -750,16 +822,16 @@ Monitor logs for security indicators:
 
 ```bash
 # Authentication failures
-grep "Authentication failed" /var/lib/otto-bgp/logs/security.log
+sudo journalctl -u otto-bgp.service | grep -i "auth"
 
 # Host key issues
-grep "HOST KEY MISMATCH" /var/lib/otto-bgp/logs/security.log
+sudo journalctl -u otto-bgp.service | grep -Ei "host key|REMOTE HOST IDENTIFICATION"
 
 # Permission violations
-grep "Permission denied" /var/lib/otto-bgp/logs/otto-bgp.log
+sudo journalctl -u otto-bgp.service | grep -i "permission denied"
 
 # Configuration change tracking
-grep "commit" /var/lib/otto-bgp/logs/netconf.log
+sudo journalctl -u otto-bgp.service | grep -i "commit"
 ```
 
 ## Maintenance Procedures
@@ -790,6 +862,7 @@ When updating Otto BGP:
 3. Update application code
 4. Test configuration compatibility
 5. Restart services: `sudo systemctl start otto-bgp.timer`
+   (If using optional autonomous units, also start `otto-bgp-autonomous.timer`.)
 6. Verify operation with test run
 
 ### Disaster Recovery
@@ -809,3 +882,16 @@ When updating Otto BGP:
 6. Resume automated operations
 
 This guide provides system administrators with comprehensive procedures for maintaining Otto BGP backend operations while network engineers focus on router configuration aspects.
+## Known Gaps and Limitations
+
+- Installer scope: install.sh creates only otto-bgp.service and (non‑autonomous) otto-bgp.timer. The RPKI preflight and autonomous units shown here are optional manual deployments and are not created by the installer.
+- Paths: System installations use /usr/local/bin (wrapper), /usr/local/lib/otto-bgp (code), and /usr/local/venv (venv). Any /opt/otto-bgp paths are legacy/manual and not used by the installer.
+- Devices inventory: The service expects /etc/otto-bgp/devices.csv to exist. The installer does not create this file; administrators must provide it.
+- Environment variables: Recipients for email notifications (to_addresses) are not read from env. Configure them in /etc/otto-bgp/config.json under autonomous_mode.notifications.email.to_addresses.
+- No config CLI: There is no otto-bgp config show/validate command. Edit /etc/otto-bgp/otto.env or use /etc/otto-bgp/config.json.
+- Logging files: The application typically logs via journal and an optional single log file (OTTO_BGP_LOG_FILE). Separate security.log/netconf.log files referenced in some examples may not exist; prefer journalctl filters.
+- IRR proxy lifecycle: While the proxy manager is instantiated for `policy`/`pipeline` when `irr_proxy.enabled` is true, tunnels are not automatically established in those commands. `test-proxy` establishes and cleans up tunnels; policy generation only uses the proxy if tunnels are already established in the same process.
+- Proxy + parallel generation: Parallel workers cannot use the proxy (proxy manager is not picklable and workers don’t receive tunnel state). In restricted networks, disable parallelism to use the proxy by setting `OTTO_BGP_DISABLE_PARALLEL=true` before running `otto-bgp policy`.
+- Tunnel selection: When multiple tunnels are configured, the first CONNECTED tunnel is used; there is no load balancing or server pinning exposed via CLI/config. The `irr_server` hint exists in code paths but is not wired to CLI.
+- IRR servers env var: `OTTO_BGP_IRR_SERVERS` appears in sample systemd env files but is not consumed by the current code.
+- Container modes: Docker/Podman bgpq4 runs do not use host networking; proxy tunnels bound on the host’s 127.0.0.1 are not reachable from inside the container. Use native bgpq4 with the proxy.
