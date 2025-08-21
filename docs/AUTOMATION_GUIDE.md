@@ -2,31 +2,52 @@
 
 ## Table of Contents
 1. [Introduction](#introduction)
-2. [Quick Start](#quick-start)
-3. [Automation Workflows](#automation-workflows)
-4. [CLI Commands](#cli-commands)
-5. [Configuration](#configuration)
-6. [Integration](#integration)
-7. [Best Practices](#best-practices)
-8. [Troubleshooting](#troubleshooting)
+2. [Known Gaps and Limitations](#known-gaps-and-limitations)
+3. [Quick Start](#quick-start)
+4. [Automation Workflows](#automation-workflows)
+5. [CLI Commands](#cli-commands)
+6. [Configuration](#configuration)
+7. [Integration](#integration)
+8. [Best Practices](#best-practices)
+9. [Troubleshooting](#troubleshooting)
 
 ## Introduction
 
-Otto BGP v0.3.2 provides comprehensive automation capabilities for BGP policy management across Juniper router fleets, including autonomous operation with risk-based decision logic. This guide covers automation workflows, integration patterns, and best practices.
+Otto BGP v0.3.2 provides a router-aware pipeline to collect BGP context via SSH, extract ASNs, and generate bgpq4 policies. It also includes a NETCONF applier with safety controls and an optional autonomous mode with risk-based decisions and email notifications. This guide reflects the current codebase (v0.3.2) behavior and known limitations.
+
+## Known Gaps and Limitations
+
+- Disabled discover command: The `discover` subcommand is temporarily disabled while error handling is standardized. The router‑aware `pipeline` performs SSH collection and policy generation but does not persist YAML discovery mappings that `list` expects under `policies/discovered/`. Workaround: rely on `pipeline` outputs (`policies/routers/<hostname>/`) for downstream steps; skip `list` unless you generate mappings via custom scripts.
+- RPKI in router‑aware pipeline: The router‑aware `pipeline` config exposes an `rpki_enabled` flag but does not currently perform RPKI validation during generation. RPKI validation is implemented in the standalone `policy` subcommand and in validation helpers, but not enforced in the router‑aware pipeline path. Workarounds:
+  - Run `policy` on an AS list with RPKI enabled for audits, in addition to the router‑aware `pipeline` output.
+  - Keep `rpki.enabled` true in config for future compatibility; avoid `--no-rpki` unless necessary.
+- RPKI preflight unit mismatch: The repository includes `systemd/otto-bgp-rpki-preflight.service` that references a non‑existent `rpki-check` subcommand in v0.3.2. If you enable autonomous timers, either remove the `Requires=`/`After=` linkage to the preflight unit or replace it with your own VRP freshness check. Do not rely on the preflight unit as‑is.
+- IRR proxy integration: `test-proxy` validates SSH tunnel setup and can test a single bgpq4 call through the proxy. However, `policy` and `pipeline` do not automatically route through the proxy in v0.3.2. Workarounds:
+  - Use `./otto-bgp test-proxy --test-bgpq4` to validate connectivity and tunnels.
+  - If you integrate programmatically, use `BGPq4Wrapper.create_with_proxy(...)` in your own code path.
+- Autonomous mode enablement: Passing `--autonomous` on the CLI is not sufficient by itself; autonomous behavior (including email notifications and guardrails’ autonomous finalization) is gated by configuration (`autonomous_mode.enabled: true`). The `auto_apply_threshold` is informational only and does not block operations.
+- Apply confirmation CLI: There is no `apply-confirm` subcommand. Confirmed commits must be confirmed on the device (e.g., an additional commit before the timer expires). The applier exposes `confirm_commit()` internally but it is not wired to a CLI command in v0.3.2.
+- Systemd service user name: The systemd unit files under `systemd/` use user `otto.bgp` (dot), while the `install.sh` script creates and uses `otto-bgp` (dash). Align the unit files or adjust the service user on your systems to avoid permission issues on `/var/lib/otto-bgp/*`.
+- Logging locations: The code logs to the console by default; systemd captures output in journald. Prior references to `/var/log/otto-bgp/*` file logs are not active unless you explicitly configure file logging in the config (`logging.log_to_file: true`, `logging.log_file`). Use `journalctl -u ...` to review service logs.
+- PyEZ dependency: Policy application and autonomous NETCONF operations require PyEZ and related libraries (`junos-eznc`, `jxmlease`, `lxml`, `ncclient`). Without these, `apply` and pipeline application components will fail to execute.
+- Device CSV fields: The router‑aware pipeline accepts `address`, `ip`, or `host` columns. Other areas assume an `address` column (e.g., `collect`). Ensure your CSV includes one of these expected column names.
+- Known hosts and SSH hardening: NETCONF operations rely on strict host key checking and default known hosts at `/var/lib/otto-bgp/ssh-keys/known_hosts`. Ensure this file exists and includes device host keys.
+- Email notifications: Notifications are best‑effort. They send on connect/preview/commit/rollback/disconnect events when `autonomous_mode.notifications.email.enabled` is true and SMTP settings are valid. There is no retry/backoff beyond standard SMTP behavior.
 
 ## Operational Modes
 
 Otto BGP operates in three distinct modes to serve different operational needs:
 
-### SystemD Service (Production Policy Generation)
-- **Purpose**: Headless, unattended policy generation for production environments
-- **Execution**: Scheduled runs via systemd timer (default: hourly at :15 minutes)
-- **Operation**: Autonomous policy generation - connects to devices, processes data, generates policies
-- **Scope**: Policy generation with optional autonomous application based on configuration
-- **Use Case**: Continuous policy generation and application without operator intervention
-- **Benefits**: Consistent scheduling, automatic error handling, production logging, email notifications
+### Systemd Services (Scheduled Execution)
+- **Purpose**: Headless, unattended policy generation (system or autonomous mode)
+- **Execution**: systemd units and timers are provided in `systemd/`
+  - `otto-bgp.timer` runs hourly (top of hour) with randomized delay
+  - `otto-bgp-autonomous.timer` runs at 08:00, 12:00, 16:00, 20:00 with randomized delay
+- **Operation**: Runs `otto-bgp pipeline ...` with configured devices and output dir
+- **Scope**: Policy generation; autonomous application depends on configuration and mode
+- **Notes**: File logging is not enabled by default; use `journalctl` for logs
 
-### CLI Tool (Interactive Operations)  
+### CLI Tool (Interactive Operations)
 - **Purpose**: On-demand execution for testing, debugging, and ad-hoc tasks
 - **Execution**: Manual operator-initiated commands
 - **Operation**: Flexible command structure (`collect`, `process`, `policy`, `apply`)
@@ -35,25 +56,24 @@ Otto BGP operates in three distinct modes to serve different operational needs:
 - **Benefits**: Immediate feedback, custom parameters, development workflows, autonomous mode support
 
 ### Autonomous Mode (Full Automation)
-- **Purpose**: Complete automation including policy application for production environments
-- **Execution**: CLI commands with `--autonomous` flag or systemd with autonomous configuration
-- **Operation**: Full pipeline including NETCONF policy application with risk-based decisions
-- **Scope**: **Production-ready** with comprehensive safety controls and email notifications
-- **Use Case**: Hands-off BGP policy management, automated network optimization
-- **Benefits**: End-to-end automation, email audit trail, risk-based safety, immediate notifications
+- **Purpose**: End-to-end automation including policy application
+- **Execution**: `otto-bgp pipeline ... --autonomous` or the `otto-bgp-autonomous.service/timer`
+- **Operation**: Pipeline with unified safety manager; email notifications if configured
+- **Scope**: Low-risk changes are auto-applied; high-risk require manual intervention
+- **Notes**: Must be enabled in config; recommend system installation. The provided `otto-bgp-rpki-preflight.service` references an `rpki-check` subcommand that is not present in v0.3.2; disable or adjust that unit accordingly.
 
 **Example Usage:**
 ```bash
-# SystemD (automated) - runs automatically every hour
-sudo systemctl start otto-bgp.service
+# Systemd (scheduled)
+sudo systemctl enable otto-bgp.timer && sudo systemctl start otto-bgp.timer
+sudo systemctl enable otto-bgp-autonomous.timer && sudo systemctl start otto-bgp-autonomous.timer
 
-# CLI (interactive) - operator runs specific tasks  
-./otto-bgp policy AS13335 --test
-./otto-bgp collect devices.csv --verbose
+# CLI (interactive)
+./otto-bgp policy input.txt --test --test-as 13335
+./otto-bgp collect devices.csv -v
 
-# Autonomous mode - automatic policy application
-./otto-bgp apply --autonomous --auto-threshold 100
-./otto-bgp pipeline devices.csv --autonomous --system
+# Autonomous pipeline
+./otto-bgp pipeline devices.csv --autonomous --mode autonomous
 ```
 
 ## Quick Start
@@ -61,40 +81,34 @@ sudo systemctl start otto-bgp.service
 ### Basic Automation Pipeline
 
 ```bash
-# 1. Discover routers and their BGP configurations
-./otto-bgp discover devices.csv --output-dir policies
+# 1. Run the router-aware pipeline (SSH collect → ASN extract → bgpq4 generate)
+./otto-bgp pipeline devices.csv --output-dir policies
 
-# 2. Generate policies for discovered AS numbers
-./otto-bgp policy sample_input.txt --output-dir policies/routers
+# 2. Review generated per-router policies
+ls -la policies/routers/<router-hostname>/
 
-# 3. Apply policies with autonomous mode (production-ready)
-./otto-bgp apply --autonomous --auto-threshold 100
+# 3. Apply to a specific router (manual/safe mode)
+NETCONF_USERNAME=admin NETCONF_PASSWORD=secret \
+  ./otto-bgp apply --router <router-hostname> --policy-dir policies --dry-run
 
-# 4. Traditional manual application with confirmation
-./otto-bgp apply --router router1 --policy-dir policies --dry-run
+# 4. Optional: confirmed commit (auto-rollback if not confirmed)
+NETCONF_USERNAME=admin NETCONF_PASSWORD=secret \
+  ./otto-bgp apply --router <router-hostname> --policy-dir policies --confirm --confirm-timeout 300
 
-# 5. Full pipeline automation with autonomous operation
-./otto-bgp pipeline devices.csv --autonomous --system --output-dir bgp_output
+# 5. Autonomous pipeline (requires config enablement)
+./otto-bgp pipeline devices.csv --output-dir policies --autonomous --mode autonomous
 ```
 
 ## Automation Workflows
 
 ### 1. Discovery Workflow
 
-Automatically discover BGP configurations across your router fleet:
+Current status in v0.3.2:
+- The dedicated `discover` subcommand is temporarily disabled while error handling is standardized.
+- The router‑aware `pipeline` performs collection and generation but does not persist the YAML discovery mappings expected by `list`.
+- The `list` subcommand requires prior discovery mappings under `policies/discovered/` and will report an error if none exist.
 
-```bash
-# Basic discovery
-./otto-bgp discover devices.csv
-
-# With change detection
-./otto-bgp discover devices.csv --show-diff
-
-# List discovered resources
-./otto-bgp list routers --output-dir policies
-./otto-bgp list as --output-dir policies
-./otto-bgp list groups --output-dir policies
-```
+Recommended approach: use the `pipeline` for end‑to‑end generation and per‑router outputs.
 
 #### Device CSV Format
 ```csv
@@ -108,11 +122,11 @@ transit-router1,10.1.3.1,admin,MX240,datacenter2
 
 #### Automated Policy Generation
 
-Otto BGP includes **RPKI validation by default** during policy generation to enhance security and policy accuracy.
+RPKI validation is enabled by default in configuration and used by `policy`/`pipeline` unless `--no-rpki` is provided or RPKI is disabled in config.
 
 ```bash
-# Generate policies with RPKI validation (default behavior)
-./otto-bgp policy discovered_as.txt --separate
+# Generate policies with RPKI validation (default config)
+./otto-bgp policy as_list.txt --separate
 
 # Generate with custom output directory (RPKI validation included)
 ./otto-bgp policy as_list.txt --output-dir policies/routers/router1
@@ -125,26 +139,12 @@ Otto BGP includes **RPKI validation by default** during policy generation to enh
 ```
 
 **RPKI Validation Features:**
-- **Default Behavior**: RPKI validation runs automatically during policy generation
-- **Status Comments**: Generated policies include RPKI validation status as comments
-- **Opt-out Available**: Use `--no-rpki` flag to disable validation when necessary
-- **Security Enhancement**: Helps identify potentially invalid or hijacked routes
+- Default behavior controlled by config; per‑run opt‑out via `--no-rpki`
+- Fail‑closed and max age thresholds configurable
+- VRP cache and allowlist default to `/var/lib/otto-bgp/rpki/`
 
 #### Router-Specific Generation
-```python
-#!/usr/bin/env python3
-from otto_bgp.generators.bgpq4_wrapper import BGPq4Wrapper
-from otto_bgp.discovery import YAMLGenerator
-
-# Load router mappings
-yaml_gen = YAMLGenerator()
-mappings = yaml_gen.load_previous_mappings()
-
-# Generate for specific router
-router_as = mappings['routers']['edge-router1']['discovered_as_numbers']
-wrapper = BGPq4Wrapper()
-results = wrapper.generate_policies_batch(router_as)
-```
+The router‑aware `pipeline` writes per‑router outputs under `policies/routers/<hostname>/`. Use that directory with `apply`.
 
 ### 3. Policy Application Workflow
 
@@ -185,7 +185,7 @@ done
 
 ### 4. Autonomous Operation Workflow
 
-Otto BGP v0.3.2 supports production-ready autonomous operation with comprehensive safety controls, RPKI validation, and email notifications.
+Otto BGP v0.3.2 supports autonomous operation with always‑on guardrails, RPKI validation (config dependent), and email notifications if configured.
 
 #### Setup Autonomous Mode
 ```bash
@@ -201,34 +201,20 @@ Otto BGP v0.3.2 supports production-ready autonomous operation with comprehensiv
 
 #### Autonomous Operation Commands
 
-**Note**: RPKI validation is enabled by default in autonomous mode for enhanced security.
-
 ```bash
-# Standard autonomous operation (includes RPKI validation)
-./otto-bgp apply --autonomous --auto-threshold 100
+# Unified autonomous pipeline
+./otto-bgp pipeline devices.csv --autonomous --mode autonomous
 
-# System-wide autonomous operation with RPKI validation
-./otto-bgp apply --system --autonomous
-
-# Pipeline with autonomous application and RPKI validation
-./otto-bgp pipeline devices.csv --autonomous --system
-
-# Preview autonomous decisions (including RPKI status)
-./otto-bgp apply --autonomous --dry-run
-
-# Disable RPKI validation in autonomous mode (not recommended)
-./otto-bgp apply --autonomous --no-rpki --auto-threshold 100
+# Disable RPKI for this run (not recommended)
+./otto-bgp pipeline devices.csv --autonomous --mode autonomous --no-rpki
 ```
 
 #### Monitoring Autonomous Operations
 ```bash
 # Monitor systemd service for autonomous operations
-sudo journalctl -u otto-bgp.service -f | grep -i "autonomous\|netconf\|commit"
+sudo journalctl -u otto-bgp-autonomous.service -f | grep -i "autonomous\|netconf\|commit"
 
-# Check autonomous decision logs
-cat /var/lib/otto-bgp/logs/otto-bgp.log | grep -i "risk\|threshold\|autonomous"
-
-# Review email notifications for complete audit trail
+# Review email notifications for audit trail
 ```
 
 #### Autonomous Configuration Example
@@ -262,7 +248,7 @@ cat /var/lib/otto-bgp/logs/otto-bgp.log | grep -i "risk\|threshold\|autonomous"
 
 ### 5. IRR Proxy Workflow
 
-For restricted networks where direct IRR access is blocked:
+For restricted networks where direct IRR access is blocked, use the proxy tester to validate SSH tunnel setup. Note: in v0.3.2, `policy`/`pipeline` do not automatically use the proxy; `test-proxy` can validate tunnels and a single bgpq4 call through the proxy.
 
 #### Configure Proxy
 ```bash
@@ -271,12 +257,10 @@ export OTTO_BGP_PROXY_ENABLED=true
 export OTTO_BGP_PROXY_JUMP_HOST=gateway.example.com
 export OTTO_BGP_PROXY_JUMP_USER=admin
 export OTTO_BGP_PROXY_SSH_KEY=/path/to/key
+export OTTO_BGP_PROXY_KNOWN_HOSTS=/path/to/known_hosts
 
-# Test proxy connectivity
-./otto-bgp test-proxy --test-bgpq4
-
-# Generate policies through proxy
-./otto-bgp policy as_list.txt --output-dir policies
+# Test proxy connectivity and run a bgpq4 test through proxy
+./otto-bgp test-proxy --test-bgpq4 -v
 ```
 
 #### Proxy Configuration File
@@ -310,69 +294,80 @@ export OTTO_BGP_PROXY_SSH_KEY=/path/to/key
 
 ### Core Commands
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `discover` | Discover BGP configurations | `./otto-bgp discover devices.csv` |
-| `policy` | Generate BGP policies | `./otto-bgp policy as_list.txt -s` |
-| `apply` | Apply policies via NETCONF | `./otto-bgp apply --autonomous --auto-threshold 100` |
-| `pipeline` | Run complete workflow | `./otto-bgp pipeline devices.csv` |
-| `list` | List discovered resources | `./otto-bgp list routers` |
-| `test-proxy` | Test IRR proxy setup | `./otto-bgp test-proxy --test-bgpq4` |
+- `collect`: Collect BGP peer data via SSH (`./otto-bgp collect devices.csv`)
+- `process`: Process BGP text or extract ASNs (`./otto-bgp process input.txt --extract-as`)
+- `policy`: Generate bgpq4 policies from an AS list (`./otto-bgp policy as_list.txt -s`)
+- `apply`: Apply policies via NETCONF with safety controls (`./otto-bgp apply --router R1 --confirm`)
+- `pipeline`: Router‑aware end‑to‑end workflow (`./otto-bgp pipeline devices.csv`)
+- `list`: List discovered routers/AS/groups (requires prior discovery mappings)
+- `test-proxy`: Validate IRR proxy tunnel configuration (`./otto-bgp test-proxy --test-bgpq4`)
 
 ### Command Options
 
 #### Global Options
-- `--verbose, -v`: Enable debug logging
-- `--quiet, -q`: Suppress info messages
-- `--dev`: Use containerized bgpq4
+- `--verbose, -v`: Enable verbose logging
+- `--quiet, -q`: Warnings only
+- `--autonomous` / `--system`: Mode hints; autonomous requires config enablement
+- `--dev`: Use Podman for bgpq4 (development)
+- `--auto-threshold N`: Informational threshold used in notifications
+- `--no-rpki`: Disable RPKI validation for this run
 
 #### Discovery Options
-- `--output-dir`: Directory for results
-- `--show-diff`: Generate change report
-- `--timeout`: SSH connection timeout
+- Currently disabled in v0.3.2 (command exists but returns an error)
 
 #### Policy Options
 - `--separate, -s`: One file per AS
 - `--output-dir`: Policy output directory
 - `--test`: Test bgpq4 connectivity
+- `--test-as`: AS number to use for connectivity test (default 7922)
+- `--timeout`: bgpq4 command timeout (seconds)
 
 #### Apply Options
-- `--autonomous`: Enable autonomous mode with risk-based decisions
-- `--system`: Use system-wide configuration and resources
-- `--auto-threshold N`: Reference prefix count for notification context (informational only)
-- `--dry-run`: Preview without applying
-- `--confirm`: Use confirmed commit
-- `--force`: Override safety checks
-- `--yes, -y`: Skip confirmation prompt
-- `--router HOSTNAME`: Target specific router
+- `--router HOSTNAME`: Target router hostname (required)
+- `--policy-dir DIR`: Base policy directory (expects `routers/<hostname>/` under it)
+- `--dry-run`: Preview diff only
+- `--confirm`: Use confirmed commit (auto‑rollback unless confirmed)
+- `--confirm-timeout N`: Confirmation timeout (seconds)
+- `--diff-format {text,set,xml}`: Diff format
+- `--skip-safety`: Skip safety validation (not recommended)
+- `--force`: Force despite high risk (not recommended)
+- `--yes, -y`: Skip interactive prompt
+- `--username/--password/--ssh-key/--port/--timeout/--comment`: NETCONF connection and commit options
 
 ## Configuration
 
 ### Environment Variables
 
 ```bash
-# SSH Configuration
-export OTTO_BGP_SSH_USERNAME=admin
-export OTTO_BGP_SSH_PASSWORD=secret
-export OTTO_BGP_SSH_KEY_FILE=/path/to/key
+# SSH defaults used by collectors
+export SSH_USERNAME=admin
+export SSH_PASSWORD=secret
+export SSH_KEY_PATH=/path/to/key
 
-# BGPq4 Configuration
-export OTTO_BGP_BGPQ4_PATH=/usr/local/bin/bgpq4
-export OTTO_BGP_BGPQ4_TIMEOUT=45
+# NETCONF (apply) credentials
+export NETCONF_USERNAME=admin
+export NETCONF_PASSWORD=secret
+export NETCONF_SSH_KEY=/path/to/key
 
-# Proxy Configuration
+# IRR proxy
 export OTTO_BGP_PROXY_ENABLED=true
 export OTTO_BGP_PROXY_JUMP_HOST=gateway.example.com
 export OTTO_BGP_PROXY_JUMP_USER=admin
+export OTTO_BGP_PROXY_SSH_KEY=/path/to/key
+export OTTO_BGP_PROXY_KNOWN_HOSTS=/path/to/known_hosts
 
-# Directory Configuration
+# RPKI cache directory (for validator)
+export OTTO_BGP_RPKI_CACHE_DIR=/var/lib/otto-bgp/rpki
+
+# Output base directory for pipeline
 export OTTO_BGP_OUTPUT_DIR=/var/lib/otto-bgp
-export OTTO_BGP_CACHE_DIR=/var/cache/otto-bgp
 ```
 
 ### Configuration File
 
-Create `~/.otto-bgp/config.json`:
+Config is loaded from these locations (first found): `~/.bgp-toolkit.json`, `/etc/otto-bgp/config.json`, `./bgp-toolkit.json`.
+
+Minimal example `/etc/otto-bgp/config.json` matching v0.3.2:
 
 ```json
 {
@@ -381,15 +376,45 @@ Create `~/.otto-bgp/config.json`:
     "connection_timeout": 30,
     "command_timeout": 60
   },
-  "bgpq4": {
-    "mode": "auto",
-    "timeout": 45,
-    "docker_image": "ghcr.io/bgp/bgpq4:latest"
-  },
   "output": {
-    "default_dir": "/var/lib/otto-bgp",
-    "separate_files": true,
-    "compress_old": true
+    "default_output_dir": "/var/lib/otto-bgp"
+  },
+  "installation_mode": {
+    "type": "system",
+    "service_user": "otto-bgp"
+  },
+  "autonomous_mode": {
+    "enabled": false,
+    "auto_apply_threshold": 100,
+    "require_confirmation": true,
+    "notifications": {
+      "email": {
+        "enabled": true,
+        "smtp_server": "smtp.company.com",
+        "smtp_port": 587,
+        "smtp_use_tls": true,
+        "from_address": "otto-bgp@company.com",
+        "to_addresses": ["network-team@company.com"],
+        "subject_prefix": "[Otto BGP Autonomous]"
+      }
+    }
+  },
+  "rpki": {
+    "enabled": true,
+    "fail_closed": true,
+    "max_vrp_age_hours": 24,
+    "vrp_cache_path": "/var/lib/otto-bgp/rpki/vrp_cache.json",
+    "allowlist_path": "/var/lib/otto-bgp/rpki/allowlist.json"
+  },
+  "irr_proxy": {
+    "enabled": false,
+    "method": "ssh_tunnel",
+    "jump_host": "",
+    "jump_user": "",
+    "tunnels": [
+      { "name": "ntt", "local_port": 43001, "remote_host": "rr.ntt.net", "remote_port": 43 },
+      { "name": "radb", "local_port": 43002, "remote_host": "whois.radb.net", "remote_port": 43 }
+    ]
   }
 }
 ```
@@ -402,24 +427,18 @@ This section shows the **actual workflow** used by production deployments today.
 
 **Step 1: Automated Policy Generation**
 ```bash
-# Option A: SystemD service (recommended for production)
-sudo systemctl enable otto-bgp.timer
-sudo systemctl start otto-bgp.timer
-# Policies generated hourly to /var/lib/otto-bgp/policies/
+# Option A: systemd (recommended)
+sudo systemctl enable otto-bgp.timer && sudo systemctl start otto-bgp.timer
 
-# Option B: Manual pipeline execution
+# Option B: manual pipeline execution
 ./otto-bgp pipeline devices.csv --output-dir ./policies/$(date +%Y%m%d)
 ```
 
 **Step 2: Policy Review and Validation**
 ```bash
 # Review generated policies
-ls -la ./policies/$(date +%Y%m%d)/
-diff ./policies/$(date +%Y%m%d)/ ./policies/previous/ | head -20
-
-# Generate change summary for approval process
-./otto-bgp compare --old ./policies/previous/ --new ./policies/$(date +%Y%m%d)/ \
-    --output change-summary.txt
+ls -la ./policies/$(date +%Y%m%d)/routers/
+diff -ru ./policies/previous/ ./policies/$(date +%Y%m%d)/ | head -40
 ```
 
 **Step 3: Lab Testing (Optional but Recommended)**
@@ -444,7 +463,7 @@ diff ./policies/$(date +%Y%m%d)/ ./policies/previous/ | head -20
 # 2. Review configuration diff
 # 3. Commit with confirmation timeout
 # 4. Monitor BGP sessions and routing tables
-# 5. Confirm commit or let timeout trigger rollback
+# 5. Confirm commit on the device (no `apply-confirm` subcommand in v0.3.2)
 ```
 
 ## Enhanced Policy Automation
@@ -453,11 +472,11 @@ diff ./policies/$(date +%Y%m%d)/ ./policies/previous/ | head -20
 
 **Otto BGP v0.3.2 provides multiple policy application approaches:**
 
-**Autonomous Mode (Production-Ready):**
-- **Risk-Based Decisions**: Only low-risk changes are automatically applied
-- **Email Notifications**: Complete audit trail for all NETCONF operations
-- **Safety Validation**: Comprehensive pre-application checks and confirmation timeouts
-- **Manual Fallback**: High-risk changes require manual approval
+**Autonomous Mode:**
+- Risk-based decisions (auto‑apply only low risk)
+- Email notifications on NETCONF events (if configured)
+- Always‑on guardrails and safety validation
+- Manual fallback for higher‑risk changes
 
 **Manual Mode (Traditional):**
 - Generate policies with Otto BGP: `./otto-bgp policy as-numbers.txt -o policies.txt`
@@ -473,59 +492,31 @@ diff ./policies/$(date +%Y%m%d)/ ./policies/previous/ | head -20
 pip install junos-eznc jxmlease lxml ncclient
 
 # Configure Otto BGP for autonomous mode
-./install.sh --autonomous  # Includes email configuration setup
-
-# Verify configuration
-./otto-bgp config show
+./install.sh --autonomous
 ```
 
 **Autonomous Mode Commands:**
 ```bash
-# Autonomous policy application (production-ready)
-./otto-bgp apply --autonomous --auto-threshold 100
+# Unified autonomous pipeline
+./otto-bgp pipeline devices.csv --autonomous --mode autonomous
 
-# System mode with autonomous decisions
-./otto-bgp apply --system --autonomous
-
-# Dry run to preview autonomous decisions
-./otto-bgp apply --autonomous --dry-run
-
-# Traditional manual confirmation
+# Manual confirmation example (non‑autonomous)
 ./otto-bgp apply --router router1 --confirm --confirm-timeout 120
 ```
 
 ### IRR Proxy Support
 
-For networks with restricted IRR access:
-
-```bash
-# Configure proxy
-export OTTO_BGP_PROXY_ENABLED=true
-export OTTO_BGP_PROXY_JUMP_HOST=gateway.example.com
-export OTTO_BGP_PROXY_JUMP_USER=admin
-
-# Test proxy connectivity
-./otto-bgp test-proxy --test-bgpq4
-
-# Generate policies through proxy
-./otto-bgp policy as_list.txt
-```
+See IRR Proxy Workflow above. `policy`/`pipeline` do not automatically use the proxy in v0.3.2.
 
 ### Complete Automation Workflow
 ```bash
-# 1. Discover network
-./otto-bgp discover devices.csv
+# 1. Generate router-specific policies
+./otto-bgp pipeline devices.csv --output-dir policies
 
-# 2. Generate router-specific policies  
-./otto-bgp policy discovered_as.txt --output-dir policies/routers
+# 2. Monitor autonomous operations via email notifications and logs
+sudo journalctl -u otto-bgp-autonomous.service -f
 
-# 3. Autonomous mode - complete automation
-./otto-bgp pipeline devices.csv --autonomous --auto-threshold 100
-
-# 4. Monitor autonomous operations via email notifications and logs
-journalctl -u otto-bgp.service -f
-
-# Or run complete pipeline
+# Re-run as needed
 ./otto-bgp pipeline devices.csv --output-dir policies
 ```
 
@@ -644,9 +635,6 @@ sudo systemctl status otto-bgp.service
 ```cron
 # Update BGP policies daily at 2 AM
 0 2 * * * /opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/policies
-
-# Discovery only - every 6 hours
-0 */6 * * * /opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py discover /etc/otto-bgp/devices.csv --show-diff
 ```
 
 ### CI/CD Integration
@@ -654,24 +642,13 @@ sudo systemctl status otto-bgp.service
 #### GitLab CI Example
 ```yaml
 stages:
-  - discover
   - generate
   - validate
 
-discover-routers:
-  stage: discover
-  script:
-    - ./otto-bgp discover devices.csv --output-dir artifacts/
-  artifacts:
-    paths:
-      - artifacts/discovered/
-
 generate-policies:
   stage: generate
-  dependencies:
-    - discover-routers
   script:
-    - ./otto-bgp policy artifacts/discovered/as_numbers.txt -s
+    - ./otto-bgp pipeline devices.csv --output-dir policies
   artifacts:
     paths:
       - policies/
@@ -688,32 +665,26 @@ validate-policies:
 ```groovy
 pipeline {
     agent any
-    
+
     stages {
-        stage('Discovery') {
+        stage('Generate') {
             steps {
-                sh './otto-bgp discover devices.csv'
+                sh './otto-bgp pipeline devices.csv --output-dir policies'
             }
         }
-        
-        stage('Generation') {
+
+        stage('Validate') {
             steps {
-                sh './otto-bgp policy discovered_as.txt --separate'
+                sh './otto-bgp apply --router ${ROUTER} --dry-run --policy-dir policies/'
             }
         }
-        
-        stage('Validation') {
-            steps {
-                sh './otto-bgp apply --router ${ROUTER} --dry-run'
-            }
-        }
-        
+
         stage('Deploy') {
             when {
                 branch 'main'
             }
             steps {
-                sh './otto-bgp apply --router ${ROUTER} --confirm'
+                sh './otto-bgp apply --router ${ROUTER} --confirm --policy-dir policies/'
             }
         }
     }
@@ -840,15 +811,15 @@ if __name__ == "__main__":
 
 #### 1. Discovery Failures
 ```bash
-# Check SSH connectivity
+# Check SSH connectivity to devices
 ssh admin@router1 "show version"
 
-# Verify credentials
-./otto-bgp discover devices.csv --verbose
+# Use the router-aware pipeline (the discover subcommand is disabled in v0.3.2)
+./otto-bgp pipeline devices.csv -v --output-dir ./policies/test
 
-# Test with single device
-echo "router1,10.1.1.1" > test.csv
-./otto-bgp discover test.csv --verbose
+# Test with a single device in the CSV
+echo "hostname,address\nrouter1,10.1.1.1" > single.csv
+./otto-bgp pipeline single.csv -v --output-dir ./policies/test
 ```
 
 #### 2. Policy Generation Failures
@@ -892,23 +863,22 @@ ssh -L 43001:rr.ntt.net:43 admin@gateway.example.com
 Enable comprehensive debugging:
 
 ```bash
-# Set debug environment
-export OTTO_BGP_DEBUG=true
+# Verbose runtime logging
+./otto-bgp pipeline devices.csv -v --output-dir ./policies/test
+
+# Increase log level via env var
 export OTTO_BGP_LOG_LEVEL=DEBUG
+./otto-bgp policy as_list.txt -v
 
-# Run with verbose output
-./otto-bgp discover devices.csv -v
-
-# Check logs
-tail -f /var/log/otto-bgp/debug.log
+# Check systemd journal (system installs)
+sudo journalctl -u otto-bgp.service --since "1 hour ago" -n 200
 ```
 
 ### Log Locations
 
-- Application logs: `/var/log/otto-bgp/`
-- Discovery results: `policies/discovered/`
-- Generation logs: `policies/routers/*/metadata.json`
-- Application logs: `policies/reports/`
+- Service logs: `journalctl -u otto-bgp.service` (system mode) or `-u otto-bgp-autonomous.service`
+- Per‑router metadata: `policies/routers/<hostname>/metadata.json`
+- Reports: `policies/reports/`
 
 ## Advanced Topics
 
