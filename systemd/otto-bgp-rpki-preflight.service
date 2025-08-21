@@ -9,10 +9,7 @@ Type=oneshot
 User=otto-bgp
 Group=otto-bgp
 WorkingDirectory=/opt/otto-bgp
-# DISABLED: rpki-check subcommand not implemented in v0.3.2
-# ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py rpki-check --max-age 86400
-# TODO: Implement rpki-check subcommand or replace with alternative RPKI validation
-ExecStart=/bin/true
+ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py rpki-check --max-age 86400
 Environment=PYTHONPATH=/opt/otto-bgp
 Environment=OTTO_BGP_MODE=preflight
 EnvironmentFile=-/etc/otto-bgp/otto.env

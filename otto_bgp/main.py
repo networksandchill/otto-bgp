@@ -980,6 +980,32 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
         bgpq4 = BGPq4Wrapper()
         all_policies = []
         
+        # Initialize RPKI validator if enabled
+        rpki_validator = None
+        try:
+            from otto_bgp.utils.config import get_config_manager
+            config_mgr = get_config_manager()
+            config = config_mgr.get_config()
+            
+            # Use centralized RPKI config function (pass empty args since no CLI override here)
+            import argparse
+            empty_args = argparse.Namespace()
+            rpki_settings = _get_rpki_config(config, empty_args)
+            
+            if rpki_settings['enabled']:
+                from otto_bgp.validators.rpki import RPKIValidator
+                rpki_validator = RPKIValidator(
+                    vrp_cache_path=Path(rpki_settings['vrp_cache_path']),
+                    allowlist_path=Path(rpki_settings['allowlist_path']),
+                    fail_closed=rpki_settings['fail_closed'],
+                    max_vrp_age_hours=rpki_settings['max_vrp_age_hours'],
+                    logger=logger,
+                )
+                logger.info("RPKI validator initialized for unified pipeline")
+        except Exception as e:
+            logger.warning(f"RPKI validator initialization failed: {e}")
+            rpki_validator = None
+        
         # DEFENSIVE VALIDATION: Validate each device before processing
         valid_devices = []
         for i, device in enumerate(devices):
@@ -1017,18 +1043,46 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
                     as_result = as_extractor.extract_as_numbers_from_text(bgp_data.bgp_text)
                     
                     if as_result.as_numbers:
-                        # Generate policies using bgpq4
+                        # Perform RPKI validation if enabled
+                        rpki_status = {}
+                        if rpki_validator:
+                            logger.debug(f"Performing RPKI validation for {device.hostname}")
+                            for as_number in as_result.as_numbers:
+                                try:
+                                    result = rpki_validator.check_as_validity(as_number)
+                                    rpki_status[as_number] = result
+                                    logger.debug(f"RPKI validation for AS{as_number}: {result['state']}")
+                                except Exception as e:
+                                    logger.warning(f"RPKI validation failed for AS{as_number}: {e}")
+                                    rpki_status[as_number] = {'state': 'error', 'message': str(e)}
+                        
+                        # Generate policies using bgpq4 with RPKI status
                         batch_result = bgpq4.generate_policies_batch(list(as_result.as_numbers))
                         
-                        # Convert to policy format with device information
+                        # Convert to policy format with device information and RPKI annotations
                         for policy_result in batch_result.results:
                             if policy_result.success:
+                                # Get RPKI result for this AS number
+                                rpki_result = rpki_status.get(policy_result.as_number, {})
+                                state = rpki_result.get('state', 'unknown')
+                                
+                                # Add RPKI comment to policy content
+                                policy_content = f"# RPKI Status: {state.upper()}\n"
+                                if state == 'invalid':
+                                    policy_content += f"# WARNING: Origin validation failed\n"
+                                elif state == 'valid':
+                                    policy_content += f"# INFO: Origin validation passed\n"
+                                elif state == 'notfound':
+                                    policy_content += f"# INFO: No ROA found for this origin\n"
+                                policy_content += policy_result.policy_content
+                                
                                 policy = {
                                     'device_hostname': device.hostname,
                                     'device_address': device.address,
                                     'as_number': policy_result.as_number,
                                     'policy_name': policy_result.policy_name,
-                                    'policy_content': policy_result.policy_content
+                                    'policy_content': policy_content,
+                                    'rpki_status': state
                                 }
                                 all_policies.append(policy)
                     else:
@@ -1183,6 +1237,95 @@ def cmd_test_proxy(args):
         logger.error(f"Proxy test failed: {e}")
         print(f"Error: {e}")
         return 1
+
+
+def _get_rpki_config(config, args):
+    """Extract consistent RPKI settings (dataclass-aware)"""
+    rpki_config = getattr(config, 'rpki', None)
+    return {
+        'enabled': (rpki_config.enabled if rpki_config else False) and not getattr(args, 'no_rpki', False),
+        'fail_closed': (rpki_config.fail_closed if rpki_config else True),
+        'max_vrp_age_hours': (rpki_config.max_vrp_age_hours if rpki_config else 24),
+        'vrp_cache_path': (rpki_config.vrp_cache_path if rpki_config else '/var/lib/otto-bgp/rpki/vrp_cache.json'),
+        'allowlist_path': (rpki_config.allowlist_path if rpki_config else '/var/lib/otto-bgp/rpki/allowlist.json')
+    }
+
+
+def cmd_rpki_check(args):
+    """Validate RPKI cache freshness and structure (format-agnostic)"""
+    logger = logging.getLogger('otto-bgp.rpki-check')
+    
+    try:
+        from otto_bgp.validators.rpki import RPKIValidator
+        from otto_bgp.utils.config import get_config_manager
+        import time
+        
+        # Get configuration
+        config_manager = get_config_manager()
+        config = config_manager.get_config()
+        rpki_config = getattr(config, 'rpki', None)
+        
+        if not rpki_config or not rpki_config.enabled:
+            logger.error("RPKI validation is not enabled in configuration")
+            print("✗ RPKI validation is not enabled")
+            return 1
+        
+        # Initialize validator to check configuration
+        validator = RPKIValidator(
+            vrp_cache_path=Path(rpki_config.vrp_cache_path),
+            allowlist_path=Path(rpki_config.allowlist_path),
+            fail_closed=rpki_config.fail_closed,
+            max_vrp_age_hours=rpki_config.max_vrp_age_hours,
+            logger=logger,
+        )
+        
+        cache_path = validator.vrp_cache_path
+        if not cache_path or not cache_path.exists():
+            logger.error("VRP cache not found")
+            print(f"✗ VRP cache not found: {cache_path}")
+            return 1
+        
+        # Check cache age
+        cache_age = time.time() - cache_path.stat().st_mtime
+        max_age = args.max_age or (rpki_config.max_vrp_age_hours * 3600)
+        
+        if cache_age > max_age:
+            logger.error(f"VRP cache stale: {cache_age/3600:.1f}h > {max_age/3600:.1f}h")
+            print(f"✗ VRP cache stale: {cache_age/3600:.1f}h > {max_age/3600:.1f}h")
+            return 1
+        
+        # Test cache readability
+        try:
+            # Test basic readability by attempting to load metadata
+            test_result = validator.check_as_validity(64512)  # Use reserved AS for test
+            if test_result['state'] in ['valid', 'invalid', 'notfound']:
+                cache_readable = True
+            else:
+                cache_readable = False
+        except Exception as e:
+            logger.error(f"VRP cache unreadable: {e}")
+            print(f"✗ VRP cache unreadable: {e}")
+            return 1
+        
+        if cache_readable:
+            logger.info(f"RPKI cache OK: age {cache_age/3600:.1f}h")
+            print(f"✓ RPKI cache OK: age {cache_age/3600:.1f}h")
+            print(f"✓ Cache path: {cache_path}")
+            print(f"✓ Max age: {max_age/3600:.1f}h")
+            return 0
+        else:
+            logger.error("VRP cache validation failed")
+            print("✗ VRP cache validation failed")
+            return 1
+            
+    except ImportError:
+        logger.error("RPKI validator not available")
+        print("✗ RPKI validator not available")
+        return 2
+    except Exception as e:
+        logger.error(f"RPKI check failed: {e}")
+        print(f"✗ RPKI check failed: {e}")
+        return 2
 
 
 def create_common_flags_parent():
@@ -1360,6 +1503,13 @@ def create_parser():
     test_proxy_parser.add_argument('--timeout', type=int, default=10,
                                   help='Connection timeout in seconds (default: 10)')
     
+    # RPKI Cache Check subcommand
+    rpki_check_parser = subparsers.add_parser('rpki-check',
+                                             help='Validate RPKI cache freshness and structure',
+                                             parents=[common_flags_parent])
+    rpki_check_parser.add_argument('--max-age', type=int,
+                                  help='Maximum cache age in seconds (overrides config)')
+    
     return parser
 
 
@@ -1447,7 +1597,8 @@ def main():
         'list': cmd_list,
         'apply': cmd_apply,
         'pipeline': cmd_pipeline,
-        'test-proxy': cmd_test_proxy
+        'test-proxy': cmd_test_proxy,
+        'rpki-check': cmd_rpki_check
     }
     
     try:

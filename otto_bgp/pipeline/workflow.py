@@ -65,6 +65,11 @@ class BGPPolicyPipeline:
         from ..generators.bgpq4_wrapper import BGPq4Mode
         bgpq4_mode = BGPq4Mode.PODMAN if config.dev_mode else BGPq4Mode.AUTO
         
+        # Initialize RPKI validator if enabled (reuse across pipeline run)
+        self.rpki_validator = None
+        if self.config.rpki_enabled:
+            self._initialize_rpki_validator()
+        
         # Initialize proxy manager if configured
         proxy_manager = None
         try:
@@ -98,6 +103,40 @@ class BGPPolicyPipeline:
         # Pipeline state - properly isolated between runs
         self._reset_pipeline_state()
         self._pipeline_used = False  # Track if pipeline has been used
+
+    def _initialize_rpki_validator(self):
+        """Initialize RPKI validator for pipeline reuse"""
+        try:
+            from ..validators.rpki import RPKIValidator
+            from ..utils.config import get_config_manager
+            
+            config_mgr = get_config_manager()
+            config = config_mgr.get_config()
+            
+            # Use centralized RPKI config function
+            from ..main import _get_rpki_config
+            import argparse
+            empty_args = argparse.Namespace()
+            rpki_settings = _get_rpki_config(config, empty_args)
+            
+            if rpki_settings['enabled']:
+                self.rpki_validator = RPKIValidator(
+                    vrp_cache_path=Path(rpki_settings['vrp_cache_path']),
+                    allowlist_path=Path(rpki_settings['allowlist_path']),
+                    fail_closed=rpki_settings['fail_closed'],
+                    max_vrp_age_hours=rpki_settings['max_vrp_age_hours'],
+                    logger=self.logger,
+                )
+                self.logger.info("RPKI validator initialized for pipeline")
+            else:
+                self.logger.warning("RPKI enabled but not configured properly")
+                self.rpki_validator = None
+        except ImportError:
+            self.logger.warning("RPKI validation requested but RPKIValidator not available")
+            self.rpki_validator = None
+        except Exception as e:
+            self.logger.error(f"Failed to initialize RPKI validator: {e}")
+            self.rpki_validator = None
 
     def _reset_pipeline_state(self):
         """Reset all pipeline state to ensure clean runs"""
@@ -456,40 +495,27 @@ class BGPPolicyPipeline:
                 router_directories.append(str(router_dir))
                 
                 # RPKI validation if enabled
-                if self.config.rpki_enabled and profile.discovered_as_numbers:
+                if self.rpki_validator and profile.discovered_as_numbers:
                     self.logger.info(f"Performing RPKI validation for {profile.hostname}")
                     try:
-                        from ..validators.rpki import RPKIValidator
-                        from ..utils.config import get_config_manager
+                        # Validate all AS numbers for this router
+                        as_list = list(profile.discovered_as_numbers)
+                        rpki_results = {}
+                        for as_number in as_list:
+                            result = self.rpki_validator.check_as_validity(as_number)
+                            rpki_results[as_number] = result
+                            self.logger.debug(f"RPKI validation for AS{as_number}: {result['state']}")
+                            if result['state'] == "invalid":
+                                self.logger.warning(f"  AS{as_number}: RPKI validation failed - {result['message']}")
+                            elif result['state'] == "valid":
+                                self.logger.debug(f"  AS{as_number}: RPKI validation passed")
                         
-                        config_mgr = get_config_manager()
-                        rpki_config = config_mgr.get_config().rpki
-                        
-                        if rpki_config and rpki_config.enabled:
-                            rpki_validator = RPKIValidator(
-                                vrp_cache_path=rpki_config.vrp_cache_path,
-                                allowlist_path=rpki_config.allowlist_path,
-                                fail_closed=rpki_config.fail_closed,
-                                max_vrp_age_hours=rpki_config.max_vrp_age_hours
-                            )
-                            
-                            # Validate all AS numbers for this router
-                            as_list = list(profile.discovered_as_numbers)
-                            rpki_results = {}
-                            for as_number in as_list:
-                                result = rpki_validator.validate_as_number(as_number)
-                                rpki_results[as_number] = result
-                                if result.status == "invalid":
-                                    self.logger.warning(f"  AS{as_number}: RPKI validation failed - {result.details}")
-                                elif result.status == "valid":
-                                    self.logger.debug(f"  AS{as_number}: RPKI validation passed")
-                            
-                            # Store RPKI results in profile for metadata
-                            profile.rpki_validation_results = rpki_results
-                    except ImportError:
-                        self.logger.warning("RPKI validation requested but RPKIValidator not available")
+                        # Attach to profile for downstream use
+                        profile.rpki_validation_results = rpki_results
                     except Exception as e:
-                        self.logger.error(f"RPKI validation failed for {profile.hostname}: {e}")
+                        self.logger.warning(f"RPKI validation failed for {profile.hostname}: {e}")
+                        # Set empty results on failure
+                        profile.rpki_validation_results = {}
                 
                 # Generate policies for this router's AS numbers
                 self.logger.info(f"Generating policies for {profile.hostname}: {len(profile.discovered_as_numbers)} AS numbers")
@@ -504,6 +530,17 @@ class BGPPolicyPipeline:
             self._generate_deployment_reports()
             
             execution_time = time.time() - self.start_time
+            
+            # Calculate pipeline-wide RPKI summary
+            rpki_rollup = {"valid": 0, "invalid": 0, "notfound": 0, "error": 0}
+            for profile in self.router_profiles:
+                rpki_results = getattr(profile, 'rpki_validation_results', {})
+                for result in rpki_results.values():
+                    state = result.get('state', 'error')
+                    if state in rpki_rollup:
+                        rpki_rollup[state] += 1
+                    else:
+                        rpki_rollup['error'] += 1
             
             result = PipelineResult(
                 success=True,
@@ -521,6 +558,18 @@ class BGPPolicyPipeline:
             self.logger.info(f"  Routers configured: {result.routers_configured}")
             self.logger.info(f"  Total AS numbers: {result.as_numbers_found}")
             self.logger.info(f"  Policies generated: {result.policies_generated}")
+            
+            # Log RPKI summary if validation was performed
+            if self.rpki_validator and sum(rpki_rollup.values()) > 0:
+                self.logger.info(f"🔒 RPKI validation summary:")
+                self.logger.info(f"  Valid: {rpki_rollup['valid']}")
+                self.logger.info(f"  Invalid: {rpki_rollup['invalid']}")
+                self.logger.info(f"  Not found: {rpki_rollup['notfound']}")
+                self.logger.info(f"  Errors: {rpki_rollup['error']}")
+                
+                # Warn about invalid origins
+                if rpki_rollup['invalid'] > 0:
+                    self.logger.warning(f"⚠ {rpki_rollup['invalid']} AS numbers failed RPKI validation")
             
             return result
             
@@ -562,15 +611,32 @@ class BGPPolicyPipeline:
         as_list = sorted(list(profile.discovered_as_numbers))
         success_count = 0
         
+        # Get RPKI validation results if available
+        rpki_status = getattr(profile, 'rpki_validation_results', {})
+        
         for as_number in as_list:
             try:
+                # Get RPKI result for this AS number
+                rpki_result = rpki_status.get(as_number, {})
+                state = rpki_result.get('state', 'unknown')
+                
                 result = self.bgp_generator.generate_policy(as_number)
                 if result.success:
+                    # Add RPKI comment to policy
+                    policy_content = f"# RPKI Status: {state.upper()}\n"
+                    if state == 'invalid':
+                        policy_content += f"# WARNING: Origin validation failed\n"
+                    elif state == 'valid':
+                        policy_content += f"# INFO: Origin validation passed\n"
+                    elif state == 'notfound':
+                        policy_content += f"# INFO: No ROA found for this origin\n"
+                    policy_content += result.policy_config
+                    
                     # Save policy to router's directory
                     policy_file = output_dir / f"AS{as_number}_policy.txt"
-                    policy_file.write_text(result.policy_config)
+                    policy_file.write_text(policy_content)
                     success_count += 1
-                    self.logger.debug(f"  Generated policy for AS{as_number}")
+                    self.logger.debug(f"  Generated policy for AS{as_number} (RPKI: {state})")
                 else:
                     self.logger.error(f"  Failed to generate policy for AS{as_number}: {result.error_message}")
             except Exception as e:
@@ -583,6 +649,16 @@ class BGPPolicyPipeline:
         import json
         from datetime import datetime
         
+        # Calculate RPKI summary
+        rpki_summary = {"valid": 0, "invalid": 0, "notfound": 0, "error": 0}
+        rpki_results = getattr(profile, 'rpki_validation_results', {})
+        for result in rpki_results.values():
+            state = result.get('state', 'error')
+            if state in rpki_summary:
+                rpki_summary[state] += 1
+            else:
+                rpki_summary['error'] += 1
+
         metadata = {
             "router": {
                 "hostname": profile.hostname,
@@ -595,7 +671,8 @@ class BGPPolicyPipeline:
                 "as_numbers_discovered": len(profile.discovered_as_numbers) if profile.discovered_as_numbers else 0,
                 "as_numbers": sorted(list(profile.discovered_as_numbers)) if profile.discovered_as_numbers else [],
                 "bgp_groups": profile.bgp_groups or {},
-                "policies_generated": policies_generated
+                "policies_generated": policies_generated,
+                "rpki_summary": rpki_summary
             },
             "version": "0.3.2"
         }

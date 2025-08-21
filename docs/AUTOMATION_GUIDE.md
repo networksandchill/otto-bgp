@@ -18,22 +18,22 @@ Otto BGP v0.3.2 provides a router-aware pipeline to collect BGP context via SSH,
 ## Known Gaps and Limitations
 
 **Fixed in this release:**
-- ✅ **Systemd service user name**: Fixed mismatch between install.sh (`otto-bgp`) and systemd files (`otto.bgp`). All systemd units now use `otto-bgp` consistently.
-- ✅ **RPKI in router-aware pipeline**: Added RPKI validation to the router-aware pipeline when `rpki_enabled` is true. RPKI validation now runs before policy generation for each router.
-- ✅ **IRR proxy integration**: Added automatic proxy support to `policy` and `pipeline` commands. Proxy is enabled automatically when `irr_proxy.enabled` is true in configuration.
-- ✅ **Apply-confirm reference**: Fixed misleading error message that referenced non-existent `apply-confirm` subcommand.
-- ✅ **RPKI preflight unit**: Disabled the problematic `rpki-check` command in the systemd preflight service until the subcommand is implemented.
-- ✅ **Discover command**: Re-enabled the `discover` subcommand with proper error handling and integration.
+- ✅ Systemd service user name: Resolved mismatch; all services run as `otto-bgp` consistently.
+- ✅ IRR proxy integration: `policy` and `pipeline` automatically use the proxy when `irr_proxy.enabled` is true.
+- ✅ Apply-confirm reference: Removed references to non-existent `apply-confirm` subcommand.
+- ✅ Discover command: `discover` is operational with CSV input, `--output-dir`, `--show-diff`, and `--timeout` options.
+- ✅ RPKI preflight: Implemented `rpki-check` subcommand and wired `otto-bgp-rpki-preflight.service` to enforce VRP freshness.
+- ✅ Router-aware RPKI: Router-aware pipeline performs RPKI validation and annotates per-router outputs.
 
 **Design decisions (working as intended):**
-- **Autonomous mode enablement**: The two-key design (config + CLI flag) is intentional for safety. Autonomous mode requires both `autonomous_mode.enabled = true` in configuration AND the `--autonomous` CLI flag. This prevents accidental autonomous operation from just a CLI typo. The improved error message now explains this clearly.
+- Autonomous mode enablement: Two-key design (config + CLI flag) for safety. Requires both `autonomous_mode.enabled = true` and `--autonomous` at runtime.
 
 **Remaining limitations:**
-- **File logging**: Console logging is default; file logging requires explicit configuration (`logging.log_to_file: true`, `logging.log_file`). Use `journalctl -u ...` for systemd service logs.
-- **PyEZ dependency**: Policy application and autonomous NETCONF operations require PyEZ and related libraries (`junos-eznc`, `jxmlease`, `lxml`, `ncclient`). Without these, `apply` and pipeline application components will fail to execute.
-- **Device CSV fields**: The router‑aware pipeline accepts `address`, `ip`, or `host` columns. Other areas assume an `address` column (e.g., `collect`). Ensure your CSV includes one of these expected column names.
-- **Known hosts and SSH hardening**: NETCONF operations rely on strict host key checking and default known hosts at `/var/lib/otto-bgp/ssh-keys/known_hosts`. Ensure this file exists and includes device host keys.
-- **Email notifications**: Notifications are best‑effort. They send on connect/preview/commit/rollback/disconnect events when `autonomous_mode.notifications.email.enabled` is true and SMTP settings are valid. There is no retry/backoff beyond standard SMTP behavior.
+- File logging: Console logging is default; file logging requires explicit configuration (`logging.log_to_file: true`, `logging.log_file`). Use `journalctl -u ...` for systemd logs.
+- PyEZ dependency: Policy application and autonomous NETCONF operations require PyEZ libraries (`junos-eznc`, `jxmlease`, `lxml`, `ncclient`). Without these, `apply` and autonomous application will fail.
+- Device CSV fields: Router‑aware paths expect an `address` column (with optional `hostname`). The legacy loader accepts `address`/`ip`/`host`. Prefer `address[,hostname]` for consistency.
+- Known hosts and SSH hardening: NETCONF/SSH use strict host key checking and default known hosts at `/var/lib/otto-bgp/ssh-keys/known_hosts`. Ensure device host keys are present.
+- Email notifications: Best‑effort only. Notifications send on connect/preview/commit/rollback/disconnect when `autonomous_mode.notifications.email.enabled` is true and SMTP settings are valid. No retry/backoff beyond SMTP behavior.
 
 ## Operational Modes
 
@@ -61,7 +61,7 @@ Otto BGP operates in three distinct modes to serve different operational needs:
 - **Execution**: `otto-bgp pipeline ... --autonomous` or the `otto-bgp-autonomous.service/timer`
 - **Operation**: Pipeline with unified safety manager; email notifications if configured
 - **Scope**: Low-risk changes are auto-applied; high-risk require manual intervention
-- **Notes**: Must be enabled in config; recommend system installation. The provided `otto-bgp-rpki-preflight.service` references an `rpki-check` subcommand that is not present in v0.3.2; disable or adjust that unit accordingly.
+- **Notes**: Must be enabled in config; recommend system installation. RPKI preflight is enforced via `otto-bgp rpki-check` before autonomous runs.
 
 **Example Usage:**
 ```bash
@@ -259,7 +259,7 @@ sudo journalctl -u otto-bgp-autonomous.service -f | grep -i "autonomous\|netconf
 
 ### 5. IRR Proxy Workflow
 
-For restricted networks where direct IRR access is blocked, use the proxy tester to validate SSH tunnel setup. Note: in v0.3.2, `policy`/`pipeline` do not automatically use the proxy; `test-proxy` can validate tunnels and a single bgpq4 call through the proxy.
+For restricted networks where direct IRR access is blocked, enable the proxy in configuration and use the proxy tester to validate SSH tunnel setup. In v0.3.2, `policy` and `pipeline` automatically use the proxy when `irr_proxy.enabled` is true; `test-proxy` provides targeted connectivity checks and an optional bgpq4 test through the proxy.
 
 #### Configure Proxy
 ```bash
@@ -324,7 +324,10 @@ export OTTO_BGP_PROXY_KNOWN_HOSTS=/path/to/known_hosts
 - `--no-rpki`: Disable RPKI validation for this run
 
 #### Discovery Options
-- Currently disabled in v0.3.2 (command exists but returns an error)
+- `devices_csv`: CSV with `address` (and optional `hostname`) columns
+- `--output-dir`: Directory for discovered data (default: `policies`)
+- `--show-diff`: Print a diff report when changes are detected
+- `--timeout`: SSH connection timeout in seconds (default: 30)
 
 #### Policy Options
 - `--separate, -s`: One file per AS
@@ -517,7 +520,7 @@ pip install junos-eznc jxmlease lxml ncclient
 
 ### IRR Proxy Support
 
-See IRR Proxy Workflow above. `policy`/`pipeline` do not automatically use the proxy in v0.3.2.
+See IRR Proxy Workflow above. `policy` and `pipeline` automatically use the proxy when enabled in configuration.
 
 ### Complete Automation Workflow
 ```bash
