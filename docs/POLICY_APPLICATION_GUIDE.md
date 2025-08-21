@@ -13,7 +13,7 @@ This guide explains how Otto BGP applies BGP policies to Juniper routers and pro
 
 ## Overview
 
-Otto BGP v0.3.2 generates BGP prefix-list policies using bgpq4 and provides flexible application methods including autonomous operation with comprehensive safety controls, email notifications, and risk-based decision making.
+Otto BGP v0.3.2 generates BGP prefix-list policies using bgpq4 and provides application methods including autonomous operation with safety controls, email notifications (when enabled), and risk-based decision making.
 
 ### Policy Operation Modes
 
@@ -35,7 +35,7 @@ Otto BGP v0.3.2 Enhanced Application Stack
 │   └── PyEZ-based policy application with event notifications
 ├── Safety Validator (otto_bgp/appliers/safety.py)
 │   ├── Risk-based autonomous decision logic
-│   ├── Email notification system for all NETCONF events
+│   ├── Email notification system for NETCONF events (when enabled)
 │   └── Comprehensive pre-application validation
 └── Configuration Manager (otto_bgp/utils/config.py)
     └── Autonomous mode configuration and email settings
@@ -51,50 +51,15 @@ Otto BGP v0.3.2 Enhanced Application Stack
 6. **Audit Trail**: Email notifications for all NETCONF operations (success/failure)
 7. **Verification**: Post-application validation with monitoring recommendations
 
-## Router Discovery
+## Discovery Status
 
-Otto BGP introduces automatic router discovery to understand your network topology and BGP relationships, enabling router-aware policy generation and application.
+The `discover` command is temporarily disabled while error handling is standardized. Use one of these approaches for inputs:
 
-### Discovery Command
-```bash
-# Discover routers and their BGP configurations
-./otto-bgp discover devices.csv --output-dir policies
-
-# Show changes from previous discovery
-./otto-bgp discover devices.csv --show-diff
-
-# List discovered resources
-./otto-bgp list routers
-./otto-bgp list as
-./otto-bgp list groups
-```
-
-### How Discovery Works
-1. **Connect**: SSH to each router in devices.csv
-2. **Inspect**: Parse BGP configuration to find groups and AS numbers
-3. **Map**: Create AS-to-router and group relationships
-4. **Store**: Save mappings in YAML for policy generation
-
-### Discovery Output
-```
-policies/
-├── discovered/
-│   ├── router_mappings.yaml     # AS-to-router mappings
-│   ├── router_inventory.yaml    # Router profiles
-│   └── history/                 # Previous discoveries
-└── routers/                     # Router-specific policies
-```
-
-### Integration with Policy Application
-
-The discovery process creates router-aware mappings that enhance policy application:
-
-- **AS-to-Router Mapping**: Knows which routers use specific AS numbers
-- **BGP Group Context**: Understands router-specific BGP group structures
-- **Change Detection**: Identifies topology changes between discovery runs
-- **Router Profiles**: Maintains device metadata for targeted policy application
-
-This discovery data enables Otto BGP to generate router-specific policies and apply them with full context awareness during autonomous operations.
+- Extract AS numbers from existing configuration text:
+  - `otto-bgp process <input_file> --extract-as -o as_numbers.txt`
+  - `otto-bgp policy as_numbers.txt --output-dir policies`
+- Use the unified pipeline with a devices CSV for collection and generation:
+  - `otto-bgp pipeline devices.csv --output-dir bgp_pipeline_output`
 
 ## Environment Setup
 
@@ -125,26 +90,19 @@ set system login user otto-lab authentication ssh-ed25519 "ssh-ed25519 AAAAC3Nz.
 commit comment "Otto BGP lab user setup"
 ```
 
-#### 3. Configure Otto BGP
+#### 3. Configure NETCONF Credentials
 
-Create `/etc/otto-bgp/netconf.json`:
-```json
-{
-  "lab_routers": {
-    "lab-router1": {
-      "hostname": "192.168.100.1",
-      "username": "otto-lab",
-      "ssh_key": "/var/lib/otto-bgp/ssh-keys/lab-key",
-      "port": 830
-    }
-  },
-  "safety": {
-    "max_prefix_lists": 100,
-    "max_prefixes_per_list": 10000,
-    "require_confirmation": true,
-    "confirm_timeout": 120
-  }
-}
+Set credentials via environment variables or CLI flags:
+
+```bash
+# Environment variables (preferred for non-interactive use)
+export NETCONF_USERNAME="otto-lab"
+export NETCONF_PASSWORD="s3cr3t"           # or use NETCONF_SSH_KEY=/path/to/private_key
+export NETCONF_PORT=830
+export NETCONF_TIMEOUT=30
+
+# Or pass as flags on apply:
+otto-bgp apply --router lab-router1 --username otto-lab --ssh-key /var/lib/otto-bgp/ssh-keys/lab-key --dry-run
 ```
 
 ### Lab Testing Workflow
@@ -152,28 +110,25 @@ Create `/etc/otto-bgp/netconf.json`:
 #### Step 1: Generate Policies
 
 ```bash
-# Extract AS numbers from router
-./otto-bgp discover lab-devices.csv
-
-# Generate policies
-./otto-bgp policy collected_as.txt -o lab_policies/
+# Generate policies from ASN list
+otto-bgp policy as_numbers.txt --output-dir lab_policies --separate
 ```
 
 #### Step 2: Preview Changes
 
 ```bash
 # Dry run to see what would change
-./otto-bgp apply --router lab-router1 --dry-run
+otto-bgp apply --router lab-router1 --dry-run
 
 # Review the diff
-./otto-bgp apply --router lab-router1 --dry-run > changes.diff
+otto-bgp apply --router lab-router1 --dry-run > changes.diff
 ```
 
 #### Step 3: Apply with Confirmation
 
 ```bash
 # Apply with 2-minute confirmation window
-./otto-bgp apply --router lab-router1 --confirm --confirm-timeout 120
+otto-bgp apply --router lab-router1 --confirm --confirm-timeout 120
 
 # Monitor BGP sessions
 ssh otto-lab@lab-router1 "show bgp summary"
@@ -250,22 +205,22 @@ Otto BGP autonomous mode only applies changes that meet strict safety criteria:
 - **Risk Level**: Only `low` risk changes are auto-applied
 - **Safety Validation**: All existing safety checks must pass
 - **Confirmation Timeout**: Confirmed commits with automatic rollback
-- **Email Notifications**: Every NETCONF operation generates email notification
+- **Email Notifications**: NETCONF operation notifications are sent when autonomous email notifications are enabled in configuration
 
 #### Example Autonomous Commands
 
 ```bash
 # Standard autonomous operation
-./otto-bgp apply --autonomous --auto-threshold 100
+otto-bgp apply --autonomous --auto-threshold 100
 
 # System mode with autonomous decisions
-./otto-bgp apply --system --autonomous
+otto-bgp apply --system --autonomous
 
 # Full pipeline with autonomous application
-./otto-bgp pipeline devices.csv --autonomous --system
+otto-bgp --autonomous --system pipeline devices.csv --output-dir /var/lib/otto-bgp/output
 
 # Preview autonomous decisions (dry run)
-./otto-bgp apply --autonomous --dry-run
+otto-bgp apply --autonomous --dry-run
 ```
 
 #### Safety Thresholds and Configuration
@@ -351,8 +306,8 @@ cat /var/lib/otto-bgp/logs/otto-bgp.log | grep -i "autonomous\|risk\|threshold"
 # Review email notification history
 # (Check your email system for complete audit trail)
 
-# Monitor router health after autonomous changes
-./otto-bgp discover devices.csv --show-diff
+# Monitor router health after autonomous changes using router-native commands
+# (e.g., show bgp summary / neighbor state on the router)
 ```
 
 ## Production Workflow
@@ -368,11 +323,35 @@ Otto BGP v0.3.2 provides two production-ready approaches for policy application:
 
 #### Step 1: Policy Generation
 
-```bash
-# Run Otto BGP on schedule (e.g., daily via cron)
-0 2 * * * /opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py pipeline /var/lib/otto-bgp/devices.csv
+Use the provided systemd service and timer for scheduled runs.
 
-# Policies saved to: /var/lib/otto-bgp/output/policies/
+```bash
+# Enable and start the system timer for manual/system mode
+sudo systemctl enable --now otto-bgp.timer
+
+# Check timer status and next run time
+systemctl list-timers | grep otto-bgp
+
+# Policies will be saved under the configured output directory (e.g., /var/lib/otto-bgp/output/policies/)
+```
+
+#### Autonomous Scheduling (systemd)
+
+For autonomous mode, use the autonomous service and timer.
+
+```bash
+# Enable and start the autonomous timer
+sudo systemctl enable --now otto-bgp-autonomous.timer
+
+# Check autonomous timer status and next run time
+systemctl list-timers | grep otto-bgp-autonomous
+
+# Default schedule (from otto-bgp-autonomous.timer): 08:00, 12:00, 16:00, 20:00 daily
+# To adjust schedule, create a systemd drop-in override:
+sudo systemctl edit otto-bgp-autonomous.timer
+# Then set a different OnCalendar= value and reload
+sudo systemctl daemon-reload
+sudo systemctl restart otto-bgp-autonomous.timer
 ```
 
 #### Step 2: Change Management Process

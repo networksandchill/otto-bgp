@@ -2,7 +2,7 @@
 
 ## Overview
 
-Otto BGP is an autonomous BGP policy generator that collects AS numbers from Juniper router configurations and generates corresponding prefix-list policies using bgpq4. The system operates through SSH connections to routers and can optionally apply policies via NETCONF.
+Otto BGP collects AS numbers from Juniper router configurations and generates corresponding prefix-list policies using bgpq4. It connects over SSH to collect data and can optionally apply policies via NETCONF.
 
 ## Juniper Router Configuration Requirements
 
@@ -77,7 +77,7 @@ protocols {
 }
 
 policy-options {
-    prefix-list 13335 {
+    prefix-list AS13335 {
         1.1.1.0/24;
         1.0.0.0/24;
         /* bgpq4-generated prefixes */
@@ -163,18 +163,14 @@ Compare the output with your network team's device records. Each device should h
 ### Connection Parameters
 
 ```python
-# NETCONF connection configuration
-netconf_params = {
+# PyEZ Device parameters (effective subset used by Otto BGP)
+device_params = {
     'host': '192.168.1.1',
     'port': 830,
-    'username': 'otto-bgp',
-    'ssh_key': '/var/lib/otto-bgp/ssh-keys/otto-bgp-key',
-    'timeout': 30,
-    'device_params': {
-        'gather_facts': True,
-        'auto_probe': 30,
-        'normalize': True
-    }
+    'user': 'otto-bgp',      # or pass via CLI / environment
+    'password': '***',       # or use SSH keys via system SSH configuration
+    'gather_facts': True,
+    'auto_probe': 30,
 }
 ```
 
@@ -193,17 +189,15 @@ Otto BGP requires these Python libraries for NETCONF operations:
 NETCONF configuration operations use merge mode to preserve existing configuration:
 
 ```python
-# Configuration merge operation
+# Configuration merge operation (Otto BGP loads text with merge=True)
 config_content = """
 policy-options {
-    replace: prefix-list 13335 {
+    prefix-list AS13335 {
         1.1.1.0/24;
         1.0.0.0/24;
     }
 }
 """
-
-# Load configuration with merge
 config.load(config_content, format='text', merge=True)
 ```
 
@@ -363,7 +357,7 @@ Validated AS numbers generate safe bgpq4 commands:
 
 ```bash
 # Generated command for AS 13335
-bgpq4 -Jl 13335 AS13335
+bgpq4 -Jl AS13335 AS13335
 
 # Example output
 policy-options {
@@ -407,49 +401,27 @@ def sanitize_policy_name(name: str) -> str:
     return name
 ```
 
-### Directory Structure
+### Policy Output Directory
 
-Router-specific policies are stored in organized directories:
+Router-specific policies are stored under the policy root directory:
 
 ```
 policies/
-├── discovered/
-│   ├── router_mappings.yaml
-│   ├── router_inventory.yaml
-│   └── history/
-├── routers/
-│   ├── edge-router1/
-│   │   ├── AS13335_policy.txt
-│   │   ├── AS8075_policy.txt
-│   │   └── metadata.json
-│   └── core-router1/
-│       ├── AS174_policy.txt
-│       └── metadata.json
-└── reports/
-    ├── discovery_diff.txt
-    └── application_log.txt
+└── routers/
+    ├── edge-router1/
+    │   ├── AS13335_policy.txt
+    │   ├── AS8075_policy.txt
+    │   └── metadata.json
+    └── core-router1/
+        ├── AS174_policy.txt
+        └── metadata.json
 ```
 
 ## Network Protocol Configuration
 
-### SSH Connection Parameters
+### SSH Connection Behavior
 
-SSH connections use these technical parameters:
-
-```python
-ssh_connection = {
-    'protocol_version': 2,
-    'key_algorithms': ['ssh-ed25519', 'rsa-sha2-512', 'rsa-sha2-256'],
-    'encryption_algorithms': ['aes256-gcm@openssh.com', 'aes256-ctr'],
-    'mac_algorithms': ['hmac-sha2-256-etm@openssh.com'],
-    'compression': None,
-    'timeout': {
-        'connection': 30,  # seconds
-        'command': 60,     # seconds
-        'keepalive': 10    # seconds
-    }
-}
-```
+SSH collection uses strict host key verification and per-command timeouts. Credentials can be key-based or password-based, as configured by system administrators.
 
 ### NETCONF Over SSH
 
@@ -460,34 +432,21 @@ NETCONF operates as SSH subsystem on port 830:
 ssh -p 830 otto-bgp@router.example.com -s netconf
 ```
 
-### Connection Pooling
+### Parallel Collection
 
-Otto BGP implements connection pooling for efficiency:
-
-- **Pool Size**: 10 concurrent connections maximum
-- **Connection Reuse**: SSH connections reused for multiple operations
-- **Timeout Management**: Idle connections closed after 300 seconds
-- **Thread Safety**: Connection pool protected with threading locks
+Otto BGP collects from multiple devices in parallel when applicable. The maximum workers are configurable via environment; connection and command timeouts are enforced per device.
 
 **For system administration procedures, service configuration, and backend troubleshooting, see the System Administrator Guide.**
 
 ## BGP Policy Validation
 
 ```bash
-# Validate generated policy syntax
-python3 -c "
-import junos_config_parser
-parser = junos_config_parser.ConfigParser()
-config = open('/var/lib/otto-bgp/policies/routers/router1/AS13335_policy.txt').read()
-result = parser.parse(config)
-print('Syntax valid' if result.success else 'Syntax error')
-"
-
-# Test policy application in candidate configuration
+# Test policy application in candidate configuration on the router
 ssh otto-bgp@router.example.com "
 configure private;
 load merge /var/tmp/test-policy.txt;
 commit check;
+show | compare;
 rollback;
 exit
 "

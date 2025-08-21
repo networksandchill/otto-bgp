@@ -38,7 +38,7 @@ Otto BGP v0.3.2 introduces a three-tier installation system that separates insta
 
 **Minimum Requirements:**
 - Linux/macOS operating system
-- Python 3.9+ with pip
+- Python 3.10+ with pip
 - SSH client
 - 1GB free disk space
 
@@ -137,15 +137,15 @@ cd otto-bgp
 **What it does:**
 - Installs to `/opt/otto-bgp/`
 - Creates configuration in `/etc/otto-bgp/`
-- Creates service user `otto.bgp`
-- Sets up systemd service (optional)
+- Creates service user `otto-bgp`
+- Sets up systemd service and timer (system mode)
 - Enhanced security and performance optimizations
 - Autonomous mode available but disabled
 
 **System Setup:**
 ```bash
-# Creates service user
-sudo useradd -r -s /bin/false -d /var/lib/otto-bgp otto.bgp
+# Creates service user (hyphen naming)
+sudo useradd -r -s /bin/false -d /var/lib/otto-bgp otto-bgp
 
 # Creates directories
 sudo mkdir -p /etc/otto-bgp
@@ -153,8 +153,8 @@ sudo mkdir -p /var/lib/otto-bgp/{policies,logs,ssh-keys}
 sudo mkdir -p /var/log/otto-bgp
 
 # Sets permissions
-sudo chown -R otto.bgp:otto.bgp /var/lib/otto-bgp
-sudo chown -R otto.bgp:otto.bgp /var/log/otto-bgp
+sudo chown -R otto-bgp:otto-bgp /var/lib/otto-bgp
+sudo chown -R otto-bgp:otto-bgp /var/log/otto-bgp
 sudo chmod 750 /etc/otto-bgp
 sudo chmod 700 /var/lib/otto-bgp/ssh-keys
 ```
@@ -168,7 +168,7 @@ sudo chmod 700 /var/lib/otto-bgp/ssh-keys
   "environment": "system",
   "installation_mode": {
     "type": "system",
-    "service_user": "otto.bgp",
+    "service_user": "otto-bgp",
     "systemd_enabled": true,
     "optimization_level": "enhanced"
   },
@@ -224,7 +224,7 @@ Maximum prefix count for auto-apply [100]: 150
 
 📧 CONFIGURING EMAIL NOTIFICATIONS
 ==================================
-Email notifications will be sent for ALL NETCONF events
+Email notifications will be sent for NETCONF events
 (connections, commits, failures, etc.)
 
 SMTP server [smtp.company.com]: smtp.company.com
@@ -237,7 +237,7 @@ Engineer email address(es) (comma-separated): network-team@company.com,ops@compa
    - Auto-apply threshold: 150 prefixes (informational)
    - Risk level: low only
    - Confirmed commits: enabled
-   - Email notifications: enabled for ALL NETCONF events
+   - Email notifications: enabled for NETCONF events
    - SMTP server: smtp.company.com:587
    - Notification recipients: network-team@company.com,ops@company.com
    - Manual approval required for high-risk changes
@@ -294,53 +294,26 @@ Engineer email address(es) (comma-separated): network-team@company.com,ops@compa
 OPTIONS:
   --user               Install in user mode (default)
   --system             Install in system mode for production
-  --autonomous         Install with autonomous mode (requires confirmation)
-  --production         DEPRECATED: Use --system (shows warning)
-  
-  --skip-deps          Skip dependency installation
-  --skip-service       Skip systemd service setup (system mode)
-  --skip-ssh-keys      Skip SSH host key setup
-  --config-only        Only create/update configuration
-  
-  --service-user USER  Custom service user (default: otto.bgp)
-  --config-dir DIR     Custom configuration directory
-  --data-dir DIR       Custom data directory
-  
-  --force              Force installation (overwrite existing)
-  --verbose            Verbose installation output
-  --help               Show this help message
+  --autonomous         Install with autonomous mode (requires interactive prompts)
+  --skip-bgpq4         Skip bgpq4 dependency check
+  --force              Force installation (overwrite existing installation)
+  --help, -h           Show help message
 ```
 
-### Installation Process Flow
+### Installation Process Flow (as implemented in install.sh v0.3.2)
 
-```bash
-# 1. Dependency Check and Installation
-check_dependencies()
-install_python_packages()
-install_bgpq4()
-
-# 2. Mode-Specific Setup
-if [[ "$INSTALL_MODE" == "user" ]]; then
-    setup_user_mode()
-elif [[ "$INSTALL_MODE" == "system" ]]; then
-    setup_system_mode()
-    if [[ "$AUTONOMOUS_MODE" == true ]]; then
-        setup_autonomous_mode()
-    fi
-fi
-
-# 3. Configuration Creation
-create_default_config()
-configure_ssh_security()
-
-# 4. Service Setup (system mode only)
-if [[ "$SYSTEM_MODE" == true && "$SKIP_SERVICE" == false ]]; then
-    setup_systemd_service()
-fi
-
-# 5. Validation and Completion
-validate_installation()
-display_completion_message()
+```text
+1) Check Python version (requires 3.10+)
+2) Check requirements (git, curl, bgpq4/docker/podman if not skipped)
+3) (If autonomous) Run interactive autonomous configuration prompts
+4) Check for existing installation (remove if --force)
+5) Create directories (bin, lib, config, data)
+6) Download repo contents into lib dir
+7) Create virtual environment and install Python dependencies
+8) Create CLI wrapper at <bin>/otto-bgp
+9) Create environment config from template into <config>/otto.env
+10) Create systemd service (+ timer when not autonomous) in system mode
+11) Print next steps and enable guidance
 ```
 
 ## Manual Production Deployment
@@ -453,13 +426,13 @@ sudo cat /var/lib/otto-bgp/ssh-keys/otto-bgp.pub
 # Method 1: Use the provided setup script (recommended)
 sudo chmod +x /opt/otto-bgp/scripts/setup-host-keys.sh
 sudo /opt/otto-bgp/scripts/setup-host-keys.sh \
-    /var/lib/otto-bgp/config/devices.csv \
+    /etc/otto-bgp/devices.csv \
     /var/lib/otto-bgp/ssh-keys/known_hosts
 
 # Method 2: Use Python setup script with Otto
 sudo -u otto-bgp /var/lib/otto-bgp/venv/bin/python \
     /opt/otto-bgp/scripts/setup_host_keys.py \
-    --devices /var/lib/otto-bgp/config/devices.csv \
+    --devices /etc/otto-bgp/devices.csv \
     --output /var/lib/otto-bgp/ssh-keys/known_hosts
 
 # Verify collected host keys (shows fingerprints)
@@ -510,7 +483,7 @@ OTTO_BGP_LOG_FILE=/var/lib/otto-bgp/logs/otto-bgp.log
 #### 6. Device Inventory Setup
 ```bash
 # Create devices.csv with your network devices
-sudo tee /var/lib/otto-bgp/devices.csv << 'EOF'
+sudo tee /etc/otto-bgp/devices.csv << 'EOF'
 address,hostname
 192.168.1.1,core-router-1
 192.168.1.2,core-router-2  
@@ -752,7 +725,7 @@ export OTTO_BGP_DATA_DIR=/custom/data/dir
 
 ```bash
 # Fix permission issues
-sudo chown -R otto.bgp:otto.bgp /var/lib/otto-bgp
+sudo chown -R otto-bgp:otto-bgp /var/lib/otto-bgp
 sudo chmod 750 /etc/otto-bgp
 sudo chmod 700 /var/lib/otto-bgp/ssh-keys
 
@@ -764,7 +737,7 @@ sudo chmod 600 /var/lib/otto-bgp/ssh-keys/*
 
 ```bash
 # Check Python version
-python3 --version  # Must be 3.9+
+python3 --version  # Must be 3.10+
 
 # Install missing dependencies
 pip install -r requirements.txt
@@ -839,12 +812,12 @@ ls -la /var/lib/otto-bgp/
 ls -la /etc/otto-bgp/
 
 # Check service user
-id otto.bgp
-sudo -u otto.bgp otto-bgp --version
+id otto-bgp
+sudo -u otto-bgp otto-bgp --version
 
 # Network connectivity
 ping router1.company.com
-ssh otto.bgp@router1.company.com "show version"
+ssh otto-bgp@router1.company.com "show version"
 
 # Log analysis
 sudo tail -f /var/log/otto-bgp/otto-bgp.log

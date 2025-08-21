@@ -19,7 +19,7 @@ Global flags can be positioned either before or after the subcommand.
 
 | Command | Purpose | Autonomous Support |
 |---------|---------|-------------------|
-| `discover` | Collect BGP configurations from routers | ✅ |
+| `discover` | Collect BGP configurations from routers | Temporarily disabled |
 | `policy` | Generate BGP prefix-list policies | ✅ |
 | `apply` | Apply policies to routers via NETCONF | ✅ |
 | `pipeline` | Run complete workflow (discover → generate → apply) | ✅ |
@@ -33,12 +33,10 @@ Global flags can be positioned either before or after the subcommand.
 ```bash
 --autonomous              # Enable autonomous mode with automatic policy application
 --system                  # Use system-wide configuration and resources
---user                    # Use local user configuration (default)
 --auto-threshold N        # Reference prefix count for notification context (default: 100)
 ```
 
 **Flag Relationships:**
-- `--autonomous` implies `--system` (autonomous mode requires system installation)
 - `--autonomous` requires autonomous mode to be enabled in configuration
 - `--auto-threshold` is informational only - never blocks operations
 
@@ -56,7 +54,6 @@ Global flags can be positioned either before or after the subcommand.
 --help, -h              # Show help message
 --version               # Show version information
 --dev                   # Use containerized bgpq4 for development
---config FILE           # Use specific configuration file
 ```
 
 ## Command Reference
@@ -72,35 +69,10 @@ otto-bgp discover <devices.csv> [options]
 #### Arguments
 - `devices.csv` - CSV file with router information (required)
 
-#### Options
-```bash
---output-dir DIR         # Output directory for results (default: policies)
---show-diff             # Generate change detection report
---timeout SECONDS       # SSH connection timeout (default: 30)
-```
-
-#### Autonomous Mode Options
-```bash
---autonomous            # Enable autonomous mode for discovery
---system               # Use system-wide configuration
-```
+> Note: The `discover` command is temporarily disabled in this version while error handling is standardized. Running it exits with an error message. Supported parser options are present but the command does not execute discovery at this time.
 
 #### Examples
-```bash
-# Basic discovery
-otto-bgp discover devices.csv
-
-# Discovery with change detection (global flags before or after subcommand)
-otto-bgp discover devices.csv --show-diff --output-dir /var/lib/otto-bgp/discovery
-otto-bgp --show-diff discover devices.csv --output-dir /var/lib/otto-bgp/discovery
-
-# Autonomous system-wide discovery
-otto-bgp discover devices.csv --autonomous --output-dir /var/lib/otto-bgp/policies
-otto-bgp --autonomous discover devices.csv --output-dir /var/lib/otto-bgp/policies
-
-# Parallel discovery with error handling
-otto-bgp discover devices.csv --parallel 10 --timeout 45 --skip-errors
-```
+No-op while disabled.
 
 #### CSV Format
 ```csv
@@ -123,13 +95,13 @@ otto-bgp policy <input_file> [options]
 
 #### Options
 ```bash
---output-dir DIR, -o DIR    # Output directory (default: ./policies)
---separate, -s              # Create separate file per AS
---test                      # Test bgpq4 connectivity
---test-as AS_NUMBER         # Test with specific AS number
---timeout SECONDS           # bgpq4 timeout per query (default: 45)
---parallel N                # Parallel bgpq4 processes (default: 4)
---no-rpki                   # Disable RPKI validation during policy generation (not recommended)
+-o FILE, --output FILE   # Combined output filename (default: bgpq4_output.txt)
+-s, --separate           # Create separate file per AS
+--output-dir DIR         # Output directory (default: policies)
+--timeout SECONDS        # bgpq4 timeout per query (default: 30)
+--test                   # Test bgpq4 connectivity and exit
+--test-as AS_NUMBER      # AS number for connectivity test (default: 7922)
+--no-rpki                # Disable RPKI validation during policy generation (not recommended)
 ```
 
 #### Autonomous Mode Options
@@ -155,9 +127,6 @@ otto-bgp --autonomous --auto-threshold 150 policy as_list.txt
 # Test connectivity before generation
 otto-bgp policy as_list.txt --test --test-as 13335
 
-# High-performance generation
-otto-bgp policy large_as_list.txt --parallel 8 --timeout 60
-
 # Disable RPKI validation (not recommended)
 otto-bgp policy as_list.txt --no-rpki
 
@@ -182,16 +151,23 @@ Apply BGP policies to routers via NETCONF with safety controls.
 otto-bgp apply [options]
 ```
 
-#### Safety Options
+#### Options
 ```bash
---router HOSTNAME          # Apply to specific router
---policy-dir DIR           # Directory containing policies
---dry-run                  # Preview changes without applying
---confirm                  # Use confirmed commits
---confirm-timeout SECONDS  # Confirmation timeout (default: 120)
---force                    # Override safety checks (use with caution)
---yes, -y                  # Skip confirmation prompts
---no-rpki                  # Disable RPKI validation during policy application (not recommended)
+--router HOSTNAME         # Apply to specific router (required)
+--policy-dir DIR          # Root policy directory (default: policies)
+--dry-run                 # Preview changes without applying
+--confirm                 # Use confirmed commits
+--confirm-timeout SECONDS # Confirmation timeout (default: 120)
+--diff-format FORMAT      # Diff format: text, set, xml (default: text)
+--skip-safety             # Skip safety validation (not recommended)
+--force                   # Force application despite high risk
+--yes, -y                 # Skip confirmation prompts
+--username USERNAME       # NETCONF username (or NETCONF_USERNAME env var)
+--password PASSWORD       # NETCONF password (or NETCONF_PASSWORD env var)
+--ssh-key PATH            # SSH private key (or NETCONF_SSH_KEY env var)
+--port PORT               # NETCONF port (default: 830 or NETCONF_PORT env var)
+--timeout SECONDS         # Connection timeout (default: 30)
+--comment TEXT            # Commit comment
 ```
 
 #### Autonomous Mode Options (v0.3.2)
@@ -211,8 +187,8 @@ otto-bgp apply --router lab-router1 --dry-run
 # Apply with confirmation window
 otto-bgp apply --router lab-router1 --confirm --confirm-timeout 300
 
-# Apply to specific router with custom policy directory
-otto-bgp apply --router edge-router1 --policy-dir /var/lib/otto-bgp/policies/routers/edge-router1
+# Apply to specific router with custom policy root (code appends routers/<router>)
+otto-bgp apply --router edge-router1 --policy-dir /var/lib/otto-bgp/policies
 ```
 
 **Autonomous Application:**
@@ -245,7 +221,7 @@ otto-bgp apply --router router1 --confirm --confirm-timeout 600
 
 **Autonomous Mode:**
 - Risk-based decisions (only low-risk auto-applied)
-- Email notifications for ALL NETCONF events
+- Email notifications when autonomous email notifications are enabled in configuration
 - Threshold informational only (never blocks)
 - Automatic fallback to manual approval for high-risk changes
 
@@ -282,24 +258,12 @@ otto-bgp pipeline <devices.csv> [options]
 ```bash
 # Complete manual pipeline
 otto-bgp pipeline devices.csv --output-dir /var/lib/otto-bgp/output
-
-# Generation only (no application)
-otto-bgp pipeline devices.csv --skip-application
-
-# Use existing discovery data
-otto-bgp pipeline devices.csv --skip-discovery --output-dir /var/lib/otto-bgp/output
 ```
 
 **Autonomous Pipeline:**
 ```bash
-# Full autonomous pipeline
-otto-bgp pipeline devices.csv --autonomous --output-dir /var/lib/otto-bgp/output
-
-# Autonomous with custom threshold
-otto-bgp pipeline devices.csv --system --autonomous --auto-threshold 150
-
-# Autonomous generation, manual application
-otto-bgp pipeline devices.csv --autonomous --skip-application
+# Autonomous with custom threshold (autonomous must be enabled in configuration)
+otto-bgp --autonomous --auto-threshold 150 pipeline devices.csv --output-dir /var/lib/otto-bgp/output
 ```
 
 ### 5. list - Resource Listing

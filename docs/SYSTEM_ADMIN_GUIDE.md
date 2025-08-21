@@ -8,18 +8,19 @@ For Juniper router configuration and network engineering topics, see the Network
 
 ## Service Account Setup
 
-Create otto.bgp system user for service operations:
+Create the Otto BGP system user for service operations:
 
 ```bash
-# Create system user
-useradd -r -s /bin/bash -d /var/lib/otto-bgp otto.bgp
+# Note: The installer creates 'otto-bgp' (hyphen). If you use the provided unit files (which default to 'otto.bgp'),
+# either change the unit User/Group to 'otto-bgp' or create the 'otto.bgp' account explicitly.
+useradd -r -s /bin/bash -d /var/lib/otto-bgp otto-bgp
 
 # Create required directories
 mkdir -p /var/lib/otto-bgp/{ssh-keys,policies,logs}
 mkdir -p /etc/otto-bgp
 
 # Set ownership and permissions
-chown -R otto.bgp:otto.bgp /var/lib/otto-bgp
+chown -R otto-bgp:otto-bgp /var/lib/otto-bgp
 chmod 700 /var/lib/otto-bgp/ssh-keys
 chmod 600 /var/lib/otto-bgp/ssh-keys/*
 
@@ -96,11 +97,12 @@ When network engineers add new routers to the network, system administrators mus
 
 **Step 1: Add Device to Inventory**
 ```bash
-# Add new device to devices.csv
-echo "192.168.1.100,new-core-router" | sudo tee -a /var/lib/otto-bgp/config/devices.csv
+# Add new device to devices.csv (system unit uses /etc/otto-bgp/devices.csv)
+echo "address,hostname" | sudo tee /etc/otto-bgp/devices.csv
+echo "192.168.1.100,new-core-router" | sudo tee -a /etc/otto-bgp/devices.csv
 
 # Verify addition
-sudo cat /var/lib/otto-bgp/config/devices.csv
+sudo cat /etc/otto-bgp/devices.csv
 ```
 
 **Step 2: Provide SSH Public Key to Network Team**
@@ -160,9 +162,8 @@ sudo -u otto-bgp ssh -i /var/lib/otto-bgp/ssh-keys/otto-bgp \
     -o UserKnownHostsFile=/var/lib/otto-bgp/ssh-keys/known_hosts \
     bgp-read@192.168.1.100 "show version | match Model"
 
-# If successful, test with Otto BGP
-sudo -u otto-bgp /opt/otto-bgp/otto-bgp collect \
-    <(echo "192.168.1.100,new-core-router") --test
+# If successful, test collection with Otto BGP using the CSV file
+sudo -u otto-bgp /opt/otto-bgp/otto-bgp collect /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output
 ```
 
 ### Handling Host Key Changes
@@ -306,7 +307,7 @@ When network engineers perform router maintenance that regenerates keys:
 ```bash
 # Monthly: Verify all host keys are still valid
 sudo -u otto-bgp /opt/otto-bgp/scripts/verify-host-keys.sh \
-    /var/lib/otto-bgp/config/devices.csv \
+    /etc/otto-bgp/devices.csv \
     /var/lib/otto-bgp/ssh-keys/known_hosts
 
 # Weekly: Create known_hosts backup
@@ -369,8 +370,7 @@ sudo chmod 644 /var/lib/otto-bgp/ssh-keys/otto-bgp.pub
 sudo chmod 644 /var/lib/otto-bgp/ssh-keys/known_hosts
 
 # Test recovery
-sudo -u otto-bgp /opt/otto-bgp/otto-bgp collect \
-    /var/lib/otto-bgp/config/devices.csv --test
+sudo -u otto-bgp /opt/otto-bgp/otto-bgp collect /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/output
 ```
 
 **Security Audit & Verification**
@@ -388,7 +388,7 @@ while IFS=',' read -r ip hostname; do
             echo "WARNING: No host key for $ip ($hostname)"
         fi
     fi
-done < /var/lib/otto-bgp/config/devices.csv
+done < /etc/otto-bgp/devices.csv
 
 # Generate host key report
 sudo tee /tmp/host-key-report.sh << 'EOF'
@@ -422,7 +422,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-User=otto.bgp
+User=otto-bgp
 ExecStart=/usr/local/bin/otto-bgp-ssh-monitor
 StandardOutput=journal
 StandardError=journal
@@ -437,7 +437,7 @@ sudo tee /usr/local/bin/otto-bgp-ssh-monitor << 'EOF'
 # Monitor SSH host key health
 
 KNOWN_HOSTS="/var/lib/otto-bgp/ssh-keys/known_hosts"
-DEVICES_CSV="/var/lib/otto-bgp/devices.csv"
+DEVICES_CSV="/etc/otto-bgp/devices.csv"
 LOG_PREFIX="OTTO-BGP-SSH-MONITOR"
 
 # Check if known_hosts file exists and is readable
@@ -619,7 +619,7 @@ sudo systemctl show otto-bgp.service
 sudo -u otto.bgp /opt/otto-bgp/otto-bgp --help
 
 # Verify environment variables
-sudo -u otto.bgp env | grep OTTO_BGP
+sudo -u otto-bgp env | grep OTTO_BGP
 ```
 
 ### File System Permissions
@@ -632,7 +632,7 @@ ls -la /var/lib/otto-bgp/
 ls -la /var/lib/otto-bgp/ssh-keys/
 
 # Verify configuration file access
-sudo -u otto.bgp cat /etc/otto-bgp/otto.conf
+sudo -u otto-bgp cat /etc/otto-bgp/otto.env
 
 # Test log file access
 sudo -u otto.bgp touch /var/lib/otto-bgp/logs/test.log
