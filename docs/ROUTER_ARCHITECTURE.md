@@ -1,291 +1,201 @@
-# Otto BGP v0.3.2 Router-Aware Architecture
+# Otto BGP v0.3.2 Router‑Aware Architecture
 
 ## Overview
 
-Otto BGP v0.3.2 introduces a router-aware architecture that transforms BGP policy management from a simple AS-centric approach to a sophisticated router-specific policy generation system with autonomous operation capabilities. This document details the architectural components and their interactions.
+Otto BGP v0.3.x implements a router‑aware architecture that discovers BGP context per router, generates AS policies via bgpq4, and safely applies configuration through NETCONF with always‑on safety guardrails. This document reflects the current codebase and module APIs.
 
-## Core Architecture Components
+## Core Components
 
-### 1. Router Identity Foundation
+### 1) Models (source of truth)
 
-The router identity system provides unique identification and profile management for each router in the network.
+- RouterProfile: Complete BGP profile carried through the pipeline.
+  - Fields: `hostname: str`, `ip_address: str`, `bgp_config: str`, `discovered_as_numbers: Set[int]`, `bgp_groups: Dict[str, List[int]]`, `metadata: Dict`.
+- DeviceInfo: Enhanced device identity for collection.
+  - Fields: `address: str`, `hostname: str` (required in v0.3.0; auto‑generated from IP if omitted), optional `username`, `password`, `port`, `role`, `region`.
 
-#### RouterProfile Model
-```python
-@dataclass
-class RouterProfile:
-    hostname: str           # Unique router identifier
-    address: str            # Management IP address
-    model: Optional[str]    # Hardware model (e.g., MX960, MX480)
-    version: Optional[str]  # OS version
-    role: Optional[str]     # Network role (edge, core, transit)
-    location: Optional[str] # Physical/logical location
-    bgp_config: Optional[Dict] = None  # Raw BGP configuration
-```
+References: `otto_bgp/models/__init__.py`
 
-#### DeviceInfo Model
-```python
-@dataclass
-class DeviceInfo:
-    hostname: str
-    address: str
-    username: Optional[str] = None
-    password: Optional[str] = None
-    port: int = 22
-```
+### 2) Discovery
 
-### 2. Discovery Engine
+- JuniperSSHCollector: Collects BGP configuration via SSH with strict host‑key policy.
+- RouterInspector: Parses BGP config to extract groups and peer ASNs.
+  - Key methods: `discover_bgp_groups(config: str) -> Dict[str, List[int]]`, `extract_peer_relationships(config: str) -> Dict[int, str]`, `identify_bgp_version(config: str) -> str`, `inspect_router(profile: RouterProfile) -> DiscoveryResult`, `merge_discovery_results(results) -> Dict`.
+- YAMLGenerator: Writes auto‑generated discovery artifacts with history and diffs.
+  - Files: `policies/discovered/bgp-mappings.yaml`, `policies/discovered/router-inventory.json`, timestamped `policies/discovered/history/*`, and `diff_report_*.txt` when diffing.
 
-The discovery engine automatically inspects routers to understand their BGP configurations and relationships.
+References: `otto_bgp/collectors/juniper_ssh.py`, `otto_bgp/discovery/inspector.py`, `otto_bgp/discovery/yaml_generator.py`
 
-#### RouterInspector
-- Parses BGP configuration from routers
-- Identifies BGP groups and their AS numbers
-- Maps AS numbers to specific BGP groups
-- Tracks export/import policies
+Note: The legacy `discover` CLI command is temporarily disabled while error handling is standardized; discovery utilities remain available programmatically.
 
-#### Key Methods:
-- `inspect_router(profile: RouterProfile) -> DiscoveryResult`
-- `parse_bgp_groups(config: str) -> List[BGPGroup]`
-- `extract_as_numbers(group_config: str) -> Set[int]`
+### 3) Policy Generation
 
-### 3. Policy Generation Engine
+- BGPq4Wrapper: Secure wrapper around bgpq4 (native or container) with optional proxy and caching.
+  - Validates AS numbers and policy names; builds commands without string interpolation.
+  - Methods:
+    - `generate_policy_for_as(as_number, policy_name=None, irr_server=None, timeout=None)`
+    - `generate_policies_batch(as_numbers, custom_policy_names=None, parallel=True, max_workers=None)`
+    - `generate_policies_parallel(...)`
+    - `write_policies_to_files(batch_result, output_dir, separate_files=True, combined_filename=...)`
+    - `test_bgpq4_connection(test_as=7922)`
+  - Features: parallel generation, process‑safe file cache, optional IRR proxy integration.
 
-Generates router-specific BGP policies based on discovered configurations.
+References: `otto_bgp/generators/bgpq4_wrapper.py`
 
-#### Router-Specific Generation
-- Policies generated per router based on its BGP groups
-- AS numbers associated with specific groups
-- Customized policy names per router context
+### 4) Directory Management
 
-#### BGPq4Wrapper Enhancements
-- Proxy support for restricted networks
-- Router context tracking in generation results
-- Performance optimizations for batch generation
+- DirectoryManager: Creates and manages output layout for router‑aware outputs (routers/, discovered/, reports/).
+  - Creates `policies/routers/{hostname}/AS{number}_policy.txt`, `combined_policies.txt` and `metadata.json` when used by pipelines/components that target router‑scoped output.
+  - Also manages `policies/discovered/` and `policies/reports/` folders.
 
-### 4. Policy Application System
+References: `otto_bgp/utils/directories.py`, optional integration via pipeline/combiner utilities.
 
-Automated policy deployment to routers via NETCONF/PyEZ.
+### 5) Adaptation & Application
 
-#### JuniperPolicyApplier
-- NETCONF-based configuration management
-- Atomic policy updates with rollback capability
-- Confirmation-based commits for safety
+- PolicyAdapter: Transforms generated policies into Junos configuration (prefix‑lists and/or policy‑statements) and can build group import chains.
+- JuniperPolicyApplier: Applies config via NETCONF/PyEZ with preview, confirmed commits, and rollback.
+- UnifiedSafetyManager: Always‑active safety validation (guardrails, syntax checks, prefix limits, impact estimation, signal‑safe rollbacks) with optional autonomous‑mode notifications.
 
-#### Safety Features:
-- Policy validation before application
-- BGP session impact analysis
-- Automatic rollback on errors
-- Dry-run capability
+Typical apply flow:
+1) Caller reads generated files (e.g., `AS{n}_policy.txt`) and constructs a list of dicts: `{ 'as_number': int, 'content': str }`.
+2) `PolicyAdapter.adapt_policies_for_router(hostname, policies, bgp_groups, policy_style)` produces configuration text.
+3) `JuniperPolicyApplier.connect_to_router(...)` → `preview_changes([...])` → `apply_with_confirmation(policies, confirm_timeout, comment)`.
 
-### 5. IRR Proxy Support
+References: `otto_bgp/appliers/adapter.py`, `otto_bgp/appliers/juniper_netconf.py`, `otto_bgp/appliers/safety.py`
 
-Enables policy generation in restricted network environments.
+### 6) IRR Proxy (restricted networks)
 
-#### IRRProxyManager
-- SSH tunnel management for IRR access
-- Automatic tunnel health monitoring
-- Transparent BGPq4 command wrapping
-- Multi-tunnel support for redundancy
+- IRRProxyManager: Manages SSH tunnels to IRR servers and rewrites bgpq4 commands to use local endpoints.
+  - Health monitoring and auto‑recovery, strict host‑key checking, resource cleanup.
+  - `wrap_bgpq4_command(cmd, irr_server=None)` integrates transparently with `BGPq4Wrapper`.
 
-## Data Flow Architecture
+References: `otto_bgp/proxy/irr_tunnel.py` (imported as `otto_bgp.proxy`)
+
+## Data Flow
 
 ```
-1. Discovery Phase:
-   CSV Input → DeviceInfo → JuniperSSHCollector → RouterProfile
-                                     ↓
-                            RouterInspector → DiscoveryResult
-                                     ↓
-                            YAMLGenerator → Router Mappings
+1) Discovery (programmatic):
+   devices.csv → DeviceInfo → JuniperSSHCollector → RouterProfile(bgp_config)
+                                           ↓
+                                   RouterInspector → DiscoveryResult
+                                           ↓
+                          YAMLGenerator → bgp-mappings.yaml + router-inventory.json
 
-2. Policy Generation Phase:
-   Router Mappings → ASNumberExtractor → AS Numbers
-                            ↓
-                    BGPq4Wrapper → Policy Generation
-                            ↓
-                    DirectoryManager → Router-Specific Policies
+2) Generation:
+   Router/AS sets → BGPq4Wrapper.generate_policies_batch → PolicyBatchResult
+                                           ↓
+                         write_policies_to_files → AS{n}_policy.txt (or combined)
 
-3. Application Phase:
-   Router Policies → PolicyAdapter → JuniperPolicyApplier
-                            ↓
-                    UnifiedSafetyManager → Validation
-                            ↓
-                    NETCONF → Router Configuration
+3) Adapt & Apply:
+   AS{n}_policy.txt → PolicyAdapter (Junos config)
+                                           ↓
+   UnifiedSafetyManager.validate_policies_before_apply
+                                           ↓
+   JuniperPolicyApplier.preview_changes → apply_with_confirmation → NETCONF
 ```
+
+Notes:
+- Discovery artifacts are written to `policies/discovered/` as `bgp-mappings.yaml` and `router-inventory.json` (not `router_mappings.yaml` or `router_inventory.yaml`).
+- There is no `applier.load_router_policies(...)` API; callers load files and pass policy dicts to the adapter/applier.
 
 ## Directory Structure
 
 ```
 policies/
 ├── discovered/
-│   ├── router_mappings.yaml      # AS-to-router mappings
-│   ├── router_inventory.yaml     # Router profiles
-│   └── history/                  # Historical mappings
+│   ├── bgp-mappings.yaml        # Auto-generated mappings (DO NOT EDIT)
+│   ├── router-inventory.json    # Router profiles summary
+│   ├── diff_report_*.txt        # Human-readable diffs (optional)
+│   └── history/                 # Snapshots of previous runs
 ├── routers/
-│   ├── router1/
-│   │   ├── AS12345_policy.txt    # Router-specific policies
-│   │   ├── AS67890_policy.txt
-│   │   └── metadata.json         # Generation metadata
-│   └── router2/
-│       ├── AS11111_policy.txt
+│   └── {router-hostname}/
+│       ├── AS12345_policy.txt   # Generated per-AS policies (when router-scoped output is used)
+│       ├── AS67890_policy.txt
 │       └── metadata.json
 └── reports/
-    ├── discovery_diff.txt        # Change reports
-    └── application_log.txt       # Deployment logs
+    ├── deployment-matrix.csv    # Deployment matrix (reports module)
+    └── generation-log.json      # Generation logs (where produced)
 ```
 
-## Router Discovery Process
+Related: `otto_bgp/reports/matrix.py` can also emit a text summary alongside CSV/JSON.
 
-### 1. BGP Configuration Collection
-```python
-# Collect raw BGP configuration
-bgp_config = collector.collect_bgp_config(device.address)
-```
+## Example Usage
 
-### 2. Configuration Parsing
+### Collect & Discover
 ```python
-# Parse BGP groups and AS numbers
-result = inspector.inspect_router(profile)
-# Result contains:
-# - bgp_groups: List of BGP group configurations
-# - as_numbers: Set of discovered AS numbers
-# - group_as_mapping: Group-to-AS associations
-```
+from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
+from otto_bgp.discovery import RouterInspector, YAMLGenerator
+from otto_bgp.models import DeviceInfo
 
-### 3. Mapping Generation
-```python
-# Generate YAML mappings
+collector = JuniperSSHCollector()
+devices = [DeviceInfo(address='192.0.2.10', hostname='edge-nyc-1')]
+
+profiles = []
+for d in devices:
+    cfg = collector.collect_bgp_config(d.address)
+    profile = d.to_router_profile()
+    profile.bgp_config = cfg
+    result = RouterInspector().inspect_router(profile)
+    profiles.append(profile)
+
+yaml_gen = YAMLGenerator()
 mappings = yaml_gen.generate_mappings(profiles)
-# Creates:
-# - Router-to-AS mappings
-# - AS-to-router reverse mappings
-# - BGP group inventories
+yaml_gen.save_with_history(mappings)
 ```
 
-## Policy Generation Process
-
-### 1. Router-Specific AS Lists
+### Generate Policies
 ```python
-# Get AS numbers for specific router
-router_as_numbers = mappings['routers'][hostname]['discovered_as_numbers']
+from otto_bgp.generators.bgpq4_wrapper import BGPq4Wrapper
+
+bgpq4 = BGPq4Wrapper()
+batch = bgpq4.generate_policies_batch({13335, 15169, 32934})
+files = bgpq4.write_policies_to_files(batch, output_dir='policies/routers/edge-nyc-1')
 ```
 
-### 2. Batch Generation with Context
+### Adapt & Apply (preview + confirmed commit)
 ```python
-# Generate policies with router context
-for router in routers:
-    policies = bgpq4.generate_policies_batch(
-        router.as_numbers,
-        router_context=router.hostname
-    )
+from otto_bgp.appliers import JuniperPolicyApplier, PolicyAdapter, UnifiedSafetyManager
+
+# Load policy files → build policies list with {'as_number', 'content'}
+policies = [
+    { 'as_number': 13335, 'content': open('policies/routers/edge-nyc-1/AS13335_policy.txt').read() }
+]
+
+adapter = PolicyAdapter()
+adapted = adapter.adapt_policies_for_router('edge-nyc-1', policies, bgp_groups={'external-peers': [13335]})
+
+safety = UnifiedSafetyManager()
+check = safety.validate_policies_before_apply(policies)
+if not check.safe_to_proceed:
+    raise RuntimeError('Safety validation failed')
+
+applier = JuniperPolicyApplier()
+applier.connect_to_router(hostname='192.0.2.10', username='netconf', password='secret')
+applier.preview_changes(policies)
+result = applier.apply_with_confirmation(policies, confirm_timeout=120, comment='Otto BGP policy update')
 ```
 
-### 3. Router-Specific Storage
-```python
-# Store in router-specific directory
-dir_mgr.save_router_policies(router.hostname, policies)
-```
+## Security
 
-## Policy Application Process
+- Host keys: Strict SSH host‑key verification with a setup mode for first‑time key collection.
+- Command safety: AS numbers validated (0–4294967295) and policy names sanitized; bgpq4 commands constructed as argument lists.
+- Guardrails: Always‑active safety checks (bogon detection, prefix thresholds, duplicates, syntax), unified risk assessment, and signal‑safe emergency rollback.
+- Process hygiene: Managed subprocesses, tunnel lifecycle management, and cleanup on exit.
 
-### 1. Policy Loading
-```python
-# Load router-specific policies
-policies = applier.load_router_policies(f"policies/routers/{hostname}")
-```
+## Performance
 
-### 2. Safety Validation
-```python
-# Validate before application
-safety_result = safety.validate_policies_before_apply(policies)
-if not safety_result.safe_to_proceed:
-    abort_application()
-```
+- Parallelism: Parallel bgpq4 invocation with adaptive worker counts; optional sequential mode.
+- Caching: Process‑safe policy cache (and in‑process cache when enabled) reduces repeated bgpq4 calls.
+- Reporting: Deployment matrices and summaries to help analyze router/AS distribution.
 
-### 3. NETCONF Application
-```python
-# Apply with confirmation
-result = applier.apply_with_confirmation(
-    policies=policies,
-    confirm_timeout=120,
-    comment="Otto BGP policy update"
-)
-```
+## Error Handling & Reporting
 
-## Security Architecture
+- Graceful degradation: Collects errors per device/AS and continues where safe.
+- Rollback: Confirmed commits with rollback and a rollback checkpoint mechanism.
+- Diffing: `YAMLGenerator` emits human‑readable diffs of discovery changes.
+- Reports: `reports/matrix.py` generates CSV/JSON/text deployment matrices.
 
-### Host Key Verification
-- Strict SSH host key checking
-- Known hosts file management
-- Setup mode for initial key collection
+## Roadmap (selected)
 
-### Command Injection Prevention
-- AS number validation (0-4294967295)
-- Policy name sanitization
-- No shell command construction
-
-### Process Management
-- Signal handlers for cleanup
-- Automatic tunnel termination
-- Resource leak prevention
-
-## Performance Optimizations
-
-### Parallel Processing
-- Concurrent router discovery
-- Parallel policy generation
-- Batch BGPq4 execution
-
-### Caching Strategy
-- Discovery result caching
-- Policy generation caching
-- Connection pooling
-
-### Progress Tracking
-- Real-time status updates
-- Progress indicators
-- Completion estimates
-
-## Error Handling
-
-### Graceful Degradation
-- Continue on partial failures
-- Collect all errors for reporting
-- Maintain partial results
-
-### Rollback Capabilities
-- Configuration rollback on error
-- State restoration
-- Audit trail maintenance
-
-## Monitoring and Reporting
-
-### Discovery Reports
-- Changes detected between runs
-- New AS numbers discovered
-- Removed or modified groups
-
-### Application Reports
-- Policies applied successfully
-- Failed applications
-- Rollback events
-
-### Performance Metrics
-- Discovery duration per router
-- Policy generation time
-- Application success rate
-
-## Future Enhancements
-
-### Planned Features
-- Multi-vendor support (Cisco, Arista)
-- REST API for integration
-- Web UI for management
-- Historical configuration tracking
-- Automated rollback triggers
-
-### Scalability Improvements
-- Distributed processing
-- Database backend
-- Event-driven updates
-- Real-time synchronization
+- Multi‑vendor adapters (Cisco/Arista), REST API, and UI.
+- Distributed processing and event‑driven updates.
+- Richer post‑apply health checks and autonomous mode controls.
