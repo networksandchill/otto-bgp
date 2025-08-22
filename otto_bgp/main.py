@@ -336,6 +336,7 @@ def cmd_policy(args):
 
 def cmd_discover(args):
     """Discover BGP configurations and generate mappings"""
+    from otto_bgp.utils.logging import get_logger
     logger = get_logger('otto-bgp.discover')
     
     try:
@@ -1592,6 +1593,7 @@ def main():
         print_warning("Operation interrupted by user")
         return 130
     except Exception as e:
+        from otto_bgp.utils.logging import get_logger
         logger = get_logger('otto-bgp.main')
         logger.error(f"Unexpected error: {e}")
         print(ErrorFormatter.format_error(e))

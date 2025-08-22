@@ -499,44 +499,44 @@ class BGPPolicyPipeline:
                 self.logger.info(f"Phase 3: Generating router-specific policies")
                 
                 for profile in self.router_profiles:
-                if not profile.discovered_as_numbers:
-                    self.logger.warning(f"Skipping {profile.hostname} - no AS numbers discovered")
-                    continue
-                
-                # Create router-specific output directory
-                router_dir = self._create_router_directory(profile)
-                router_directories.append(str(router_dir))
-                
-                # RPKI validation if enabled
-                if self.rpki_validator and profile.discovered_as_numbers:
-                    self.logger.info(f"Performing RPKI validation for {profile.hostname}")
-                    try:
-                        # Validate all AS numbers for this router
-                        as_list = list(profile.discovered_as_numbers)
-                        rpki_results = {}
-                        for as_number in as_list:
-                            result = self.rpki_validator.check_as_validity(as_number)
-                            rpki_results[as_number] = result
-                            self.logger.debug(f"RPKI validation for AS{as_number}: {result['state']}")
-                            if result['state'] == "invalid":
-                                self.logger.warning(f"  AS{as_number}: RPKI validation failed - {result['message']}")
-                            elif result['state'] == "valid":
-                                self.logger.debug(f"  AS{as_number}: RPKI validation passed")
-                        
-                        # Attach to profile for downstream use
-                        profile.rpki_validation_results = rpki_results
-                    except Exception as e:
-                        self.logger.warning(f"RPKI validation failed for {profile.hostname}: {e}")
-                        # Set empty results on failure
-                        profile.rpki_validation_results = {}
-                
-                # Generate policies for this router's AS numbers
-                self.logger.info(f"Generating policies for {profile.hostname}: {len(profile.discovered_as_numbers)} AS numbers")
-                success_count = self._generate_router_policies(profile, router_dir)
-                total_policies += success_count
-                
-                # Create metadata file for this router
-                self._create_router_metadata(profile, router_dir, success_count)
+                    if not profile.discovered_as_numbers:
+                        self.logger.warning(f"Skipping {profile.hostname} - no AS numbers discovered")
+                        continue
+                    
+                    # Create router-specific output directory
+                    router_dir = self._create_router_directory(profile)
+                    router_directories.append(str(router_dir))
+                    
+                    # RPKI validation if enabled
+                    if self.rpki_validator and profile.discovered_as_numbers:
+                        self.logger.info(f"Performing RPKI validation for {profile.hostname}")
+                        try:
+                            # Validate all AS numbers for this router
+                            as_list = list(profile.discovered_as_numbers)
+                            rpki_results = {}
+                            for as_number in as_list:
+                                result = self.rpki_validator.check_as_validity(as_number)
+                                rpki_results[as_number] = result
+                                self.logger.debug(f"RPKI validation for AS{as_number}: {result['state']}")
+                                if result['state'] == "invalid":
+                                    self.logger.warning(f"  AS{as_number}: RPKI validation failed - {result['message']}")
+                                elif result['state'] == "valid":
+                                    self.logger.debug(f"  AS{as_number}: RPKI validation passed")
+                            
+                            # Attach to profile for downstream use
+                            profile.rpki_validation_results = rpki_results
+                        except Exception as e:
+                            self.logger.warning(f"RPKI validation failed for {profile.hostname}: {e}")
+                            # Set empty results on failure
+                            profile.rpki_validation_results = {}
+                    
+                    # Generate policies for this router's AS numbers
+                    self.logger.info(f"Generating policies for {profile.hostname}: {len(profile.discovered_as_numbers)} AS numbers")
+                    success_count = self._generate_router_policies(profile, router_dir)
+                    total_policies += success_count
+                    
+                    # Create metadata file for this router
+                    self._create_router_metadata(profile, router_dir, success_count)
             
                 # Phase 4: Generate Reports
                 self.logger.info("Phase 4: Generating deployment reports")
