@@ -22,7 +22,7 @@ from .guardrails import (
     ConcurrentOperationGuardrail, SignalHandlingGuardrail,
     initialize_default_guardrails
 )
-from .exit_codes import OttoExitCodes, ExitCodeManager, get_exit_manager
+from .exit_codes import OttoExitCodes
 
 __all__ = [
     # Core applier components
@@ -49,8 +49,6 @@ __all__ = [
     
     # Exit code system
     'OttoExitCodes',
-    'ExitCodeManager',
-    'get_exit_manager',
     
     # Exception classes
     'ConnectionError',

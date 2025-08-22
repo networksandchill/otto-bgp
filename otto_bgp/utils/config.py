@@ -547,7 +547,26 @@ class ConfigManager:
         return config_path
     
     def get_config(self) -> BGPToolkitConfig:
-        """Get current configuration"""
+        """Get current configuration with timeout validation"""
+        # Validate timeouts on first config load
+        if not hasattr(self, '_timeouts_validated'):
+            from otto_bgp.utils.timeout_config import validate_timeouts
+            timeout_results = validate_timeouts()
+            
+            # Log timeout validation summary
+            logger = logging.getLogger('otto-bgp.config')
+            total_count = len(timeout_results.get('timeouts', {}))
+            valid = timeout_results.get('valid', False)
+            logger.info(f"Timeout validation completed: {'valid' if valid else 'issues found'} ({total_count} configurations checked)")
+            
+            # Log any timeout issues
+            for warning in timeout_results.get('warnings', []):
+                logger.warning(f"Timeout configuration warning: {warning}")
+            for error in timeout_results.get('errors', []):
+                logger.error(f"Timeout configuration error: {error}")
+            
+            self._timeouts_validated = True
+        
         return self.config
     
     def update_ssh_config(self, **kwargs):

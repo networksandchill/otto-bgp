@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .exit_codes import OttoExitCodes, get_exit_manager
+from .exit_codes import OttoExitCodes
 
 
 @dataclass
@@ -675,8 +675,7 @@ class SignalHandlingGuardrail(GuardrailComponent):
                     f"Force exit on repeated {signal_name} (thread {thread_id}) - "
                     f"shutdown already in progress"
                 )
-                import sys
-                sys.exit(128 + signum)
+                raise KeyboardInterrupt(f"Force exit on repeated {signal_name}")
             
             # Atomically set shutdown state - first signal wins
             self._shutdown_event.set()
@@ -703,17 +702,9 @@ class SignalHandlingGuardrail(GuardrailComponent):
                 f"Rollback thread still running after 30s timeout (signal {signal_name})"
             )
         
-        # Exit with appropriate signal code
-        exit_manager = get_exit_manager()
-        if signum == signal.SIGINT:
-            exit_manager.exit_with_code(OttoExitCodes.SIGINT_TERMINATION, 
-                                      f"Terminated by {signal_name}")
-        elif signum == signal.SIGTERM:
-            exit_manager.exit_with_code(OttoExitCodes.SIGTERM_TERMINATION,
-                                      f"Terminated by {signal_name}")
-        else:
-            exit_manager.exit_with_code(OttoExitCodes.GENERAL_ERROR,
-                                      f"Terminated by signal {signum}")
+        # Signal cleanup complete - let main handle exit
+        self.logger.info(f"Signal handler cleanup complete for {signal_name}")
+        raise KeyboardInterrupt(f"Terminated by {signal_name}")
         
     def _reload_handler(self, signum: int, frame):
         """Handle configuration reload signal"""
@@ -777,13 +768,34 @@ def register_guardrail(guardrail: GuardrailComponent):
 
 
 def get_guardrail(name: str) -> Optional[GuardrailComponent]:
-    """Get guardrail by name"""
-    return _GUARDRAIL_REGISTRY.get(name)
+    """Get guardrail by name with validation"""
+    if name not in _GUARDRAIL_REGISTRY:
+        raise ValueError(f"Unknown guardrail name: {name}. Available: {list(_GUARDRAIL_REGISTRY.keys())}")
+    return _GUARDRAIL_REGISTRY[name]
 
 
 def get_all_guardrails() -> Dict[str, GuardrailComponent]:
     """Get all registered guardrails"""
     return dict(_GUARDRAIL_REGISTRY)
+
+
+def list_guardrails() -> List[str]:
+    """List all available guardrail names"""
+    return list(_GUARDRAIL_REGISTRY.keys())
+
+
+def validate_guardrail_health() -> Dict[str, bool]:
+    """Lightweight health checks for guardrail components"""
+    health_status = {}
+    
+    for name, guardrail in _GUARDRAIL_REGISTRY.items():
+        try:
+            # Basic health check - ensure guardrail can be instantiated
+            health_status[name] = hasattr(guardrail, 'evaluate') and callable(guardrail.evaluate)
+        except Exception:
+            health_status[name] = False
+    
+    return health_status
 
 
 def initialize_default_guardrails(logger: Optional[logging.Logger] = None) -> List[GuardrailComponent]:

@@ -7,14 +7,12 @@
     "command_timeout": 60,
     "strict_host_key_checking": true
   },
-  "bgpq4": {
+  "bgpq3": {
     "native_path": "/usr/bin/bgpq4",
     "docker_image": "ghcr.io/bgp/bgpq4:latest",
     "use_docker": false,
     "use_podman": false,
-    "command_timeout": 30,
-    "cache_enabled": true,
-    "cache_ttl": 3600
+    "command_timeout": 30
   },
   "irr_proxy": {
     "enabled": false,
@@ -40,35 +38,6 @@
       }
     ]
   },
-  "router_discovery": {
-    "enabled": true,
-    "cache_discovery_results": true,
-    "discovery_cache_ttl": 1800,
-    "auto_generate_mappings": true,
-    "track_bgp_groups": true,
-    "parallel_workers": 4
-  },
-  "policy_application": {
-    "enabled": false,
-    "dry_run_default": true,
-    "safety_validation": true,
-    "max_policy_size": 1048576,
-    "backup_before_apply": true,
-    "commit_timeout": 120
-  },
-  "netconf": {
-    "enabled": false,
-    "lab_only": true,
-    "username": null,
-    "password": null,
-    "ssh_key_path": null,
-    "port": 830,
-    "connection_timeout": 30,
-    "confirm_timeout": 120,
-    "auto_rollback": true,
-    "verify_host_keys": true,
-    "known_hosts_file": "/var/lib/otto-bgp/ssh-keys/netconf-known-hosts"
-  },
   "as_processing": {
     "min_as_number": 256,
     "max_as_number": 4294967295,
@@ -87,12 +56,28 @@
     "create_timestamps": true,
     "backup_legacy_files": true
   },
-  "performance": {
-    "parallel_workers": 4,
-    "enable_caching": true,
-    "cache_directory": "/var/lib/otto-bgp/cache",
-    "memory_limit": "512MB",
-    "progress_reporting": true
+  "installation_mode": {
+    "type": "system",
+    "user_mode_allowed": false,
+    "config_dir": "/etc/otto-bgp",
+    "data_dir": "/var/lib/otto-bgp",
+    "log_dir": "/var/log/otto-bgp"
+  },
+  "autonomous_mode": {
+    "enabled": false,
+    "guardrails_required": true,
+    "rpki_validation_required": true,
+    "safety_threshold": "high",
+    "max_prefix_change": 0.10,
+    "rollback_on_failure": true
+  },
+  "rpki": {
+    "enabled": false,
+    "vrp_cache_path": "/var/lib/otto-bgp/rpki/vrp_cache.csv",
+    "max_cache_age": 86400,
+    "fail_closed": true,
+    "allowlist_path": "/etc/otto-bgp/rpki-allowlist.txt",
+    "validation_timeout": 30
   },
   "logging": {
     "level": "INFO",

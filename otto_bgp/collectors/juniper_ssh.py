@@ -12,7 +12,6 @@ Modern implementation of SSH-based BGP data collection with:
 import paramiko
 import pandas as pd
 import os
-import sys
 import logging
 import csv
 from dataclasses import dataclass
@@ -521,39 +520,4 @@ class JuniperSSHCollector:
         }
 
 
-def remove_double_returns(text: str) -> str:
-    """
-    Remove double returns from text (utility function from legacy script)
-    
-    Args:
-        text: Input text
-        
-    Returns:
-        Text with double newlines removed
-    """
-    while '\n\n' in text:
-        text = text.replace('\n\n', '\n')
-    return text
-
-
-def extract_substring_lines(text: str, start_index: int, end_index: int) -> str:
-    """
-    Extract substring from each line (utility function from legacy script)
-    
-    Args:
-        text: Input text
-        start_index: Starting index of substring (inclusive)
-        end_index: Ending index of substring (exclusive)
-        
-    Returns:
-        Processed text with substrings extracted from each line
-    """
-    lines = text.split('\n')
-    processed_lines = []
-    
-    for line in lines:
-        if len(line) > start_index:
-            substring = line[start_index:end_index]
-            processed_lines.append(substring)
-    
-    return '\n'.join(processed_lines)
+# Removed unused helper functions

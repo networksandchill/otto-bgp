@@ -5,7 +5,6 @@ This module handles the creation and management of router-specific directory str
 for the router-aware architecture.
 """
 
-import os
 import json
 import logging
 from pathlib import Path

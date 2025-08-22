@@ -9,7 +9,6 @@ otto-bgp pipeline devices.csv --output-dir ./policies
 import argparse
 import sys
 import os
-import logging
 import subprocess
 import atexit
 import signal
@@ -42,33 +41,12 @@ _active_connections = set()
 _active_locks = set()
 _temp_files = set()
 
-def register_connection(connection):
-    """Register a connection for emergency cleanup"""
-    _active_connections.add(connection)
-
-def unregister_connection(connection):
-    """Unregister a connection from emergency cleanup"""
-    _active_connections.discard(connection)
-
-def register_lock(lock_path):
-    """Register a lock file for emergency cleanup"""
-    _active_locks.add(lock_path)
-
-def unregister_lock(lock_path):
-    """Unregister a lock file from emergency cleanup"""
-    _active_locks.discard(lock_path)
-
-def register_temp_file(file_path):
-    """Register a temporary file for emergency cleanup"""
-    _temp_files.add(file_path)
-
-def unregister_temp_file(file_path):
-    """Unregister a temporary file from emergency cleanup"""
-    _temp_files.discard(file_path)
+# Removed unused resource registration functions
 
 def emergency_cleanup():
     """Emergency cleanup handler for atexit and signal handling"""
-    logger = logging.getLogger('otto-bgp.cleanup')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.cleanup')
     
     # Close active connections
     for connection in list(_active_connections):
@@ -128,7 +106,8 @@ def setup_app_logging(verbose: bool = False, quiet: bool = False):
 @handle_errors('otto-bgp.collect')
 def cmd_collect(args):
     """BGP data collection from Juniper devices"""
-    logger = logging.getLogger('otto-bgp.collect')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.collect')
     
     # Initialize SSH collector
     collector = JuniperSSHCollector(
@@ -162,7 +141,8 @@ def cmd_collect(args):
 @handle_errors('otto-bgp.process')
 def cmd_process(args):
     """AS number extraction and BGP text processing"""
-    logger = logging.getLogger('otto-bgp.process')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.process')
     
     # Initialize processor
     processor = ASNumberExtractor()
@@ -209,7 +189,8 @@ def cmd_process(args):
 @handle_errors('otto-bgp.policy')
 def cmd_policy(args):
     """BGP policy generation using bgpq4"""
-    logger = logging.getLogger('otto-bgp.policy')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.policy')
     
     # Initialize bgpq4 wrapper with proxy support
     from otto_bgp.generators.bgpq4_wrapper import BGPq4Mode
@@ -344,7 +325,7 @@ def cmd_policy(args):
 
 def cmd_discover(args):
     """Discover BGP configurations and generate mappings"""
-    logger = logging.getLogger('otto-bgp.discover')
+    logger = get_logger('otto-bgp.discover')
     
     try:
         from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
@@ -365,25 +346,9 @@ def cmd_discover(args):
         logger.info(f"Discovering BGP configurations for {len(devices)} devices")
         profiles = []
         
-        # Collect BGP configurations from each device
-        for device in devices:
-            try:
-                logger.info(f"Collecting from {device.hostname or device.address}")
-                bgp_config = collector.collect_bgp_config(device.address)
-                
-                # Create router profile
-                profile = device.to_router_profile()
-                profile.bgp_config = bgp_config
-                
-                # Inspect BGP configuration
-                inspection_result = inspector.inspect_router(profile)
-                profiles.append(profile)
-                
-                logger.info(f"  Discovered {inspection_result.total_as_numbers} AS numbers")
-                
-            except Exception as e:
-                logger.error(f"Failed to discover {device.hostname or device.address}: {e}")
-                print_error(f"Discovery failed for {device.hostname or device.address}", str(e))
+        # Use parallel discovery for efficiency
+        from otto_bgp.utils.parallel import parallel_discover_routers
+        profiles, discovery_results = parallel_discover_routers(devices, collector, inspector)
         
         if not profiles:
             print_error("No profiles discovered", "Check device connectivity and credentials")
@@ -419,7 +384,8 @@ def cmd_discover(args):
 
 def cmd_list(args):
     """List discovered routers, AS numbers, or BGP groups"""
-    logger = logging.getLogger('otto-bgp.list')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.list')
     
     try:
         yaml_gen = YAMLGenerator(output_dir=Path(args.output_dir) / "discovered")
@@ -474,7 +440,8 @@ def cmd_list(args):
 
 def cmd_apply(args):
     """Apply BGP policies to router via NETCONF/PyEZ"""
-    logger = logging.getLogger('otto-bgp.apply')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.apply')
     
     # Check for NETCONF credentials from environment if not provided
     import os
@@ -686,7 +653,8 @@ def cmd_apply(args):
 
 def cmd_pipeline(args):
     """Unified pipeline for both system and autonomous modes"""
-    logger = logging.getLogger('otto-bgp.pipeline')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.pipeline')
     
     # Mode detection - single point of configuration
     mode = getattr(args, 'mode', 'system')
@@ -882,7 +850,8 @@ def load_device_config(devices_csv: str) -> List[DeviceInfo]:
     Raises:
         Never raises - returns empty list on any error
     """
-    logger = logging.getLogger('otto-bgp.pipeline')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.pipeline')
     
     # DEFENSIVE VALIDATION: Input parameter validation
     if devices_csv is None:
@@ -958,7 +927,8 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
     Raises:
         Never raises - returns empty list on any error
     """
-    logger = logging.getLogger('otto-bgp.pipeline')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.pipeline')
     
     # DEFENSIVE VALIDATION: Input parameter validation
     if devices is None:
@@ -1056,11 +1026,12 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
                                     logger.warning(f"RPKI validation failed for AS{as_number}: {e}")
                                     rpki_status[as_number] = {'state': 'error', 'message': str(e)}
                         
-                        # Generate policies using bgpq4 with RPKI status
-                        batch_result = bgpq4.generate_policies_batch(list(as_result.as_numbers))
+                        # Generate policies in parallel for efficiency
+                        from otto_bgp.utils.parallel import parallel_generate_policies
+                        policy_results = parallel_generate_policies(list(as_result.as_numbers), bgpq4)
                         
                         # Convert to policy format with device information and RPKI annotations
-                        for policy_result in batch_result.results:
+                        for policy_result in policy_results:
                             if policy_result.success:
                                 # Get RPKI result for this AS number
                                 rpki_result = rpki_status.get(policy_result.as_number, {})
@@ -1130,7 +1101,8 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
 
 def cmd_test_proxy(args):
     """Test IRR proxy configuration and connectivity"""
-    logger = logging.getLogger('otto-bgp.test-proxy')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.test-proxy')
     
     try:
         # Get configuration
@@ -1253,7 +1225,8 @@ def _get_rpki_config(config, args):
 
 def cmd_rpki_check(args):
     """Validate RPKI cache freshness and structure (format-agnostic)"""
-    logger = logging.getLogger('otto-bgp.rpki-check')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.rpki-check')
     
     try:
         from otto_bgp.validators.rpki import RPKIValidator
@@ -1515,7 +1488,8 @@ def create_parser():
 
 def validate_autonomous_mode(args, config):
     """Validate autonomous mode settings and handle deprecated flags"""
-    logger = logging.getLogger('otto-bgp.main')
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.main')
     
     # Handle deprecated --production flag (backward compatibility)
     # Note: Flag is not in help but still parsed for compatibility
@@ -1607,7 +1581,7 @@ def main():
         print_warning("Operation interrupted by user")
         return 130
     except Exception as e:
-        logger = logging.getLogger('otto-bgp.main')
+        logger = get_logger('otto-bgp.main')
         logger.error(f"Unexpected error: {e}")
         print(ErrorFormatter.format_error(e))
         return 1

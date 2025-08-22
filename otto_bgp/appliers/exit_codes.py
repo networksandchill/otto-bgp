@@ -139,9 +139,8 @@ class ExitCodeManager:
         # Send monitoring notification if configured
         self._send_monitoring_notification(exit_code, message, full_context)
         
-        # Exit with the specified code
-        import sys
-        sys.exit(exit_code.value)
+        # Store exit code for main to retrieve
+        self.exit_code = exit_code.value
         
     def _send_monitoring_notification(self, exit_code: OttoExitCodes, 
                                     message: str, context: Dict) -> None:
@@ -248,34 +247,7 @@ def get_exit_manager() -> ExitCodeManager:
     return _exit_manager
 
 
-def exit_success(message: str = "Operation completed successfully"):
-    """Convenience function for successful exit"""
-    get_exit_manager().exit_with_code(OttoExitCodes.SUCCESS, message)
-
-
-def exit_error(message: str = "General error occurred"):
-    """Convenience function for general error exit"""
-    get_exit_manager().exit_with_code(OttoExitCodes.GENERAL_ERROR, message)
-
-
-def exit_safety_failed(message: str = "Safety check failed"):
-    """Convenience function for safety check failure"""
-    get_exit_manager().exit_with_code(OttoExitCodes.SAFETY_CHECK_FAILED, message)
-
-
-def exit_netconf_failed(message: str = "NETCONF connection failed"):
-    """Convenience function for NETCONF connection failure"""
-    get_exit_manager().exit_with_code(OttoExitCodes.NETCONF_CONNECTION_FAILED, message)
-
-
-def exit_guardrail_violation(message: str = "Guardrail violation detected"):
-    """Convenience function for guardrail violations"""
-    get_exit_manager().exit_with_code(OttoExitCodes.GUARDRAIL_VIOLATION, message)
-
-
-def exit_rollback_failed(message: str = "Rollback operation failed"):
-    """Convenience function for rollback failures"""
-    get_exit_manager().exit_with_code(OttoExitCodes.ROLLBACK_FAILED, message)
+# Removed convenience exit functions - use return/raise patterns instead
 
 
 # Exit code descriptions for documentation and help text
@@ -309,14 +281,4 @@ EXIT_CODE_DESCRIPTIONS = {
 }
 
 
-def get_exit_code_description(exit_code: OttoExitCodes) -> str:
-    """
-    Get human-readable description for exit code
-    
-    Args:
-        exit_code: Otto BGP exit code
-        
-    Returns:
-        Description string
-    """
-    return EXIT_CODE_DESCRIPTIONS.get(exit_code, f"Unknown exit code: {exit_code.value}")
+# Removed unused get_exit_code_description function

@@ -30,7 +30,7 @@ from .guardrails import (
     GuardrailComponent, GuardrailResult, GuardrailConfig,
     initialize_default_guardrails, get_all_guardrails
 )
-from .exit_codes import OttoExitCodes, get_exit_manager
+from .exit_codes import OttoExitCodes
 from .mode_manager import ModeManager, CommitInfo, HealthResult
 
 
@@ -116,7 +116,8 @@ class UnifiedSafetyManager:
             self._install_signal_handlers()
             
         # Initialize exit manager
-        self.exit_manager = get_exit_manager()
+        # Exit code tracking for error reporting
+        self.error_codes = []
         
         # Log initialization with safety status
         self.logger.info(f"Unified Safety Manager initialized - "

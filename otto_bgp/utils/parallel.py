@@ -261,7 +261,7 @@ class ParallelExecutor:
 def parallel_discover_routers(devices: List, 
                              collector,
                              inspector,
-                             max_workers: int = 4) -> Tuple[List, List]:
+                             max_workers: Optional[int] = None) -> Tuple[List, List]:
     """
     Discover routers in parallel
     
@@ -269,11 +269,18 @@ def parallel_discover_routers(devices: List,
         devices: List of DeviceInfo objects
         collector: JuniperSSHCollector instance
         inspector: RouterInspector instance
-        max_workers: Maximum parallel connections
+        max_workers: Maximum parallel connections (None for auto-sizing)
         
     Returns:
         Tuple of (profiles, discovery_results)
     """
+    # Adaptive worker sizing
+    if max_workers is None:
+        import os
+        cpu_count = os.cpu_count() or 4
+        max_workers = min(cpu_count * 2, len(devices), 16) or 1
+    
+    logger.info(f"Parallel workers selected: {max_workers} (items={len(devices)}, cpus={os.cpu_count()})")
     executor = ParallelExecutor(max_workers=max_workers)
     
     def discover_single_router(device):
@@ -312,18 +319,25 @@ def parallel_discover_routers(devices: List,
 
 def parallel_generate_policies(as_numbers: List[int],
                               wrapper,
-                              max_workers: int = 4) -> List:
+                              max_workers: Optional[int] = None) -> List:
     """
     Generate BGP policies in parallel
     
     Args:
         as_numbers: List of AS numbers
         wrapper: BGPq4Wrapper instance
-        max_workers: Maximum parallel bgpq4 processes
+        max_workers: Maximum parallel bgpq4 processes (None for auto-sizing)
         
     Returns:
         List of PolicyGenerationResult objects
     """
+    # Adaptive worker sizing  
+    if max_workers is None:
+        import os
+        cpu_count = os.cpu_count() or 4
+        max_workers = min(cpu_count * 2, len(as_numbers), 16) or 1
+    
+    logger.info(f"Parallel workers selected: {max_workers} (items={len(as_numbers)}, cpus={os.cpu_count()})")
     executor = ParallelExecutor(max_workers=max_workers)
     
     def generate_single_policy(as_number):

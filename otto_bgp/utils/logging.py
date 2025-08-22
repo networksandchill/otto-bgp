@@ -167,6 +167,31 @@ class BGPToolkitLogger:
             self.logger.warning(message + f" - {failed} failed")
         else:
             self.logger.info(message)
+    
+    # Standard logging method delegation
+    def debug(self, msg, *args, **kwargs):
+        """Log debug message"""
+        return self.logger.debug(msg, *args, **kwargs)
+    
+    def info(self, msg, *args, **kwargs):
+        """Log info message"""
+        return self.logger.info(msg, *args, **kwargs)
+    
+    def warning(self, msg, *args, **kwargs):
+        """Log warning message"""
+        return self.logger.warning(msg, *args, **kwargs)
+    
+    def error(self, msg, *args, **kwargs):
+        """Log error message"""
+        return self.logger.error(msg, *args, **kwargs)
+    
+    def critical(self, msg, *args, **kwargs):
+        """Log critical message"""
+        return self.logger.critical(msg, *args, **kwargs)
+    
+    def exception(self, msg, *args, **kwargs):
+        """Log exception with traceback"""
+        return self.logger.exception(msg, *args, **kwargs)
 
 
 def setup_logging(config_manager=None, 
