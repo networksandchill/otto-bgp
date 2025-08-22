@@ -272,6 +272,25 @@ class IRRProxyManager:
         
         return modified_cmd
     
+    def establish_all_tunnels(self) -> bool:
+        """Establish all configured tunnels; return True if ≥1 CONNECTED."""
+        if not (self.config and self.config.enabled and self.config.tunnels):
+            return False
+        connected = 0
+        for tcfg in self.config.tunnels:
+            status = self.setup_tunnel(tcfg)
+            if status.state == TunnelState.CONNECTED:
+                connected += 1
+        return connected > 0
+
+    def get_tunnel_mapping(self) -> Dict[str, Tuple[str, int]]:
+        """Return CONNECTED tunnels as {name: ("127.0.0.1", port)}."""
+        mapping: Dict[str, Tuple[str, int]] = {}
+        for name, status in self.tunnels.items():
+            if status.state == TunnelState.CONNECTED:
+                mapping[name] = ("127.0.0.1", status.local_port)
+        return mapping
+
     def monitor_tunnels(self) -> Dict[str, TunnelStatus]:
         """
         Monitor all active tunnels and restart failed ones

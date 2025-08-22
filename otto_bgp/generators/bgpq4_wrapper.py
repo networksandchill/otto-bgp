@@ -20,7 +20,7 @@ import time
 import signal
 from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
-from typing import List, Set, Optional, Dict, Union, Any
+from typing import List, Set, Optional, Dict, Union, Any, Tuple
 from pathlib import Path
 from enum import Enum
 
@@ -178,7 +178,8 @@ def _generate_policy_worker(args) -> PolicyGenerationResult:
                 command_timeout=wrapper_config['command_timeout'],
                 native_bgpq4_path=wrapper_config['native_bgpq4_path'],
                 proxy_manager=None,  # Proxy manager cannot be pickled
-                enable_cache=False   # Use file-based caching instead
+                enable_cache=False,  # Use file-based caching instead
+                proxy_tunnels=wrapper_config.get('proxy_tunnels') or {}
             )
             
             monitor.heartbeat()
@@ -433,7 +434,8 @@ class BGPq4Wrapper:
                  native_bgpq4_path: str = None,
                  proxy_manager=None,
                  enable_cache: bool = True,
-                 cache_ttl: int = 3600):
+                 cache_ttl: int = 3600,
+                 proxy_tunnels: Dict[str, Tuple[str, int]] = None):
         """
         Initialize bgpq4 wrapper
         
@@ -445,6 +447,7 @@ class BGPq4Wrapper:
             proxy_manager: Optional IRRProxyManager for tunnel support
             enable_cache: Enable policy caching (default: True)
             cache_ttl: Cache TTL in seconds (default: 1 hour)
+            proxy_tunnels: Dict mapping tunnel names to (host, port) for workers
         """
         self.logger = logging.getLogger(__name__)
         self.mode = mode
@@ -452,6 +455,7 @@ class BGPq4Wrapper:
         self.command_timeout = command_timeout
         self.native_bgpq4_path = native_bgpq4_path
         self.proxy_manager = proxy_manager
+        self.proxy_tunnels = proxy_tunnels or {}
         self.enable_cache = enable_cache
         self.cache_ttl = cache_ttl
         
@@ -467,6 +471,14 @@ class BGPq4Wrapper:
         
         # Initialize and detect available bgpq4
         self._detect_bgpq4_availability()
+        
+        # Enforce native bgpq4 when proxy is enabled
+        proxy_active = bool(self.proxy_manager or getattr(self, 'proxy_tunnels', {}))
+        if proxy_active and self.mode in (BGPq4Mode.AUTO, BGPq4Mode.NATIVE):
+            if self.detected_mode in (BGPq4Mode.DOCKER, BGPq4Mode.PODMAN):
+                raise RuntimeError(
+                    "IRR proxy requires native bgpq4. Containerized bgpq4 cannot reach host 127.0.0.1 tunnels."
+                )
         
         self.logger.info(f"BGPq4 wrapper initialized: mode={self.detected_mode}, command={self.bgpq4_command}, proxy={'enabled' if proxy_manager else 'disabled'}, cache={'enabled' if enable_cache else 'disabled'}")
     
@@ -545,6 +557,16 @@ class BGPq4Wrapper:
         if self.proxy_manager:
             command = self.proxy_manager.wrap_bgpq4_command(command, irr_server)
             self.logger.debug(f"Applied proxy configuration to bgpq4 command")
+        
+        # If running in a worker without a proxy_manager, but with provided tunnel mapping,
+        # inject localhost:port for bgpq4
+        if not self.proxy_manager and getattr(self, 'proxy_tunnels', None):
+            # Select first available tunnel deterministically
+            name, endpoint = sorted(self.proxy_tunnels.items())[0]
+            host, port = endpoint
+            if '-h' not in command:
+                command.extend(['-h', host, '-p', str(port)])
+                self.logger.debug(f"Injected proxy_tunnels endpoint {name} -> {host}:{port}")
         
         # Add bgpq4 arguments: -J (Juniper), -l (prefix-list), policy_name, AS_number
         # Using validated inputs prevents command injection
@@ -718,24 +740,49 @@ class BGPq4Wrapper:
         
         # Auto-scale worker count based on system and workload
         if max_workers is None:
-            # Get from environment variable or auto-detect
-            env_workers = os.getenv('OTTO_BGP_BGP_MAX_WORKERS')
-            if env_workers:
+            env_workers = os.getenv('OTTO_BGP_BGPQ4_MAX_WORKERS')
+            if env_workers is not None:
                 try:
-                    max_workers = int(env_workers)
+                    w = int(env_workers)
+                    if w <= 1:
+                        max_workers = 1
+                    else:
+                        max_workers = w
                 except ValueError:
                     max_workers = None
-            
             if max_workers is None:
-                # Auto-scale: min(CPU cores, 8, number of AS numbers)
-                # Limit to 8 to prevent resource exhaustion
                 cpu_count = multiprocessing.cpu_count()
                 max_workers = min(cpu_count, 8, len(as_numbers))
+        
+        # Apply proxy-aware worker cap if proxy endpoints are present
+        try:
+            proxy_tunnels_present = bool(getattr(self, 'proxy_manager') and self.proxy_manager and self.proxy_manager.tunnels)
+        except Exception:
+            proxy_tunnels_present = False
+        if proxy_tunnels_present and isinstance(max_workers, int):
+            original_workers = max_workers
+            max_workers = min(max_workers, 4)
+            if max_workers != original_workers:
+                self.logger.info(f"Proxy active: capping workers {original_workers} -> {max_workers}")
         
         self.logger.info(f"Starting parallel policy generation for {len(as_numbers)} AS numbers using {max_workers} workers")
         
         start_time = time.time()
         results = []
+        
+        # If proxy manager is configured, establish tunnels once and snapshot endpoints
+        proxy_tunnels = {}
+        if self.proxy_manager:
+            try:
+                self.proxy_manager.establish_all_tunnels()
+                proxy_tunnels = self.proxy_manager.get_tunnel_mapping()
+                if proxy_tunnels:
+                    self.logger.info(f"Proxy endpoints available: {len(proxy_tunnels)}")
+                else:
+                    self.logger.warning("Proxy enabled but no tunnels established; proceeding without proxy")
+            except Exception as e:
+                self.logger.warning(f"Failed to establish proxy tunnels: {e}")
+                proxy_tunnels = {}
         
         # Validate all inputs first for security
         validated_tasks = []
@@ -770,7 +817,8 @@ class BGPq4Wrapper:
                         'docker_image': self.docker_image,
                         'command_timeout': self.command_timeout,
                         'native_bgpq4_path': self.native_bgpq4_path,
-                        'cache_ttl': self.cache_ttl if hasattr(self, 'cache_ttl') else 3600
+                        'cache_ttl': self.cache_ttl if hasattr(self, 'cache_ttl') else 3600,
+                        'proxy_tunnels': proxy_tunnels
                     }
                     validated_tasks.append((validated_as, policy_name, wrapper_config))
                 
@@ -978,15 +1026,23 @@ class BGPq4Wrapper:
         custom_policy_names = custom_policy_names or {}
         rpki_status = rpki_status or {}
         
-        # Decide processing method based on parameters and workload size
+        # Decide processing method based on standardized env var
+        env_workers = os.getenv('OTTO_BGP_BGPQ4_MAX_WORKERS')
         use_parallel = parallel and len(as_numbers) > 1
+        if env_workers is not None:
+            try:
+                w = int(env_workers)
+                if w <= 1:
+                    use_parallel = False
+                    max_workers = 1
+                    self.logger.info("Parallel disabled by OTTO_BGP_BGPQ4_MAX_WORKERS")
+                else:
+                    use_parallel = True
+                    max_workers = w
+                    self.logger.info(f"Parallel enabled with {w} workers by OTTO_BGP_BGPQ4_MAX_WORKERS")
+            except ValueError:
+                self.logger.warning("Invalid OTTO_BGP_BGPQ4_MAX_WORKERS value; falling back to auto")
         
-        # Check if parallel processing is disabled via environment
-        if os.getenv('OTTO_BGP_DISABLE_PARALLEL') == 'true':
-            use_parallel = False
-            self.logger.info("Parallel processing disabled via OTTO_BGP_DISABLE_PARALLEL")
-        
-        # Use parallel processing for better performance
         if use_parallel:
             return self.generate_policies_parallel(as_numbers, custom_policy_names, max_workers)
         
@@ -1129,14 +1185,18 @@ class BGPq4Wrapper:
             'cache': 'enabled' if self.cache else 'disabled'
         }
         
-        # Add parallel processing configuration
-        max_workers_env = os.getenv('OTTO_BGP_BGP_MAX_WORKERS', 'auto')
-        parallel_disabled = os.getenv('OTTO_BGP_DISABLE_PARALLEL') == 'true'
+        # Add parallel processing configuration (standardized)
+        max_workers_env = os.getenv('OTTO_BGP_BGPQ4_MAX_WORKERS', 'auto')
         cpu_count = multiprocessing.cpu_count()
+        try:
+            mw = int(max_workers_env)
+            parallel_state = 'disabled' if mw <= 1 else 'enabled'
+        except Exception:
+            parallel_state = 'enabled'
         
         status.update({
-            'parallel_processing': 'disabled' if parallel_disabled else 'enabled',
-            'max_workers_config': max_workers_env,
+            'parallel_processing': parallel_state,
+            'max_workers_config': str(max_workers_env),
             'cpu_cores': str(cpu_count),
             'auto_max_workers': str(min(cpu_count, 8))
         })
@@ -1162,11 +1222,12 @@ class BGPq4Wrapper:
         Returns:
             Optimal number of worker processes
         """
-        # Get environment override if set
-        env_workers = os.getenv('OTTO_BGP_BGP_MAX_WORKERS')
-        if env_workers:
+        # Standardized env override
+        env_workers = os.getenv('OTTO_BGP_BGPQ4_MAX_WORKERS')
+        if env_workers is not None:
             try:
-                return max(1, int(env_workers))
+                w = int(env_workers)
+                return 1 if w <= 1 else w
             except ValueError:
                 pass
         

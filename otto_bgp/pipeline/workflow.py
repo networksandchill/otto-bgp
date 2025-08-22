@@ -92,6 +92,11 @@ class BGPPolicyPipeline:
                     tunnels=irr_config.irr_proxy.tunnels
                 )
                 proxy_manager = IRRProxyManager(proxy_config, self.logger)
+                try:
+                    if proxy_manager and hasattr(proxy_manager, 'establish_all_tunnels'):
+                        proxy_manager.establish_all_tunnels()
+                except Exception as e:
+                    self.logger.warning(f"Pipeline: Failed to establish proxy tunnels: {e}")
         except Exception as e:
             self.logger.warning(f"Pipeline: Failed to initialize proxy manager: {e}")
         
@@ -203,12 +208,19 @@ class BGPPolicyPipeline:
                 return self._create_error_result(errors)
             
             # Phase 3: Policy Generation
-            self.logger.info(f"Phase 3: Generating BGP policies for {len(as_numbers)} AS numbers")
-            success_count = self._generate_policies(as_numbers)
-            
-            # Phase 4: Output Management
-            self.logger.info("Phase 4: Managing output files")
-            output_files = self._manage_output_files()
+            try:
+                self.logger.info(f"Phase 3: Generating BGP policies for {len(as_numbers)} AS numbers")
+                success_count = self._generate_policies(as_numbers)
+                
+                # Phase 4: Output Management
+                self.logger.info("Phase 4: Managing output files")
+                output_files = self._manage_output_files()
+            finally:
+                try:
+                    if self.bgp_generator.proxy_manager:
+                        self.bgp_generator.proxy_manager.cleanup_all_tunnels()
+                except Exception as e:
+                    self.logger.warning(f"Pipeline: Failed to cleanup proxy tunnels: {e}")
             
             execution_time = time.time() - self.start_time
             
@@ -483,9 +495,10 @@ class BGPPolicyPipeline:
                         self.logger.warning(f"  No AS numbers discovered for {profile.hostname}")
             
             # Phase 3: Generate Policies per Router
-            self.logger.info(f"Phase 3: Generating router-specific policies")
-            
-            for profile in self.router_profiles:
+            try:
+                self.logger.info(f"Phase 3: Generating router-specific policies")
+                
+                for profile in self.router_profiles:
                 if not profile.discovered_as_numbers:
                     self.logger.warning(f"Skipping {profile.hostname} - no AS numbers discovered")
                     continue
@@ -525,9 +538,15 @@ class BGPPolicyPipeline:
                 # Create metadata file for this router
                 self._create_router_metadata(profile, router_dir, success_count)
             
-            # Phase 4: Generate Reports
-            self.logger.info("Phase 4: Generating deployment reports")
-            self._generate_deployment_reports()
+                # Phase 4: Generate Reports
+                self.logger.info("Phase 4: Generating deployment reports")
+                self._generate_deployment_reports()
+            finally:
+                try:
+                    if self.bgp_generator.proxy_manager:
+                        self.bgp_generator.proxy_manager.cleanup_all_tunnels()
+                except Exception as e:
+                    self.logger.warning(f"Pipeline: Failed to cleanup proxy tunnels: {e}")
             
             execution_time = time.time() - self.start_time
             

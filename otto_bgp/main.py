@@ -217,6 +217,10 @@ def cmd_policy(args):
                 tunnels=config.irr_proxy.tunnels
             )
             proxy_manager = IRRProxyManager(proxy_config, logger)
+            try:
+                proxy_manager.establish_all_tunnels()
+            except Exception as e:
+                logger.warning(f"Failed to establish proxy tunnels: {e}")
     except Exception as e:
         logger.warning(f"Failed to initialize proxy manager: {e}")
     
@@ -290,37 +294,44 @@ def cmd_policy(args):
             logger.warning(f"RPKI validation failed: {e} - continuing without validation")
     
     # Generate policies
-    logger.info(f"Generating policies for {len(as_list)} AS numbers")
-    batch_result = bgpq4.generate_policies_batch(
-        as_list,
-        rpki_status=rpki_status
-    )
-    
-    # Write output files
-    output_dir = args.output_dir or "policies"
-    created_files = bgpq4.write_policies_to_files(
-        batch_result,
-        output_dir=output_dir,
-        separate_files=args.separate,
-        combined_filename=args.output or "bgpq4_output.txt",
-        rpki_status=rpki_status
-    )
-    
-    # Report results
-    print_success("Policy generation complete:")
-    print(f"  AS numbers processed: {batch_result.total_as_count}")
-    print(f"  Successful: {batch_result.successful_count}")
-    print(f"  Failed: {batch_result.failed_count}")
-    print(f"  Execution time: {batch_result.total_execution_time:.2f}s")
-    print(f"  Output files: {len(created_files)} files in {output_dir}/")
-    
-    if batch_result.failed_count > 0:
-        print_warning("Some AS numbers failed to generate policies:")
-        for result in batch_result.results:
-            if not result.success:
-                print(f"  AS{result.as_number}: {result.error_message}")
-    
-    return 0 if batch_result.successful_count > 0 else 1
+    try:
+        logger.info(f"Generating policies for {len(as_list)} AS numbers")
+        batch_result = bgpq4.generate_policies_batch(
+            as_list,
+            rpki_status=rpki_status
+        )
+        
+        # Write output files
+        output_dir = args.output_dir or "policies"
+        created_files = bgpq4.write_policies_to_files(
+            batch_result,
+            output_dir=output_dir,
+            separate_files=args.separate,
+            combined_filename=args.output or "bgpq4_output.txt",
+            rpki_status=rpki_status
+        )
+        
+        # Report results
+        print_success("Policy generation complete:")
+        print(f"  AS numbers processed: {batch_result.total_as_count}")
+        print(f"  Successful: {batch_result.successful_count}")
+        print(f"  Failed: {batch_result.failed_count}")
+        print(f"  Execution time: {batch_result.total_execution_time:.2f}s")
+        print(f"  Output files: {len(created_files)} files in {output_dir}/")
+        
+        if batch_result.failed_count > 0:
+            print_warning("Some AS numbers failed to generate policies:")
+            for result in batch_result.results:
+                if not result.success:
+                    print(f"  AS{result.as_number}: {result.error_message}")
+        
+        return 0 if batch_result.successful_count > 0 else 1
+    finally:
+        try:
+            if proxy_manager:
+                proxy_manager.cleanup_all_tunnels()
+        except Exception as e:
+            logger.warning(f"Failed to cleanup proxy tunnels: {e}")
 
 
 def cmd_discover(args):
