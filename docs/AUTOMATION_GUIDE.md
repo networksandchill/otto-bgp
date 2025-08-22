@@ -833,8 +833,8 @@ echo "hostname,address\nrouter1,10.1.1.1" > single.csv
 # Test bgpq4 directly
 bgpq4 -Jl test AS13335
 
-# Check with container
-docker run --rm ghcr.io/bgp/bgpq4:latest bgpq4 -Jl test AS13335
+# Check with container (official format)
+docker run --rm ghcr.io/bgp/bgpq4:latest -Jl test AS13335
 
 # Test through Otto
 ./otto-bgp policy test_as.txt --test --verbose

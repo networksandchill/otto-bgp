@@ -495,7 +495,7 @@ class BGPq4Wrapper:
             # Check for podman
             if shutil.which('podman'):
                 self.detected_mode = BGPq4Mode.PODMAN
-                self.bgpq4_command = ['podman', 'run', '--rm', '-i', self.docker_image, 'bgpq4']
+                self.bgpq4_command = ['podman', 'run', '--rm', '-i', self.docker_image]
                 self.logger.info(f"Using podman with image: {self.docker_image}")
                 if self.mode == BGPq4Mode.PODMAN:
                     return
@@ -504,7 +504,7 @@ class BGPq4Wrapper:
             # Check for docker
             if shutil.which('docker'):
                 self.detected_mode = BGPq4Mode.DOCKER
-                self.bgpq4_command = ['docker', 'run', '--rm', '-i', self.docker_image, 'bgpq4']
+                self.bgpq4_command = ['docker', 'run', '--rm', '-i', self.docker_image]
                 self.logger.info(f"Using docker with image: {self.docker_image}")
                 return
         
