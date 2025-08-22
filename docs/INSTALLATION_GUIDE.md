@@ -111,21 +111,14 @@ cd otto-bgp
 
 **Configuration created:**
 
-*Note: The following JSON represents the conceptual configuration. Actual configuration is stored in `~/.config/otto-bgp/otto.env` using KEY=value format.*
-
-```json
-{
-  "environment": "user",
-  "installation_mode": {
-    "type": "user",
-    "service_user": "current_user",
-    "systemd_enabled": false,
-    "optimization_level": "basic"
-  },
-  "autonomous_mode": {
-    "enabled": false
-  }
-}
+```bash
+# ~/.config/otto-bgp/otto.env
+OTTO_BGP_ENVIRONMENT=user
+OTTO_BGP_INSTALLATION_MODE=user
+OTTO_BGP_SERVICE_USER=current_user
+OTTO_BGP_SYSTEMD_ENABLED=false
+OTTO_BGP_OPTIMIZATION_LEVEL=basic
+OTTO_BGP_AUTONOMOUS_ENABLED=false
 ```
 
 #### 2. System Mode Installation
@@ -166,28 +159,19 @@ sudo chmod 700 /var/lib/otto-bgp/ssh-keys
 
 **Configuration created:**
 
-*Note: The following JSON represents the conceptual configuration. Actual configuration is stored in `/etc/otto-bgp/otto.env` using KEY=value format.*
-
-```json
-{
-  "environment": "system",
-  "installation_mode": {
-    "type": "system",
-    "service_user": "otto-bgp",
-    "systemd_enabled": true,
-    "optimization_level": "enhanced"
-  },
-  "autonomous_mode": {
-    "enabled": false,
-    "auto_apply_threshold": 100,
-    "require_confirmation": true,
-    "safety_overrides": {
-      "max_session_loss_percent": 5.0,
-      "max_route_loss_percent": 10.0,
-      "monitoring_duration_seconds": 300
-    }
-  }
-}
+```bash
+# /etc/otto-bgp/otto.env
+OTTO_BGP_ENVIRONMENT=system
+OTTO_BGP_INSTALLATION_MODE=system
+OTTO_BGP_SERVICE_USER=otto-bgp
+OTTO_BGP_SYSTEMD_ENABLED=true
+OTTO_BGP_OPTIMIZATION_LEVEL=enhanced
+OTTO_BGP_AUTONOMOUS_ENABLED=false
+OTTO_BGP_AUTO_APPLY_THRESHOLD=100
+OTTO_BGP_REQUIRE_CONFIRMATION=true
+OTTO_BGP_MAX_SESSION_LOSS_PERCENT=5.0
+OTTO_BGP_MAX_ROUTE_LOSS_PERCENT=10.0
+OTTO_BGP_MONITORING_DURATION_SECONDS=300
 ```
 
 #### 3. Autonomous Mode Installation
@@ -250,44 +234,30 @@ Engineer email address(es) (comma-separated): network-team@company.com,ops@compa
 
 **Complete Configuration Created:**
 
-*Note: The following JSON represents the conceptual configuration. Actual configuration is stored in `/etc/otto-bgp/otto.env` using KEY=value format.*
-
-```json
-{
-  "environment": "system", 
-  "installation_mode": {
-    "type": "system",
-    "service_user": "otto-bgp",
-    "systemd_enabled": true,
-    "optimization_level": "enhanced"
-  },
-  "autonomous_mode": {
-    "enabled": true,
-    "auto_apply_threshold": 150,
-    "require_confirmation": true,
-    "safety_overrides": {
-      "max_session_loss_percent": 5.0,
-      "max_route_loss_percent": 10.0,
-      "monitoring_duration_seconds": 300
-    },
-    "notifications": {
-      "email": {
-        "enabled": true,
-        "smtp_server": "smtp.company.com",
-        "smtp_port": 587,
-        "smtp_use_tls": true,
-        "from_address": "otto-bgp@company.com",
-        "to_addresses": ["network-team@company.com", "ops@company.com"],
-        "subject_prefix": "[Otto BGP Autonomous]",
-        "send_on_success": true,
-        "send_on_failure": true
-      },
-      "alert_on_manual": true,
-      "success_notifications": true
-    }
-  }
-}
+```bash
+# /etc/otto-bgp/otto.env
+OTTO_BGP_ENVIRONMENT=system
+OTTO_BGP_INSTALLATION_MODE=system
+OTTO_BGP_SERVICE_USER=otto-bgp
+OTTO_BGP_SYSTEMD_ENABLED=true
+OTTO_BGP_OPTIMIZATION_LEVEL=enhanced
+OTTO_BGP_AUTONOMOUS_ENABLED=true
+OTTO_BGP_AUTO_APPLY_THRESHOLD=150
+OTTO_BGP_REQUIRE_CONFIRMATION=true
+OTTO_BGP_MAX_SESSION_LOSS_PERCENT=5.0
+OTTO_BGP_MAX_ROUTE_LOSS_PERCENT=10.0
+OTTO_BGP_MONITORING_DURATION_SECONDS=300
+OTTO_BGP_EMAIL_ENABLED=true
+OTTO_BGP_SMTP_SERVER=smtp.company.com
+OTTO_BGP_SMTP_PORT=587
+OTTO_BGP_SMTP_USE_TLS=true
+OTTO_BGP_FROM_ADDRESS=otto-bgp@company.com
+OTTO_BGP_EMAIL_SUBJECT_PREFIX="[Otto BGP Autonomous]"
+OTTO_BGP_EMAIL_SEND_ON_SUCCESS=true
+OTTO_BGP_EMAIL_SEND_ON_FAILURE=true
 ```
+
+**Note**: Email recipients must be configured in `/etc/otto-bgp/config.json` as they cannot be set via environment variables. See Configuration Management section below for details.
 
 ## Installation Script Reference
 
@@ -715,13 +685,216 @@ sudo journalctl -u otto-bgp.service | grep -i "stage.*complete"
 
 ## Configuration Management
 
+Otto BGP uses a dual configuration system combining environment variables with optional JSON configuration for complex settings.
+
 ### Configuration File Locations
 
-| Installation Mode | Configuration File | Data Directory | Log Directory |
-|------------------|-------------------|----------------|---------------|
-| User | `~/.config/otto-bgp/otto.env` | `~/.local/share/otto-bgp` | `~/.local/share/otto-bgp/logs` |
-| System | `/etc/otto-bgp/otto.env` | `/var/lib/otto-bgp` | `/var/lib/otto-bgp/logs` |
-| Autonomous | `/etc/otto-bgp/otto.env` | `/var/lib/otto-bgp` | `/var/lib/otto-bgp/logs` |
+| Installation Mode | Environment Config | JSON Config (Optional) | Data Directory | Log Directory |
+|------------------|-------------------|----------------------|----------------|---------------|
+| User | `~/.config/otto-bgp/otto.env` | `~/.config/otto-bgp/config.json` | `~/.local/share/otto-bgp` | `~/.local/share/otto-bgp/logs` |
+| System | `/etc/otto-bgp/otto.env` | `/etc/otto-bgp/config.json` | `/var/lib/otto-bgp` | `/var/lib/otto-bgp/logs` |
+| Autonomous | `/etc/otto-bgp/otto.env` | `/etc/otto-bgp/config.json` | `/var/lib/otto-bgp` | `/var/lib/otto-bgp/logs` |
+
+### Configuration System Overview
+
+Otto BGP uses a **two-layer configuration system**:
+
+1. **Environment Variables** (otto.env) - Primary configuration for simple settings ✅ **REQUIRED**
+2. **JSON Configuration** (config.json) - Advanced configuration for complex/array settings ⚠️ **OPTIONAL**
+
+**Loading Priority**: Environment variables **override** JSON configuration values when both are present.
+
+### When Do You Need config.json?
+
+**✅ config.json is NOT needed for:**
+- Basic policy generation (`otto-bgp policy input.txt`)
+- SSH connections to routers 
+- Standard BGPq4 operations
+- Basic logging and output
+- System/user mode installation
+
+**⚠️ config.json IS needed for:**
+- **IRR Proxy** - Complex tunnel configurations
+- **Email Recipients** - Arrays of notification addresses for autonomous mode
+- **Custom Output Structure** - Router-aware directory layouts
+- **AS Processing Arrays** - Custom string removal patterns
+- **RPKI VRP Sources** - Multiple validation source configurations
+
+**Rule of thumb**: Start without config.json. Add it only when you need these specific advanced features.
+
+### Environment Variables (otto.env)
+
+Most Otto BGP settings can be configured using environment variables in the otto.env file. These are simple KEY=value pairs that work for basic configuration:
+
+```bash
+# SSH Configuration
+SSH_USERNAME=bgp-read
+OTTO_BGP_SSH_PRIVATE_KEY=/var/lib/otto-bgp/ssh-keys/otto-bgp
+OTTO_BGP_SSH_KNOWN_HOSTS=/var/lib/otto-bgp/ssh-keys/known_hosts
+OTTO_BGP_SSH_CONNECTION_TIMEOUT=30
+
+# BGPq4 Configuration
+OTTO_BGP_BGPQ4_MODE=auto
+OTTO_BGP_BGPQ4_TIMEOUT=45
+
+# Logging Configuration
+OTTO_BGP_LOG_LEVEL=INFO
+OTTO_BGP_LOG_FILE=/var/lib/otto-bgp/logs/otto-bgp.log
+
+# Autonomous Mode (Basic Settings)
+OTTO_BGP_AUTONOMOUS_ENABLED=false
+OTTO_BGP_AUTO_APPLY_THRESHOLD=100
+OTTO_BGP_REQUIRE_CONFIRMATION=true
+
+# Email Configuration (Basic Settings)
+OTTO_BGP_EMAIL_ENABLED=true
+OTTO_BGP_SMTP_SERVER=smtp.company.com
+OTTO_BGP_SMTP_PORT=587
+OTTO_BGP_SMTP_USE_TLS=true
+OTTO_BGP_FROM_ADDRESS=otto-bgp@company.com
+```
+
+### JSON Configuration (config.json) - Advanced Settings
+
+**Template Location**: A complete `config.json.example` template is provided in `example-configs/config.json.example`
+
+**When to create config.json**: You need to create a config.json file when you require any of the following advanced configurations that cannot be set via environment variables.
+
+#### Settings That REQUIRE config.json
+
+**1. IRR Proxy Tunnels** (Most Common)
+```json
+{
+  "irr_proxy": {
+    "enabled": true,
+    "jump_host": "gateway.company.com",
+    "jump_user": "otto",
+    "ssh_key_file": "/var/lib/otto-bgp/ssh-keys/proxy-key",
+    "known_hosts_file": "/var/lib/otto-bgp/ssh-keys/proxy-known-hosts",
+    "tunnels": [
+      {
+        "name": "whois-radb",
+        "local_port": 43001,
+        "remote_host": "whois.radb.net",
+        "remote_port": 43
+      },
+      {
+        "name": "whois-ripe",
+        "local_port": 43002,
+        "remote_host": "whois.ripe.net",
+        "remote_port": 43
+      }
+    ]
+  }
+}
+```
+
+**2. Email Recipients (Autonomous Mode)**
+```json
+{
+  "autonomous_mode": {
+    "notifications": {
+      "email": {
+        "to_addresses": ["network-team@company.com", "ops@company.com"],
+        "cc_addresses": ["manager@company.com"],
+        "subject_prefix": "[Otto BGP Autonomous]"
+      }
+    }
+  }
+}
+```
+
+**3. Custom Output Directory Structure**
+```json
+{
+  "output": {
+    "router_aware_structure": true,
+    "policies_subdir": "policies/routers",
+    "discovery_subdir": "discovery",
+    "bgp_data_filename": "bgp.txt",
+    "bgp_juniper_filename": "bgp-juniper.txt",
+    "create_timestamps": true,
+    "backup_legacy_files": true
+  }
+}
+```
+
+**4. AS Processing Customization**
+```json
+{
+  "as_processing": {
+    "min_as_number": 256,
+    "max_as_number": 4294967295,
+    "strict_validation": true,
+    "warn_reserved_ranges": true,
+    "remove_substrings": ["    peer-as ", ";"]
+  }
+}
+```
+
+**5. RPKI VRP Sources**
+```json
+{
+  "rpki": {
+    "enabled": true,
+    "vrp_sources": ["ripe", "arin", "apnic"],
+    "fail_closed": true,
+    "max_cache_age": 86400
+  }
+}
+```
+
+### Using the Complete Template
+
+Instead of creating JSON snippets from scratch, **use the provided template**:
+
+```bash
+# View the complete template (all features included)
+cat example-configs/config.json.example
+
+# Copy and customize for your needs
+sudo cp /usr/local/lib/otto-bgp/example-configs/config.json.example /etc/otto-bgp/config.json
+```
+
+**The template includes all available settings:**
+- Complete IRR proxy configuration with example tunnels
+- Full autonomous mode settings including email notifications  
+- Custom output directory structures
+- AS processing customizations
+- RPKI configuration options
+- SSH, BGPq4, and logging settings
+
+**Customization approach:**
+1. Copy the template to your config directory
+2. Enable only the sections you need (set `"enabled": true`)
+3. Customize the settings within those sections
+4. Leave unused sections disabled or remove them entirely
+
+### Creating config.json
+
+**config.json is OPTIONAL** - Otto BGP works with only `otto.env` for basic functionality. Only create `config.json` when you need the advanced features listed above.
+
+**System Installation:**
+```bash
+# Copy and customize the provided template
+sudo cp /usr/local/lib/otto-bgp/example-configs/config.json.example /etc/otto-bgp/config.json
+
+# Set proper permissions
+sudo chown otto-bgp:otto-bgp /etc/otto-bgp/config.json
+sudo chmod 640 /etc/otto-bgp/config.json
+
+# Edit to customize your settings
+sudo nano /etc/otto-bgp/config.json
+```
+
+**User Installation:**
+```bash
+# Copy and customize the provided template
+cp ~/.local/lib/otto-bgp/example-configs/config.json.example ~/.config/otto-bgp/config.json
+
+# Edit to customize your settings
+nano ~/.config/otto-bgp/config.json
+```
 
 ### Configuration Schema Validation
 
@@ -943,9 +1116,9 @@ sudo userdel otto-bgp
 
 - Systemd service: install.sh generates a oneshot service that runs the unified pipeline and, when not in autonomous mode, a daily timer. Earlier examples with Type=notify, ExecReload, and different paths are outdated and have been replaced with the exact service shape created by install.sh.
 - Directory locations: install.sh installs into `/usr/local/bin`, `/usr/local/lib/otto-bgp`, and `/usr/local/venv` for system mode; and into `~/.local/bin`, `~/.local/lib/otto-bgp`, and `~/.local/venv` for user mode. Any references to `/opt/otto-bgp` are for manual deployment and are not used by the installer.
-- Config CLI: There is no `otto-bgp config ...` CLI at this time. Prior references to `otto-bgp config show/validate` were removed. Edit `/etc/otto-bgp/otto.env` directly or create `/etc/otto-bgp/config.json` for advanced settings.
-- Environment variable names: The application reads `OTTO_BGP_AUTONOMOUS_ENABLED`, `OTTO_BGP_AUTO_THRESHOLD`, `OTTO_BGP_SMTP_SERVER`, `OTTO_BGP_SMTP_PORT`, and `OTTO_BGP_FROM_ADDRESS`. The commonly referenced `OTTO_BGP_EMAIL_TO` is not consumed by the code. To set recipients, create `/etc/otto-bgp/config.json` and set `autonomous_mode.notifications.email.to_addresses`.
-- Email recipients in autonomous mode: The autonomous installer prompts write recipients into the environment template, but the code does not read recipients from env. Without a JSON config, recipients default to `["network-engineers@company.com"]`.
+- Config CLI: There is no `otto-bgp config ...` CLI at this time. Prior references to `otto-bgp config show/validate` were removed. Edit `/etc/otto-bgp/otto.env` directly or create `/etc/otto-bgp/config.json` for advanced settings (see Configuration Management section above for complete documentation).
+- Email recipients in autonomous mode: Must be configured in `/etc/otto-bgp/config.json` under `autonomous_mode.notifications.email.to_addresses` as they cannot be set via environment variables. Without a JSON config, recipients default to `["network-engineers@company.com"]`. Use the provided `example-configs/config.json.example` template.
+- IRR proxy configuration: Tunnel configurations must be defined in config.json as they are complex array structures that cannot be set via environment variables. Use the provided `example-configs/config.json.example` template.
 - bgpq4 configuration via env: Runtime selection of bgpq4 is done via CLI and auto‑detection (native, docker, podman). The code does not read `OTTO_BGP_BGPQ4_*` environment variables. Ensure native `bgpq4` or Docker/Podman is available; use `otto-bgp policy --test` to verify.
 - Devices file: The systemd service expects `/etc/otto-bgp/devices.csv` to exist. The installer does not create this file; you must supply it.
 

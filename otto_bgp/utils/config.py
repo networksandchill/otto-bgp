@@ -384,9 +384,9 @@ class ConfigManager:
     """Configuration management for Otto BGP"""
     
     DEFAULT_CONFIG_PATHS = [
-        Path.home() / ".bgp-toolkit.json",
+        Path.home() / ".config/otto-bgp/config.json",
         Path("/etc/otto-bgp/config.json"),
-        Path("./bgp-toolkit.json")
+        Path("./config.json")
     ]
     
     def __init__(self, config_path: Optional[Path] = None):

@@ -4,8 +4,8 @@ This directory contains example configurations and workflows for Otto BGP v0.3.0
 
 ## Configuration Files
 
-### `otto-bgp.json`
-Complete configuration example with all v0.3.0 features:
+### `config.json.example`
+Complete configuration example with all v0.3.2 features:
 - Router discovery settings
 - IRR proxy configuration
 - Performance optimization settings
@@ -35,7 +35,9 @@ For workflow examples, see the documentation:
 
 1. **Copy configuration template:**
    ```bash
-   sudo cp example-configs/otto-bgp.json /etc/otto-bgp/
+   sudo cp example-configs/config.json.example /etc/otto-bgp/config.json
+   sudo chown otto-bgp:otto-bgp /etc/otto-bgp/config.json
+   sudo chmod 640 /etc/otto-bgp/config.json
    ```
 
 2. **Create your device inventory:**
