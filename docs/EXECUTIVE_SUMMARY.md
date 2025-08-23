@@ -1,163 +1,90 @@
 # Otto BGP v0.3.2 Executive Summary
 
-## Project Overview
+## Overview
 
-Otto BGP is an autonomous BGP policy generator and applier that replaces manual prefix list management. It discovers BGP configuration from Juniper routers, extracts AS numbers, generates Junos policy-options prefix-lists using Internet Routing Registry (IRR) data via bgpq4, and supports production-grade autonomous application with always‑on safety guardrails and email audit trails.
+Otto BGP discovers BGP context from Juniper routers over SSH, extracts AS numbers, generates router‑aware Junos `policy-options` prefix‑lists using bgpq4 (with optional IRR proxy tunneling), and can apply changes via NETCONF with always‑on safety guardrails. Email notifications for NETCONF events are supported when configured.
 
-**Core Value**: Eliminates manual BGP policy maintenance while safeguarding stability through automated discovery, validation, and controlled application.
+## Architecture
 
-## System Architecture
+```mermaid
+flowchart LR
+  subgraph Inputs
+    A[Devices CSV]
+  end
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌──────────────────────┐    ┌─────────────────┐
-│   COLLECTORS    │    │   PROCESSORS    │    │      GENERATORS      │    │     APPLIERS     │
-│                 │    │                 │    │                      │    │                 │
-│ • SSH Discovery │───▶│ • AS Extraction │───▶│ • bgpq4 Wrapper      │───▶│ • NETCONF Apply  │
-│ • Config Parser │    │ • Data Cleaning │    │ • IRR Queries        │    │ • Safety Guardrails│
-│ • Device Mgmt   │    │ • Validation    │    │ • IRR Proxy (tunnel) │    │ • Email Audit    │
-└─────────────────┘    └─────────────────┘    └──────────────────────┘    └─────────────────┘
-         │                       │                        │                        │
-         ▼                       ▼                        ▼                        ▼
-┌─────────────────┐    ┌─────────────────┐     ┌─────────────────┐    ┌─────────────────┐
-│ Router Profiles │    │ AS Number Lists │     │ Policy Files    │    │ Applied Configs │
-│ BGP Groups      │    │ Cleaned Data    │     │ Router-Specific │    │ (Manual/Auto)   │
-└─────────────────┘    └─────────────────┘     └─────────────────┘    └─────────────────┘
-```
+  subgraph Collection
+    C1[collectors/juniper_ssh.py\nSSH + host key verify]
+  end
 
-## Operational Workflow
+  subgraph Discovery/Processing
+    D1[discovery/inspector.py\nJunos BGP groups/ASNs]
+    P1[processors/as_extractor.py\nAS parsing + cleaning]
+  end
 
-```
-                              ┌───────────────────────────────────┐
-                              │           DISCOVERY PHASE         │
-                              │                                   │
-                              │  CSV Input ──▶ SSH Collection    │
-                              │      │             │              │
-                              │      ▼             ▼              │
-                              │  Device Info ──▶ BGP Configs     │
-                              └───────────────┬───────────────────┘
-                                              │
-                                              ▼
-                              ┌───────────────────────────────────┐
-                              │         GENERATION PHASE          │
-                              │                                   │
-                              │  AS Numbers ──▶ IRR Queries      │
-                              │      │              │             │
-                              │      ▼              ▼             │
-                              │  Validation ──▶ Policy Files     │
-                              └───────────────┬───────────────────┘
-                                              │
-                                              ▼
-                              ┌───────────────────────────────────┐
-                              │        APPLICATION PHASE          │
-                              │   (MANUAL WITH SAFETY, OR AUTO)   │
-                              │                                   │
-                              │  Guardrails  ──▶ Email Audit     │
-                              │      │                 │          │
-                              │      ▼                 ▼          │
-                              │  Commit/Confirm ─▶ NETCONF Events│
-                              └───────────────────────────────────┘
+  subgraph Generation
+    G1[generators/bgpq4_wrapper.py\nbgpq4 (native/docker/podman)]
+    X[proxy/irr_tunnel.py\noptional SSH tunnels]
+  end
+
+  subgraph Validation
+    V1[validators/rpki.py\nRPKI VRP checks (config‑dependent)]
+  end
+
+  subgraph Application
+    A1[appliers/juniper_netconf.py\nconfirmed commit + rollback]
+    S1[appliers/safety.py + guardrails.py\n"always on" guardrails]
+  end
+
+  A --> C1 --> D1 --> P1 --> G1 --> V1 --> A1
+  G1 <---> X
+  S1 -.enforces before/after apply.- A1
 ```
 
-## Security Architecture
+## Operation Modes
 
-Otto BGP implements defense‑in‑depth controls across collection, generation, and application.
+- System mode: runs on demand, generates policies, and uses NETCONF with confirmed commits; final confirmation is manual.
+- Autonomous mode: scheduled via systemd timer; generates and applies low‑risk changes after guardrails and post‑apply health checks; auto‑finalizes only when checks pass. Email notifications are sent if configured.
 
-### Authentication & Access Control
-- **SSH Host Key Verification**: Strict verification using a managed `known_hosts` file.
-- **Key‑Based Preferred**: SSH key auth is preferred; password auth is supported for non‑prod and transitions. Production deployments should use keys only.
-- **Least Privilege**: Systemd units run under a dedicated service account with constrained permissions.
-
-### Input Validation & Sanitization
-- **AS Number Validation**: RFC‑aligned 32‑bit range with reserved ranges handled.
-- **Command Injection Prevention**: Strict validation on policy names and arguments for subprocess calls.
-- **Safe File Operations**: Router directory names sanitized; outputs written under controlled base dirs.
-
-### Network Security
-- **Encrypted Access**: All device access via SSH; IRR access via native bgpq4.
-- **IRR Proxy Support**: SSH tunnel manager enables IRR access in restricted networks.
-- **Timeouts**: Connection/command timeouts across SSH, subprocess, and workers.
-
-### Operational Security
-- **Audit Logging**: Structured logging across modules; NETCONF events can be emailed.
-- **RPKI Guardrail**: Optional validation via VRP cache; fail‑closed and thresholds configurable.
-- **Config Hygiene**: Env‑driven configuration with schema validation for key settings.
-
-## Risk Tolerance & Safety Mechanisms
-
-### Autonomous Production Approach
-Generate and apply policies automatically where risk is assessed as low and RPKI/safety guardrails pass, with audit notifications for all NETCONF events.
-
-```
-AUTONOMOUS WORKFLOW:
-┌─────────────────┐    ┌──────────────────────┐    ┌─────────────────┐
-│ Otto Generation │───▶│ Guardrails + RPKI    │───▶│ Auto Application│
-│ (Automated)     │    │ (Low Risk Only)      │    │ (Email Audited) │
-└─────────────────┘    └──────────────────────┘    └─────────────────┘
+```mermaid
+sequenceDiagram
+  participant Pipe as Pipeline
+  participant G as Guardrails/RPKI
+  participant N as NETCONF Applier
+  Note over Pipe: Autonomous mode
+  Pipe->>G: validate changes (prefix counts, bogons, RPKI)
+  G-->>Pipe: risk low?
+  alt low risk
+    Pipe->>N: load + commit confirmed (timer)
+    N->>G: post‑apply health checks
+    G-->>N: pass
+    N->>N: auto‑finalize commit
+  else not low
+    Pipe-->>N: do not auto‑apply
+  end
 ```
 
-### Three‑Tier Operation Modes
-```
-OPERATION MODES:
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ User Mode       │    │ System Mode     │    │ Autonomous Mode │
-│ (Development)   │    │ (Production)    │    │ (Auto + Audit)  │
-│ Local install   │    │ System‑wide     │    │ Low‑risk auto   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-```
+## Security Posture
 
-### Safety Mechanisms
-- **Always‑On Guardrails**: Modular checks (e.g., prefix counts, bogons, RPKI) before apply.
-- **Risk‑Based Auto‑Apply**: Only low‑risk changes auto‑applied; others require manual approval.
-- **Confirmed Commits**: Junos confirmed‑commit with automatic rollback if not confirmed.
-- **Email Audit Trail**: Immediate email notifications for connect/preview/commit/rollback.
-- **Performance/Health**: Parallel worker health monitors and timeouts across modules.
+- SSH host keys: strict verification via `utils/ssh_security.py` with managed `known_hosts` (setup mode supported for first use).
+- Least privilege: systemd units run as `otto-bgp` user with fs/network restrictions (see `systemd/*.service`).
+- Input hardening: AS number range checks, filename/path sanitization, subprocess argument validation.
+- Timeouts and isolation: bounded SSH/command timeouts, parallel worker monitoring in generators/validators.
+- Optional RPKI: VRP cache validation with fail‑closed design and allowlist support when configured.
+- Auditability: structured logging; NETCONF connect/preview/apply/confirm/rollback notifications via email when enabled.
 
-## Data Flow Diagram
+## Risk Assessment
 
-```
-                        INPUT SOURCES
-                             │
-                    ┌────────┼────────┐
-                    │                 │
-                    ▼                 ▼
-            ┌──────────────┐   ┌──────────────┐
-            │ Device CSV   │   │ AS Text File │
-            │ (Discovery)  │   │ (Direct Gen) │
-            └──────┬───────┘   └──────┬───────┘
-                   │                  │
-                   ▼                  ▼
-            ┌──────────────────────────────────┐
-            │       OTTO BGP PROCESSING        │
-            │                                  │
-            │  SSH Collection ──▶ AS Extract  │
-            │       │                │         │
-            │       ▼                ▼         │
-            │  Config Parse  ──▶ bgpq4 Gen    │
-            │       │                │         │
-            │       ▼                ▼         │
-            │  Router Map    ──▶ Policy Files │
-            └──────────────┬───────────────────┘
-                           │
-                           ▼
-                    OUTPUT PRODUCTS
-                           │
-              ┌────────────┼────────────┐
-              │                         │
-              ▼                         ▼
-    ┌─────────────────┐        ┌─────────────────┐
-    │ Policy Files    │        │ Reports + YAML  │
-    │ • Per‑Router    │        │ • Diffs/Matrix  │
-    │ • Per‑AS        │        │ • Discovery Map │
-    └─────────────────┘        └─────────────────┘
-```
+- Change scope: generates Junos `policy-options` prefix‑lists; does not alter unrelated router config.
+- Pre‑apply guardrails: prefix‑count thresholds, bogon detection, concurrency/signal safety; RPKI checks when configured.
+- Rollback safety: confirmed commit with automatic rollback if not confirmed; autonomous mode auto‑confirms only after health checks pass.
+- Dependencies and integrity: relies on IRR data via bgpq4 and (optionally) RPKI VRPs; proxy tunnels available where IRR is restricted.
+- Notifications: email relies on correct SMTP configuration; recommended when using autonomous mode.
 
-## Known Gaps & Limitations
+## Known Gaps and Limitations
 
-- **SSH Auth Policy**: The code supports both SSH key and password authentication (via env). Production should use key‑based auth; the previous statement “no password authentication permitted” was overly strict.
-- **Path Validation Scope**: Hostname/path sanitization is implemented for router directories, but there is no global “absolute path” validator for all file operations. Outputs are written under managed base dirs.
-- **IPv6 Prefix Accounting**: Some guardrails (e.g., prefix counters) match IPv4 patterns and may under‑count IPv6 entries in risk assessments.
-- **SMTP Secret Source**: Systemd env templates mention `OTTO_BGP_SMTP_PASSWORD_FILE`, but the code reads `OTTO_BGP_SMTP_PASSWORD`. If a password file is used, an external mechanism must populate the env var.
-- **RPKI Data Freshness**: RPKI validation relies on a locally cached VRP JSON; correctness depends on timely updates (a preflight systemd unit is provided). Misconfigured or stale VRP data will degrade or block auto‑apply depending on `fail_closed`.
-- **bgpq4 Availability**: Policy generation requires bgpq4 (native or container). Environments without bgpq4 will fail until installed or Docker/Podman is available.
-- **Juniper Focus**: NETCONF apply and collectors are Juniper‑specific (PyEZ). Other vendors are out of scope in this version.
+- Juniper only: collection and NETCONF application target Junos via PyEZ; other vendors are out of scope.
+- RPKI is config‑dependent: validation runs only when VRP cache paths and settings are provided; fail‑closed is recommended for autonomous use.
+- IPv6 prefix accounting: guardrail prefix counters match IPv4 patterns and may under‑count IPv6 in risk calculations; policy generation via bgpq4 can produce IPv6, but counters should be reviewed before IPv6‑heavy use.
+- IRR availability: bgpq4 requires IRR access; the SSH tunnel proxy is optional and depends on reachable jump hosts and credentials.
+- Notification dependency: autonomous email notifications require `autonomous_mode.notifications.email.enabled=true`; autonomous operation does not depend on email, but lack of notifications reduces audit visibility.
 
