@@ -1,10 +1,11 @@
 """
-BGP Toolkit - Production-ready CLI tool for automated BGP prefix list generation.
+Otto BGP - Orchestrated Transit Traffic Optimizer for automated BGP prefix list generation.
 
-Refactored from legacy scripts to provide:
+Provides router-aware BGP policy management with:
 - SSH-based BGP peer data collection from Juniper devices
-- AS number extraction and text processing
-- bgpq3-based policy configuration generation
+- AS number extraction with RFC-compliant validation
+- bgpq4-based policy configuration generation
+- NETCONF policy application with always-on safety guardrails
 - Full pipeline automation with systemd service capability
 """
 
