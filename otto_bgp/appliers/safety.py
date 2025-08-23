@@ -128,62 +128,75 @@ class UnifiedSafetyManager:
             self.logger.critical("EMERGENCY OVERRIDE ACTIVE - Safety constraints relaxed")
     
     def _initialize_guardrails(self):
-        """Initialize default guardrail components"""
+        """Initialize guardrails honoring OTTO_BGP_GUARDRAILS and defaults"""
+        from .guardrails import (
+            initialize_default_guardrails,
+            validate_guardrail_config,
+            CRITICAL_GUARDRAILS,
+            GuardrailConfig,
+        )
+        from otto_bgp.utils.config import get_config_manager
+
+        # 1) Register defaults (prefix_count, bogon_prefix, concurrent_operation, signal_handling)
+        default_guardrails = initialize_default_guardrails(self.logger)
+        for g in default_guardrails:
+            self.guardrails[g.name] = g
+
+        # 2) Optionally add RPKI guardrail using existing logic
         try:
-            default_guardrails = initialize_default_guardrails(self.logger)
-            for guardrail in default_guardrails:
-                self.guardrails[guardrail.name] = guardrail
-            
-            # Initialize RPKI guardrail if RPKI is enabled
+            config_manager = get_config_manager()
+            config = config_manager.get_config()
+        except Exception:
+            config_manager = None
+            config = None
+
+        if config and config.rpki and config.rpki.enabled:
             try:
-                from otto_bgp.utils.config import get_config_manager
                 from otto_bgp.validators.rpki import RPKIGuardrail, RPKIValidator
-                
-                config_manager = get_config_manager()
-                config = config_manager.get_config()
-                
-                if config.rpki and config.rpki.enabled:
-                    # Create RPKI validator with configuration
-                    from pathlib import Path
-                    rpki_validator = RPKIValidator(
-                        vrp_cache_path=Path(config.rpki.vrp_cache_path),
-                        allowlist_path=Path(config.rpki.allowlist_path),
-                        fail_closed=config.rpki.fail_closed,
-                        max_vrp_age_hours=config.rpki.max_vrp_age_hours,
-                        logger=self.logger
-                    )
-                    
-                    # Create and configure RPKI guardrail
-                    rpki_config = GuardrailConfig(
-                        enabled=True,
-                        strictness_level="medium",  # Default strictness
-                        custom_thresholds={
-                            'max_invalid_percent': config.rpki.max_invalid_percent,
-                            'max_notfound_percent': config.rpki.max_notfound_percent,
-                            'require_vrp_data': config.rpki.require_vrp_data,
-                            'allow_allowlisted_notfound': config.rpki.allow_allowlisted_notfound
-                        }
-                    )
-                    
-                    rpki_guardrail = RPKIGuardrail(
-                        rpki_validator=rpki_validator,
-                        config=rpki_config,
-                        logger=self.logger
-                    )
-                    
-                    self.guardrails[rpki_guardrail.name] = rpki_guardrail
-                    self.logger.info("RPKI guardrail initialized and integrated as guardrail 1.5")
-                else:
-                    self.logger.info("RPKI validation disabled in configuration - skipping RPKI guardrail")
-                    
+                rpki_validator = RPKIValidator(logger=self.logger)
+                rpki_guardrail = RPKIGuardrail(rpki_validator=rpki_validator, logger=self.logger)
+                self.guardrails[rpki_guardrail.name] = rpki_guardrail
             except Exception as e:
                 self.logger.error(f"Failed to initialize RPKI guardrail: {e}")
-                # Continue without RPKI guardrail - safety will be degraded but functional
-                
-            self.logger.info(f"Initialized {len(self.guardrails)} guardrail components")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize guardrails: {e}")
-            # Continue with empty guardrails - safety will be degraded but functional
+
+        # 3) Determine enabled set from env or defaults
+        enabled_names = []
+        env = getattr(config_manager, 'guardrail_env', None) if config_manager else None
+        if env and env.get('enabled'):
+            enabled_names = env['enabled']
+        else:
+            enabled_names = list(CRITICAL_GUARDRAILS) + ['prefix_count']
+            if 'rpki_validation' in self.guardrails:
+                enabled_names.append('rpki_validation')
+
+        # Validate
+        errors = validate_guardrail_config(enabled_names, env)
+        if errors:
+            raise ValueError(f"Guardrail configuration errors: {'; '.join(errors)}")
+
+        # 4) Apply prefix_count overrides if present and filter to enabled
+        final_guardrails = {}
+        for name in enabled_names:
+            g = self.guardrails.get(name)
+            if not g:
+                continue
+
+            if name == 'prefix_count' and env:
+                overrides = env.get('prefix_count', {})
+                thresholds = overrides.get('custom_thresholds') or {}
+                strictness = overrides.get('strictness_level')
+                # Create new config with overrides
+                new_config = GuardrailConfig(
+                    enabled=True,
+                    strictness_level=strictness or g.config.strictness_level,
+                    custom_thresholds=thresholds or g.config.custom_thresholds
+                )
+                # Update existing guardrail's config
+                g.update_config(new_config)
+            final_guardrails[name] = g
+
+        self.guardrails = final_guardrails
+        self.logger.info(f"Guardrails active: {sorted(self.guardrails.keys())}")
             
     def _install_signal_handlers(self):
         """Install signal handlers for graceful shutdown"""

@@ -414,6 +414,9 @@ class ConfigManager:
             except Exception as e:
                 self.logger.warning(f"Failed to load config file {config_file}: {e}")
         
+        # NEW: Load guardrail environment overrides
+        self._load_guardrail_env()
+        
         # Environment variables are loaded in __post_init__ methods
         self.logger.debug("Configuration loaded with environment variable overrides")
     
@@ -509,6 +512,59 @@ class ConfigManager:
             self.config.installation_mode.type = "system"
             self.config.installation_mode.systemd_enabled = True
             self.config.installation_mode.optimization_level = "enhanced"
+    
+    def _load_guardrail_env(self):
+        """Load guardrail enablement and prefix thresholds from environment"""
+        enabled = []
+        if os.getenv('OTTO_BGP_GUARDRAILS'):
+            enabled = [g.strip() for g in os.getenv('OTTO_BGP_GUARDRAILS').split(',') if g.strip()]
+
+        # PrefixCountGuardrail overrides
+        prefix_overrides = {}
+        if os.getenv('OTTO_BGP_PREFIX_MAX_TOTAL'):
+            prefix_overrides['max_total_prefixes'] = int(os.getenv('OTTO_BGP_PREFIX_MAX_TOTAL'))
+        if os.getenv('OTTO_BGP_PREFIX_MAX_PER_AS'):
+            prefix_overrides['max_prefixes_per_as'] = int(os.getenv('OTTO_BGP_PREFIX_MAX_PER_AS'))
+        if os.getenv('OTTO_BGP_PREFIX_WARNING'):
+            prefix_overrides['warning_threshold'] = float(os.getenv('OTTO_BGP_PREFIX_WARNING'))
+        if os.getenv('OTTO_BGP_PREFIX_CRITICAL'):
+            prefix_overrides['critical_threshold'] = float(os.getenv('OTTO_BGP_PREFIX_CRITICAL'))
+
+        strictness = os.getenv('OTTO_BGP_PREFIX_STRICTNESS')
+        if strictness and strictness not in ['low','medium','high','strict']:
+            self.logger.warning(f"Invalid OTTO_BGP_PREFIX_STRICTNESS: {strictness} (ignored)")
+            strictness = None
+
+        # Tight range validation: numeric sanity checks for safety
+        # These do not raise here; startup validation in SafetyManager will fail if invalid
+        def _is_pos_int(v):
+            try:
+                return isinstance(v, int) and v > 0
+            except Exception:
+                return False
+        def _is_ratio(v):
+            try:
+                return isinstance(v, float) and 0.0 < v <= 1.0
+            except Exception:
+                return False
+        if 'warning_threshold' in prefix_overrides and not _is_ratio(prefix_overrides['warning_threshold']):
+            self.logger.error("OTTO_BGP_PREFIX_WARNING must be a float in (0.0, 1.0]")
+        if 'critical_threshold' in prefix_overrides and not _is_ratio(prefix_overrides['critical_threshold']):
+            self.logger.error("OTTO_BGP_PREFIX_CRITICAL must be a float in (0.0, 1.0]")
+        if 'max_total_prefixes' in prefix_overrides and not _is_pos_int(prefix_overrides['max_total_prefixes']):
+            self.logger.error("OTTO_BGP_PREFIX_MAX_TOTAL must be a positive integer")
+        if 'max_prefixes_per_as' in prefix_overrides and not _is_pos_int(prefix_overrides['max_prefixes_per_as']):
+            self.logger.error("OTTO_BGP_PREFIX_MAX_PER_AS must be a positive integer")
+
+        self.guardrail_env = {
+            'enabled': enabled,
+            'prefix_count': {
+                'custom_thresholds': prefix_overrides,
+                'strictness_level': strictness
+            }
+        }
+        if enabled:
+            self.logger.info(f"Guardrail env override: {len(enabled)} names")
     
     def save_config(self, config_path: Optional[Path] = None) -> Path:
         """

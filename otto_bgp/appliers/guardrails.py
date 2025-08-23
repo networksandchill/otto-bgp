@@ -24,6 +24,10 @@ from pathlib import Path
 from .exit_codes import OttoExitCodes
 
 
+# Critical guardrails that cannot be disabled
+CRITICAL_GUARDRAILS = {'bogon_prefix', 'signal_handling', 'concurrent_operation'}
+
+
 @dataclass
 class GuardrailResult:
     """Result of a guardrail check"""
@@ -791,7 +795,7 @@ def validate_guardrail_health() -> Dict[str, bool]:
     for name, guardrail in _GUARDRAIL_REGISTRY.items():
         try:
             # Basic health check - ensure guardrail can be instantiated
-            health_status[name] = hasattr(guardrail, 'evaluate') and callable(guardrail.evaluate)
+            health_status[name] = hasattr(guardrail, 'check') and callable(guardrail.check)
         except Exception:
             health_status[name] = False
     
@@ -820,3 +824,39 @@ def initialize_default_guardrails(logger: Optional[logging.Logger] = None) -> Li
         register_guardrail(guardrail)
         
     return guardrails
+
+
+def validate_guardrail_config(enabled_names: List[str], env_overrides: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Validate guardrail configuration: names and parameter ranges"""
+    errors = []
+    # 1) Critical guardrails present
+    for critical in CRITICAL_GUARDRAILS:
+        if critical not in enabled_names:
+            errors.append(f"Critical guardrail '{critical}' missing from configuration")
+    # 2) Names exist in registry
+    for name in enabled_names:
+        if name not in _GUARDRAIL_REGISTRY:
+            errors.append(f"Unknown guardrail '{name}' in configuration")
+    # 3) Parameter ranges for prefix_count overrides
+    if env_overrides:
+        pco = (env_overrides.get('prefix_count') or {}) if isinstance(env_overrides, dict) else {}
+        th = (pco.get('custom_thresholds') or {}) if isinstance(pco, dict) else {}
+        warn = th.get('warning_threshold')
+        crit = th.get('critical_threshold')
+        mtotal = th.get('max_total_prefixes')
+        per_as = th.get('max_prefixes_per_as')
+        def _bad_ratio(v):
+            return v is not None and not (isinstance(v, (float, int)) and 0.0 < float(v) <= 1.0)
+        def _bad_posint(v):
+            return v is not None and not (isinstance(v, int) and v > 0)
+        if _bad_ratio(warn):
+            errors.append("warning_threshold must be in (0.0, 1.0]")
+        if _bad_ratio(crit):
+            errors.append("critical_threshold must be in (0.0, 1.0]")
+        if warn is not None and crit is not None and float(warn) >= float(crit):
+            errors.append("warning_threshold must be less than critical_threshold")
+        if _bad_posint(mtotal):
+            errors.append("max_total_prefixes must be a positive integer")
+        if _bad_posint(per_as):
+            errors.append("max_prefixes_per_as must be a positive integer")
+    return errors
