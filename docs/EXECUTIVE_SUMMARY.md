@@ -9,30 +9,30 @@ Otto BGP discovers BGP context from Juniper routers over SSH, extracts AS number
 ```mermaid
 flowchart LR
   subgraph Inputs
-    A[Devices CSV]
+    A["Devices CSV"]
   end
 
   subgraph Collection
-    C1[collectors/juniper_ssh.py\nSSH + host key verify]
+    C1["collectors/juniper_ssh.py<br/>SSH + host key verify"]
   end
 
   subgraph Discovery/Processing
-    D1[discovery/inspector.py\nJunos BGP groups/ASNs]
-    P1[processors/as_extractor.py\nAS parsing + cleaning]
+    D1["discovery/inspector.py<br/>Junos BGP groups/ASNs"]
+    P1["processors/as_extractor.py<br/>AS parsing + cleaning"]
   end
 
   subgraph Generation
-    G1[generators/bgpq4_wrapper.py\nbgpq4 (native/docker/podman)]
-    X[proxy/irr_tunnel.py\noptional SSH tunnels]
+    G1["generators/bgpq4_wrapper.py<br/>bgpq4 (native/docker/podman)"]
+    X["proxy/irr_tunnel.py<br/>optional SSH tunnels"]
   end
 
   subgraph Validation
-    V1[validators/rpki.py\nRPKI VRP checks (config‑dependent)]
+    V1["validators/rpki.py<br/>RPKI VRP checks (config-dependent)"]
   end
 
   subgraph Application
-    A1[appliers/juniper_netconf.py\nconfirmed commit + rollback]
-    S1[appliers/safety.py + guardrails.py\n"always on" guardrails]
+    A1["appliers/juniper_netconf.py<br/>confirmed commit + rollback"]
+    S1["appliers/safety.py + guardrails.py<br/>always-on guardrails"]
   end
 
   A --> C1 --> D1 --> P1 --> G1 --> V1 --> A1
@@ -87,4 +87,3 @@ sequenceDiagram
 - IPv6 prefix accounting: guardrail prefix counters match IPv4 patterns and may under‑count IPv6 in risk calculations; policy generation via bgpq4 can produce IPv6, but counters should be reviewed before IPv6‑heavy use.
 - IRR availability: bgpq4 requires IRR access; the SSH tunnel proxy is optional and depends on reachable jump hosts and credentials.
 - Notification dependency: autonomous email notifications require `autonomous_mode.notifications.email.enabled=true`; autonomous operation does not depend on email, but lack of notifications reduces audit visibility.
-
