@@ -9,37 +9,59 @@ Otto BGP discovers BGP context from Juniper routers over SSH, extracts AS number
 Otto BGP implements a router-aware pipeline that maintains device identity throughout all processing stages:
 
 ```mermaid
-flowchart LR
-  subgraph Inputs
-    A["Devices CSV"]
+flowchart TB
+  subgraph Input
+    CSV["Devices CSV<br/>hostname,ip,role"]
   end
 
-  subgraph Collection
-    C1["collectors/juniper_ssh.py<br/>SSH + host key verify"]
+  subgraph "Router Processing (Per Device)"
+    RP1["RouterProfile 1<br/>edge-router-01"]
+    RP2["RouterProfile 2<br/>core-router-02"] 
+    RP3["RouterProfile N<br/>..."]
+    
+    subgraph "Per-Router Pipeline"
+      SSH["SSH Collection<br/>collectors/juniper_ssh.py"]
+      DISC["BGP Discovery<br/>discovery/inspector.py"]
+      AS["AS Extraction<br/>processors/as_extractor.py"]
+      POL["Policy Generation<br/>generators/bgpq4_wrapper.py"]
+      
+      SSH --> DISC --> AS --> POL
+    end
   end
 
-  subgraph Discovery/Processing
-    D1["discovery/inspector.py<br/>Junos BGP groups/ASNs"]
-    P1["processors/as_extractor.py<br/>AS parsing + cleaning"]
+  subgraph "Safety & Validation"
+    GUARD["Always-On Guardrails<br/>appliers/guardrails.py<br/>🛡️ Prefix count, bogons, concurrency"]
+    RPKI["RPKI Validation<br/>validators/rpki.py<br/>🔒 Optional/Required per mode"]
   end
 
-  subgraph Generation
-    G1["generators/bgpq4_wrapper.py<br/>bgpq4 (native/docker/podman)"]
-    X["proxy/irr_tunnel.py<br/>optional SSH tunnels"]
+  subgraph "Application & Output"
+    NET["NETCONF Application<br/>appliers/juniper_netconf.py<br/>Per-router confirmed commits"]
+    OUT1["policies/edge-router-01/"]
+    OUT2["policies/core-router-02/"]
+    MATRIX["Deployment Matrix<br/>reports/matrix.py"]
   end
 
-  subgraph Validation
-    V1["validators/rpki.py<br/>RPKI VRP checks (config-dependent)"]
+  subgraph "External Dependencies"
+    IRR["Internet Routing Registries<br/>via bgpq4"]
+    PROXY["SSH Tunnels<br/>proxy/irr_tunnel.py"]
   end
 
-  subgraph Application
-    A1["appliers/juniper_netconf.py<br/>confirmed commit + rollback"]
-    S1["appliers/safety.py + guardrails.py<br/>always-on guardrails"]
-  end
-
-  A --> C1 --> D1 --> P1 --> G1 --> V1 --> A1
-  G1 <---> X
-  S1 -.enforces before/after apply.- A1
+  CSV --> RP1 & RP2 & RP3
+  RP1 --> SSH
+  RP2 --> SSH  
+  RP3 --> SSH
+  
+  POL --> GUARD & RPKI
+  GUARD --> NET
+  RPKI --> NET
+  
+  RP1 -.generates.- OUT1
+  RP2 -.generates.- OUT2
+  RP1 & RP2 & RP3 --> MATRIX
+  
+  POL <-.optional.- PROXY
+  PROXY <-.queries.- IRR
+  POL --> IRR
 ```
 
 ## Operation Modes
@@ -59,22 +81,51 @@ flowchart LR
 - No concurrent operations allowed
 - Auto-confirmation only after health checks pass
 
+### Operation Mode Decision Flow
+
 ```mermaid
-sequenceDiagram
-  participant Pipe as Pipeline
-  participant G as Guardrails/RPKI
-  participant N as NETCONF Applier
-  Note over Pipe: Autonomous mode
-  Pipe->>G: validate changes (prefix counts, bogons, RPKI)
-  G-->>Pipe: risk low?
-  alt low risk
-    Pipe->>N: load + commit confirmed (timer)
-    N->>G: post-apply health checks
-    G-->>N: pass
-    N->>N: auto-finalize commit
-  else not low
-    Pipe-->>N: do not auto-apply
+flowchart TD
+  START["Otto BGP Execution<br/>🚀 Pipeline Start"]
+  
+  MODE{"Operation Mode<br/>Detection"}
+  
+  subgraph "System Mode Path"
+    SYS_GUARD["Guardrail Validation<br/>🛡️ 25% threshold<br/>⚠️ RPKI optional"]
+    SYS_RISK{"Risk Assessment"}
+    SYS_APPLY["NETCONF Apply<br/>⏸️ Manual confirmation required"]
+    SYS_CONFIRM["User Confirmation<br/>👤 Interactive prompt"]
+    SYS_COMMIT["Confirmed Commit<br/>✅ Manual finalization"]
   end
+  
+  subgraph "Autonomous Mode Path"  
+    AUTO_GUARD["Guardrail Validation<br/>🛡️ 10% threshold<br/>🔒 RPKI required"]
+    AUTO_RISK{"Risk Assessment"}
+    AUTO_APPLY["NETCONF Apply<br/>⏱️ Confirmed commit (timer)"]
+    AUTO_HEALTH["Health Check<br/>🔍 Post-apply validation"]
+    AUTO_COMMIT["Auto-finalize<br/>✅ Automatic completion"]
+    AUTO_EMAIL["Email Notification<br/>📧 Operation report"]
+  end
+  
+  BLOCK["🛑 BLOCKED<br/>Critical risk detected<br/>Operation terminated"]
+  
+  START --> MODE
+  MODE -->|ENV: OTTO_BGP_MODE=system| SYS_GUARD
+  MODE -->|ENV: OTTO_BGP_MODE=autonomous| AUTO_GUARD
+  
+  SYS_GUARD --> SYS_RISK
+  SYS_RISK -->|Low/Medium/High| SYS_APPLY
+  SYS_RISK -->|Critical| BLOCK
+  SYS_APPLY --> SYS_CONFIRM
+  SYS_CONFIRM -->|Yes| SYS_COMMIT
+  SYS_CONFIRM -->|No/Timeout| BLOCK
+  
+  AUTO_GUARD --> AUTO_RISK  
+  AUTO_RISK -->|Low only| AUTO_APPLY
+  AUTO_RISK -->|Medium/High/Critical| BLOCK
+  AUTO_APPLY --> AUTO_HEALTH
+  AUTO_HEALTH -->|Pass| AUTO_COMMIT
+  AUTO_HEALTH -->|Fail| BLOCK
+  AUTO_COMMIT --> AUTO_EMAIL
 ```
 
 ## Security Posture
@@ -102,6 +153,44 @@ sequenceDiagram
 - Allowlist support for known-good prefixes
 - Offline validation capabilities
 
+### Always-Active Guardrail System
+
+```mermaid
+flowchart TB
+  subgraph "Policy Context Input"
+    CTX["Policy Context<br/>• AS numbers<br/>• Prefix lists<br/>• Router profiles<br/>• Operation mode"]
+  end
+
+  subgraph "Guardrail Components (Always Active)"
+    PC["Prefix Count Guardrail<br/>🔢 Max change thresholds<br/>System: 25% | Autonomous: 10%"]
+    BOGON["Bogon Prefix Guardrail<br/>🚫 RFC-defined invalid ranges<br/>0.0.0.0/8, 10.0.0.0/8, etc."]
+    CONC["Concurrent Operation Guardrail<br/>🔒 Lock file management<br/>Prevents overlapping runs"]
+    SIG["Signal Handling Guardrail<br/>⚡ Graceful shutdown<br/>SIGTERM/SIGINT handling"]
+  end
+
+  subgraph "Risk Assessment Engine"
+    RISK["Risk Level Aggregation<br/>🛡️ LOW | MEDIUM | HIGH | CRITICAL"]
+  end
+
+  subgraph "Safety Decision"
+    SYS_OK["System Mode<br/>✅ Proceed with warnings<br/>Manual confirmation required"]
+    AUTO_OK["Autonomous Mode<br/>✅ Auto-proceed<br/>Low risk only"]
+    BLOCK["Any Mode<br/>🛑 BLOCKED<br/>Critical risk detected"]
+  end
+
+  CTX --> PC & BOGON & CONC & SIG
+  PC --> RISK
+  BOGON --> RISK
+  CONC --> RISK
+  SIG --> RISK
+  
+  RISK -->|Critical Risk| BLOCK
+  RISK -->|System Mode<br/>Med/High Risk| SYS_OK
+  RISK -->|Autonomous Mode<br/>Med/High Risk| BLOCK
+  RISK -->|Low Risk| AUTO_OK
+  RISK -->|Low Risk| SYS_OK
+```
+
 ## Risk Assessment
 
 **Configuration Scope:**
@@ -123,6 +212,62 @@ sequenceDiagram
 - **RPKI data freshness:** VRP cache staleness triggers fail-closed behavior
 - **SSH connectivity:** Host key verification requires initial setup
 - **SystemD integration:** Autonomous mode requires proper timer configuration
+
+### Deployment Architecture
+
+```mermaid
+flowchart TB
+  subgraph "SystemD Services"
+    TIMER["otto-bgp.timer<br/>⏰ Scheduled execution"]
+    SERVICE["otto-bgp-autonomous.service<br/>🤖 Hardened service unit"]
+    PREFLIGHT["otto-bgp-rpki-preflight.service<br/>🔒 RPKI cache validation"]
+  end
+
+  subgraph "Security Sandbox"
+    USER["otto-bgp user<br/>🔐 Dedicated service account<br/>No shell, minimal privileges"]
+    
+    subgraph "Filesystem Access"
+      RO_CONFIG["/etc/otto-bgp/<br/>📖 Read-only config"]
+      RO_INSTALL["/opt/otto-bgp/<br/>📖 Read-only installation"]
+      RO_SSH["/var/lib/otto-bgp/ssh-keys/<br/>📖 Read-only SSH keys"]
+      RW_OUTPUT["/var/lib/otto-bgp/output/<br/>📝 Write: policy files"]
+      RW_LOGS["/var/lib/otto-bgp/logs/<br/>📝 Write: log files"]
+      RW_CACHE["/var/lib/otto-bgp/cache/<br/>📝 Write: RPKI cache"]
+    end
+  end
+
+  subgraph "Network Boundaries"
+    PRIVATE["Private Networks Only<br/>🏠 10.0.0.0/8<br/>🏠 172.16.0.0/12<br/>🏠 192.168.0.0/16"]
+    DENIED["Denied: Internet<br/>🚫 Public IP ranges"]
+  end
+
+  subgraph "Resource Limits"
+    MEM["Memory: 1GB max<br/>CPU: 25% quota<br/>Tasks: 50 max"]
+    TIME["Timeout: 180s start<br/>Timeout: 30s stop"]
+  end
+
+  subgraph "External Systems"
+    ROUTERS["Juniper Routers<br/>🔌 SSH port 22<br/>🔌 NETCONF port 830"]
+    IRR_SYS["Internet Routing Registries<br/>🌐 Port 43 (whois)<br/>🌐 Port 443 (HTTPS)"]
+    JUMP["Optional Jump Hosts<br/>🚇 SSH tunnels for IRR"]
+  end
+
+  TIMER --> SERVICE
+  SERVICE --> PREFLIGHT
+  PREFLIGHT --> SERVICE
+  
+  SERVICE --> USER
+  USER --> RO_CONFIG & RO_INSTALL & RO_SSH
+  USER --> RW_OUTPUT & RW_LOGS & RW_CACHE
+  
+  SERVICE -.restricted to.- PRIVATE
+  SERVICE -.blocked from.- DENIED
+  SERVICE -.constrained by.- MEM & TIME
+  
+  USER -.SSH/NETCONF.- ROUTERS
+  USER -.bgpq4 queries.- IRR_SYS
+  USER -.optional.- JUMP
+```
 
 **Operational Risks:**
 - **IPv6 prefix handling:** Guardrail counters optimized for IPv4 patterns
