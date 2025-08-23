@@ -980,47 +980,6 @@ class RPKIValidator:
         
         self.logger.info(f"Allowlist entries: {len(self._allowlist)}, Fail-closed: {fail_closed}")
     
-    @classmethod
-    def from_environment(cls, logger: Optional[logging.Logger] = None) -> 'RPKIValidator':
-        """
-        Create RPKI validator with configuration from environment variables
-        
-        Environment variables:
-        - OTTO_BGP_RPKI_STREAMING_MODE: Enable streaming mode (default: true)
-        - OTTO_BGP_RPKI_MAX_MEMORY_MB: Maximum memory for VRP cache in MB (default: 50)
-        - OTTO_BGP_RPKI_CHUNK_SIZE: Chunk size for streaming processing (default: 1000)
-        - OTTO_BGP_RPKI_CACHE_DIR: Directory for RPKI cache files
-        - OTTO_BGP_RPKI_FAIL_CLOSED: Fail closed on stale data (default: true)
-        
-        Returns:
-            Configured RPKIValidator instance
-        """
-        # Parse environment variables with defaults
-        streaming_mode = os.getenv('OTTO_BGP_RPKI_STREAMING_MODE', 'true').lower() == 'true'
-        max_memory_mb = int(os.getenv('OTTO_BGP_RPKI_MAX_MEMORY_MB', '10'))
-        chunk_size = int(os.getenv('OTTO_BGP_RPKI_CHUNK_SIZE', '1000'))
-        fail_closed = os.getenv('OTTO_BGP_RPKI_FAIL_CLOSED', 'true').lower() == 'true'
-        
-        # Cache file paths
-        cache_dir = os.getenv('OTTO_BGP_RPKI_CACHE_DIR', '/var/lib/otto-bgp/rpki')
-        vrp_cache_path = Path(cache_dir) / 'vrp_cache.json'
-        allowlist_path = Path(cache_dir) / 'allowlist.json'
-        
-        if logger:
-            logger.info(f"Creating RPKI validator from environment - "
-                       f"Streaming: {streaming_mode}, Memory: {max_memory_mb}MB, "
-                       f"Chunk size: {chunk_size}")
-        
-        return cls(
-            vrp_cache_path=vrp_cache_path,
-            allowlist_path=allowlist_path,
-            fail_closed=fail_closed,
-            streaming_mode=streaming_mode,
-            max_memory_mb=max_memory_mb,
-            chunk_size=chunk_size,
-            logger=logger
-        )
-    
     def validate_prefix_origin(self, prefix: str, asn: int) -> RPKIValidationResult:
         """
         Validate a prefix-origin pair using RPKI/ROA data with streaming optimization

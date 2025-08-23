@@ -306,7 +306,7 @@ Note: install.sh installs to `/usr/local` for system mode by default. The steps 
 ### IRR Proxy Compatibility
 
 - Proxy support requires native `bgpq4` (host binary). Docker/Podman modes do not work with SSH tunnels because container `127.0.0.1` cannot reach host-bound tunnel ports.
-- When using the IRR proxy, disable parallel policy generation so the proxy is honored: set `OTTO_BGP_DISABLE_PARALLEL=true` before running `otto-bgp policy` or use commands that operate sequentially.
+- Proxy + parallel generation: Parallel policy generation IS supported with proxy via tunnel snapshotting. Worker count is automatically capped to 4 when proxy is active. Use `OTTO_BGP_BGPQ4_MAX_WORKERS=N` to set specific worker count if needed.
 - Validate the proxy setup with: `otto-bgp test-proxy --test-bgpq4`.
 - Ensure a dedicated SSH key and `known_hosts` for the jump host are present and readable by the `otto-bgp` user.
 
@@ -1216,7 +1216,7 @@ ls -la /var/lib/otto-bgp/ssh-keys/
 bgpq4 -Jl 13335 AS13335
 
 # Test bgpq4 via IRR proxy (native bgpq4 only)
-OTTO_BGP_DISABLE_PARALLEL=true otto-bgp test-proxy --test-bgpq4
+otto-bgp test-proxy --test-bgpq4
 
 # Check network connectivity
 curl -I https://bgp.tools/
