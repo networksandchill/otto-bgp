@@ -6,68 +6,104 @@ Otto BGP discovers BGP context from Juniper routers over SSH, extracts AS number
 
 ## Architecture
 
-Otto BGP implements a router-aware pipeline that maintains device identity throughout all processing stages:
+Otto BGP implements a sophisticated **router-aware pipeline** that maintains device identity throughout all processing stages. The system processes multiple routers in parallel while preserving individual router context, generating per-router policies with comprehensive safety validation.
+
+**Key Architectural Features:**
+- **Router Identity Preservation**: Each router maintains its `RouterProfile` from collection through policy generation
+- **Parallel Processing**: Multiple devices processed simultaneously with individual error handling
+- **Layered Safety**: Always-active guardrails plus optional RPKI validation based on operation mode
+- **Flexible Deployment**: Supports both native and containerized bgpq4, with optional IRR proxy tunneling
+
+### High-Level Overview
+
+```mermaid
+graph LR
+  DEVICES["📄 Device List"] --> COLLECT["🔗 Collect"]
+  COLLECT --> DISCOVER["🔍 Discover"] 
+  DISCOVER --> GENERATE["⚙️ Generate"]
+  GENERATE --> VALIDATE["🛡️ Validate"]
+  VALIDATE --> APPLY["📤 Apply"]
+  
+  VALIDATE -.->|"Autonomous: Low risk only<br/>System: Manual confirm"| APPLY
+  
+  style DEVICES fill:#e1f5fe
+  style COLLECT fill:#f3e5f5
+  style DISCOVER fill:#f3e5f5
+  style GENERATE fill:#f3e5f5
+  style VALIDATE fill:#ffecb3
+  style APPLY fill:#e8f5e8
+```
+
+### Detailed Architecture Flow
 
 ```mermaid
 flowchart TB
-  subgraph Input
-    CSV["Devices CSV<br/>hostname,ip,role"]
-  end
-
-  subgraph RouterProc["Router Processing (Per Device)"]
-    RP1["RouterProfile 1<br/>edge-router-01"]
-    RP2["RouterProfile 2<br/>core-router-02"] 
-    RP3["RouterProfile N<br/>..."]
+  %% Input Layer
+  CSV["📄 Devices CSV<br/>hostname,ip,role<br/>(×N routers)"]
+  
+  %% Processing Layer - Organized by Function
+  subgraph COLLECT["🔗 Data Collection"]
+    SSH["SSH Collection<br/>collectors/juniper_ssh.py<br/>Host key verification"]
   end
   
-  subgraph Pipeline["Per-Router Pipeline"]
-    SSH["SSH Collection<br/>collectors/juniper_ssh.py"]
-    DISC["BGP Discovery<br/>discovery/inspector.py"]
-    AS["AS Extraction<br/>processors/as_extractor.py"]
-    POL["Policy Generation<br/>generators/bgpq4_wrapper.py"]
+  subgraph DISCOVER["🔍 Discovery & Processing"]
+    DISC["BGP Discovery<br/>discovery/inspector.py<br/>BGP groups + AS numbers"]
+    AS["AS Extraction<br/>processors/as_extractor.py<br/>RFC validation"]
   end
-
-  subgraph Safety["Safety & Validation"]
-    GUARD["Always-On Guardrails<br/>appliers/guardrails.py<br/>🛡️ Prefix count, bogons, concurrency"]
-    RPKI["RPKI Validation<br/>validators/rpki.py<br/>🔒 Optional/Required per mode"]
+  
+  subgraph GENERATE["⚙️ Policy Generation"]
+    POL["Policy Generation<br/>generators/bgpq4_wrapper.py<br/>Native/Docker/Podman"]
   end
-
-  subgraph Output["Application & Output"]
-    NET["NETCONF Application<br/>appliers/juniper_netconf.py<br/>Per-router confirmed commits"]
-    OUT1["policies/edge-router-01/"]
-    OUT2["policies/core-router-02/"]
-    MATRIX["Deployment Matrix<br/>reports/matrix.py"]
+  
+  %% Safety Layer - Overlay
+  subgraph SAFETY["🛡️ Safety Validation"]
+    GUARD["Always-Active Guardrails<br/>Prefix count • Bogons • Concurrency"]
+    RPKI["RPKI Validation<br/>Optional (system) • Required (autonomous)"]
   end
-
-  subgraph External["External Dependencies"]
-    IRR["Internet Routing Registries<br/>via bgpq4"]
-    PROXY["SSH Tunnels<br/>proxy/irr_tunnel.py"]
+  
+  %% Output Layer
+  subgraph OUTPUT["📤 Application & Output"]
+    NET["NETCONF Application<br/>Confirmed commits + rollback"]
+    FILES["Per-Router Policies<br/>policies/router-name/"]
+    MATRIX["Deployment Matrix<br/>Cross-router relationships"]
   end
-
-  CSV --> RP1
-  CSV --> RP2
-  CSV --> RP3
   
-  RP1 --> SSH
-  RP2 --> SSH  
-  RP3 --> SSH
+  %% External Dependencies
+  subgraph EXTERNAL["🌐 External Systems"]
+    IRR["Internet Routing Registries<br/>WHOIS (43) • HTTPS (443)"]
+    PROXY["SSH Tunnel Proxy<br/>(optional)"]
+  end
   
-  SSH --> DISC --> AS --> POL
+  %% Main Data Flow
+  CSV ==> COLLECT
+  COLLECT ==> DISCOVER
+  DISCOVER ==> GENERATE
   
-  POL --> GUARD
-  POL --> RPKI
-  GUARD --> NET
-  RPKI --> NET
+  %% Safety Validation
+  GENERATE ==> SAFETY
+  SAFETY ==> OUTPUT
   
-  RP1 -.generates.- OUT1
-  RP2 -.generates.- OUT2
-  RP1 --> MATRIX
-  RP2 --> MATRIX
-  RP3 --> MATRIX
+  %% External Dependencies
+  GENERATE -.->|bgpq4 queries| IRR
+  GENERATE -.->|optional proxy| PROXY
+  PROXY -.->|tunneled queries| IRR
   
-  POL -.optional.- PROXY
-  PROXY -.queries.- IRR
-  POL --> IRR
+  %% Router-Specific Outputs
+  COLLECT -.->|per-router identity| FILES
+  DISCOVER -.->|router relationships| MATRIX
+  
+  %% Styling
+  classDef inputNode fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+  classDef processNode fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+  classDef safetyNode fill:#ffecb3,stroke:#f57c00,stroke-width:2px
+  classDef outputNode fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+  classDef externalNode fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+  
+  class CSV inputNode
+  class COLLECT,DISCOVER,GENERATE processNode
+  class SAFETY safetyNode
+  class OUTPUT outputNode
+  class EXTERNAL externalNode
 ```
 
 ## Operation Modes
