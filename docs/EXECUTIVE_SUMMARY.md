@@ -14,53 +14,59 @@ flowchart TB
     CSV["Devices CSV<br/>hostname,ip,role"]
   end
 
-  subgraph "Router Processing (Per Device)"
+  subgraph RouterProc["Router Processing (Per Device)"]
     RP1["RouterProfile 1<br/>edge-router-01"]
     RP2["RouterProfile 2<br/>core-router-02"] 
     RP3["RouterProfile N<br/>..."]
-    
-    subgraph "Per-Router Pipeline"
-      SSH["SSH Collection<br/>collectors/juniper_ssh.py"]
-      DISC["BGP Discovery<br/>discovery/inspector.py"]
-      AS["AS Extraction<br/>processors/as_extractor.py"]
-      POL["Policy Generation<br/>generators/bgpq4_wrapper.py"]
-      
-      SSH --> DISC --> AS --> POL
-    end
+  end
+  
+  subgraph Pipeline["Per-Router Pipeline"]
+    SSH["SSH Collection<br/>collectors/juniper_ssh.py"]
+    DISC["BGP Discovery<br/>discovery/inspector.py"]
+    AS["AS Extraction<br/>processors/as_extractor.py"]
+    POL["Policy Generation<br/>generators/bgpq4_wrapper.py"]
   end
 
-  subgraph "Safety & Validation"
+  subgraph Safety["Safety & Validation"]
     GUARD["Always-On Guardrails<br/>appliers/guardrails.py<br/>🛡️ Prefix count, bogons, concurrency"]
     RPKI["RPKI Validation<br/>validators/rpki.py<br/>🔒 Optional/Required per mode"]
   end
 
-  subgraph "Application & Output"
+  subgraph Output["Application & Output"]
     NET["NETCONF Application<br/>appliers/juniper_netconf.py<br/>Per-router confirmed commits"]
     OUT1["policies/edge-router-01/"]
     OUT2["policies/core-router-02/"]
     MATRIX["Deployment Matrix<br/>reports/matrix.py"]
   end
 
-  subgraph "External Dependencies"
+  subgraph External["External Dependencies"]
     IRR["Internet Routing Registries<br/>via bgpq4"]
     PROXY["SSH Tunnels<br/>proxy/irr_tunnel.py"]
   end
 
-  CSV --> RP1 & RP2 & RP3
+  CSV --> RP1
+  CSV --> RP2
+  CSV --> RP3
+  
   RP1 --> SSH
   RP2 --> SSH  
   RP3 --> SSH
   
-  POL --> GUARD & RPKI
+  SSH --> DISC --> AS --> POL
+  
+  POL --> GUARD
+  POL --> RPKI
   GUARD --> NET
   RPKI --> NET
   
   RP1 -.generates.- OUT1
   RP2 -.generates.- OUT2
-  RP1 & RP2 & RP3 --> MATRIX
+  RP1 --> MATRIX
+  RP2 --> MATRIX
+  RP3 --> MATRIX
   
-  POL <-.optional.- PROXY
-  PROXY <-.queries.- IRR
+  POL -.optional.- PROXY
+  PROXY -.queries.- IRR
   POL --> IRR
 ```
 
