@@ -2,34 +2,34 @@
 
 ## Overview
 
-Otto BGP v0.3.2 introduces a three-tier installation system that separates installation complexity from operational risk, providing flexible deployment options for different environments and risk tolerance levels.
+Otto BGP v0.3.2 provides a two-mode installation system with optional autonomous operation for system installations. This guide provides accurate, step-by-step installation instructions based on the actual implementation.
 
 **Installation Philosophy**: Clear separation between installation modes and operational capabilities with mandatory safety confirmation for autonomous features.
 
-## Three-Tier Installation System
+## Installation System
 
 ### Installation Modes
 
 | Mode | Target Use | Installation Scope | Autonomous Support | Safety Level |
 |------|------------|-------------------|-------------------|--------------|
-| **User** | Development/Testing | Local user directory | ❌ | Basic |
-| **System** | Production | System-wide with optimizations | ✅ Manual Only | Enhanced |
-| **Autonomous** | Hands-off Operations | System-wide + autonomous config | ✅ Full Auto | Maximum |
+| **User** | Development/Testing | Local user directory (`~/.local/`) | ❌ | Basic |
+| **System** | Production | System-wide (`/usr/local/`, `/etc/`, `/var/lib/`) | ✅ Optional | Enhanced |
 
 ### Mode Comparison
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                 Otto BGP Installation Modes                     │
-├─────────────────┬─────────────────┬─────────────────────────────┤
-│   USER MODE     │   SYSTEM MODE   │    AUTONOMOUS MODE          │
-│                 │                 │                             │
-│ • Local install │ • System-wide   │ • System-wide installation  │
-│ • Dev/testing   │ • Production    │ • Autonomous operation      │
-│ • Basic safety  │ • Enhanced      │ • Email audit trail        │
-│ • Manual only   │   safety        │ • Risk-based decisions     │
-│                 │ • Manual apply  │ • Mandatory confirmation    │
-└─────────────────┴─────────────────┴─────────────────────────────┘
+├─────────────────┬───────────────────────────────────────────────┤
+│   USER MODE     │            SYSTEM MODE                       │
+│                 │                                               │
+│ • Local install │ • System-wide installation                   │
+│ • Dev/testing   │ • Production deployment                      │
+│ • Basic safety  │ • Enhanced safety features                   │
+│ • Manual only   │ • Optional autonomous operation              │
+│                 │ • SystemD integration                       │
+│                 │ • Service user isolation                     │
+└─────────────────┴───────────────────────────────────────────────┘
 ```
 
 ## Prerequisites
@@ -42,35 +42,34 @@ Otto BGP v0.3.2 introduces a three-tier installation system that separates insta
 - SSH client
 - 1GB free disk space
 
-**Production Requirements (System/Autonomous modes):**
-- systemd-based Linux distribution
+**System Installation Requirements:**
+- systemd-based Linux distribution (for service integration)
 - sudo/root access for system installation
-- Dedicated service user recommended
-- SMTP server for email notifications (autonomous mode)
-- 4GB+ free disk space
+- Dedicated service user (automatically created)
+- SMTP server for email notifications (autonomous mode only)
+- 2GB+ free disk space
 
 ### Dependencies
 
 **Core Dependencies:**
 ```bash
-# Python packages
-pip install junos-eznc paramiko PyYAML pandas
+# Python packages (automatically installed by install.sh)
+# junos-eznc - Juniper device automation
+# paramiko - SSH client library
+# PyYAML - YAML configuration parsing
+# pandas - Data processing (optional)
 
 # System packages (Ubuntu/Debian)
 sudo apt-get update
-sudo apt-get install -y python3-dev python3-pip openssh-client
+sudo apt-get install -y python3 python3-pip python3-venv git openssh-client curl
 
 # System packages (RHEL/CentOS)
-sudo yum install -y python3-devel python3-pip openssh-clients
+sudo dnf install -y python3 python3-pip python3-venv git openssh-clients curl
 
 # bgpq4 (required for policy generation)
-# install.sh accepts native bgpq4 OR docker/podman for containerized bgpq4
-# Installation instructions: https://github.com/bgp/bgpq4
-```
-
-**Development Dependencies:**
-```bash
-pip install black mypy bandit safety
+# Debian/Ubuntu: sudo apt install bgpq4
+# RHEL/CentOS: sudo dnf install epel-release && sudo dnf install bgpq4
+# Or use containerized version with Docker/Podman
 ```
 
 ## Installation Methods
@@ -105,20 +104,24 @@ cd otto-bgp
 - Installs binary to `~/.local/bin/otto-bgp`
 - Installs libraries to `~/.local/lib/otto-bgp`
 - Creates configuration in `~/.config/otto-bgp/`
-- Creates a virtual environment at `~/.local/venv`
+- Creates data directory in `~/.local/share/otto-bgp/`
+- Creates virtual environment at `~/.local/venv`
 - No system modifications
 - Basic safety controls only
 
 **Configuration created:**
 
+Configuration is created from `systemd/otto.env.user` template with actual username substituted:
+
 ```bash
-# ~/.config/otto-bgp/otto.env
+# ~/.config/otto-bgp/otto.env (key settings shown)
 OTTO_BGP_ENVIRONMENT=user
 OTTO_BGP_INSTALLATION_MODE=user
-OTTO_BGP_SERVICE_USER=current_user
+OTTO_BGP_SERVICE_USER=actual_username
 OTTO_BGP_SYSTEMD_ENABLED=false
-OTTO_BGP_OPTIMIZATION_LEVEL=basic
 OTTO_BGP_AUTONOMOUS_ENABLED=false
+OTTO_BGP_AUTO_APPLY_ENABLED=false
+OTTO_BGP_DRY_RUN_MODE=true
 ```
 
 #### 2. System Mode Installation
@@ -133,10 +136,11 @@ OTTO_BGP_AUTONOMOUS_ENABLED=false
 - Installs binary to `/usr/local/bin/otto-bgp`
 - Installs libraries to `/usr/local/lib/otto-bgp`
 - Creates configuration in `/etc/otto-bgp/`
-- Creates data directories in `/var/lib/otto-bgp`
-- Creates a virtual environment at `/usr/local/venv`
+- Creates data directories in `/var/lib/otto-bgp/{ssh-keys,logs,cache,policies}`
+- Creates virtual environment at `/usr/local/venv`
 - Creates service user `otto-bgp`
-- Sets up systemd service and (in non‑autonomous) a systemd timer
+- Sets up systemd service file
+- Sets up systemd timer (for non-autonomous mode)
 - Enhanced security and performance hardening
 - Autonomous mode available but disabled by default
 
@@ -159,27 +163,29 @@ sudo chmod 700 /var/lib/otto-bgp/ssh-keys
 
 **Configuration created:**
 
+Configuration is created from `systemd/otto.env.system` template:
+
 ```bash
-# /etc/otto-bgp/otto.env
+# /etc/otto-bgp/otto.env (key settings shown)
 OTTO_BGP_ENVIRONMENT=system
 OTTO_BGP_INSTALLATION_MODE=system
 OTTO_BGP_SERVICE_USER=otto-bgp
 OTTO_BGP_SYSTEMD_ENABLED=true
 OTTO_BGP_OPTIMIZATION_LEVEL=enhanced
 OTTO_BGP_AUTONOMOUS_ENABLED=false
-OTTO_BGP_AUTO_APPLY_THRESHOLD=100
-OTTO_BGP_REQUIRE_CONFIRMATION=true
-OTTO_BGP_MAX_SESSION_LOSS_PERCENT=5.0
-OTTO_BGP_MAX_ROUTE_LOSS_PERCENT=10.0
-OTTO_BGP_MONITORING_DURATION_SECONDS=300
+OTTO_BGP_AUTO_APPLY_ENABLED=false
+OTTO_BGP_DRY_RUN_MODE=false
+OTTO_BGP_STRICT_HOST_KEY_CHECKING=true
 ```
 
-#### 3. Autonomous Mode Installation
+#### 3. Autonomous Mode Configuration
 
-**Purpose**: Hands-off operations with complete automation
+**Purpose**: Hands-off operations with automatic policy application
+
+**Note**: Autonomous mode is a configuration flag for system installations, not a separate installation mode.
 
 **⚠️ Interactive Setup Required:**
-Autonomous mode requires interactive configuration that cannot be done through piped installation.
+Autonomous mode setup requires interactive configuration and cannot be done through piped installation.
 
 ```bash
 # Download and run locally (required for autonomous mode)
@@ -189,72 +195,32 @@ chmod +x install.sh
 ```
 
 **⚠️ Critical Safety Warning:**
-This mode enables automatic policy application. Mandatory confirmation required.
+This mode enables automatic policy application. Mandatory safety confirmation required.
 
 **Interactive Setup Process:**
-```bash
-🚨 AUTONOMOUS MODE SETUP - CRITICAL WARNING
-==========================================
-You are about to enable AUTONOMOUS POLICY APPLICATION.
+The install.sh script will prompt for:
+- Risk acknowledgment (must type 'confirm')
+- Auto-apply threshold (informational only)
+- SMTP server configuration
+- Email notification settings
+- Engineer notification recipients
 
-This mode will:
-  • Automatically apply BGP policies to live routers
-  • Use NETCONF to modify production configurations  
-  • Operate without manual approval for low-risk changes
+**Configuration Result:**
 
-⚠️  OPERATIONAL RISK WARNING:
-  • Policy errors can affect network routing
-  • BGP session changes may impact traffic flow
-  • Autonomous operation requires careful monitoring
-
-Do you understand and accept these risks? (type 'confirm'): confirm
-
-Maximum prefix count for auto-apply [100]: 150
-
-📧 CONFIGURING EMAIL NOTIFICATIONS
-==================================
-Email notifications will be sent for NETCONF events
-(connections, commits, failures, etc.)
-
-SMTP server [smtp.company.com]: smtp.company.com
-SMTP port [587]: 587
-Use TLS encryption? [y/N]: y
-From email address [otto-bgp@company.com]: otto-bgp@company.com
-Engineer email address(es) (comma-separated): network-team@company.com,ops@company.com
-
-✅ AUTONOMOUS MODE CONFIGURED
-   - Auto-apply threshold: 150 prefixes (informational)
-   - Risk level: low only
-   - Confirmed commits: enabled
-   - Email notifications: enabled for NETCONF events
-   - SMTP server: smtp.company.com:587
-   - Notification recipients: network-team@company.com,ops@company.com
-   - Manual approval required for high-risk changes
-```
-
-**Complete Configuration Created:**
+After autonomous setup, configuration is created from `systemd/otto.env.autonomous` template:
 
 ```bash
-# /etc/otto-bgp/otto.env
+# /etc/otto-bgp/otto.env (autonomous mode)
 OTTO_BGP_ENVIRONMENT=system
 OTTO_BGP_INSTALLATION_MODE=system
 OTTO_BGP_SERVICE_USER=otto-bgp
 OTTO_BGP_SYSTEMD_ENABLED=true
-OTTO_BGP_OPTIMIZATION_LEVEL=enhanced
 OTTO_BGP_AUTONOMOUS_ENABLED=true
-OTTO_BGP_AUTO_APPLY_THRESHOLD=150
-OTTO_BGP_REQUIRE_CONFIRMATION=true
-OTTO_BGP_MAX_SESSION_LOSS_PERCENT=5.0
-OTTO_BGP_MAX_ROUTE_LOSS_PERCENT=10.0
-OTTO_BGP_MONITORING_DURATION_SECONDS=300
-OTTO_BGP_EMAIL_ENABLED=true
+# SMTP settings populated from interactive setup
 OTTO_BGP_SMTP_SERVER=smtp.company.com
 OTTO_BGP_SMTP_PORT=587
 OTTO_BGP_SMTP_USE_TLS=true
 OTTO_BGP_FROM_ADDRESS=otto-bgp@company.com
-OTTO_BGP_EMAIL_SUBJECT_PREFIX="[Otto BGP Autonomous]"
-OTTO_BGP_EMAIL_SEND_ON_SUCCESS=true
-OTTO_BGP_EMAIL_SEND_ON_FAILURE=true
 ```
 
 **Note**: Email recipients must be configured in `/etc/otto-bgp/config.json` as they cannot be set via environment variables. See Configuration Management section below for details.
@@ -1121,6 +1087,10 @@ sudo userdel otto-bgp
 - IRR proxy configuration: Tunnel configurations must be defined in config.json as they are complex array structures that cannot be set via environment variables. Use the provided `example-configs/config.json.example` template.
 - bgpq4 configuration via env: Runtime selection of bgpq4 is done via CLI and auto‑detection (native, docker, podman). The code does not read `OTTO_BGP_BGPQ4_*` environment variables. Ensure native `bgpq4` or Docker/Podman is available; use `otto-bgp policy --test` to verify.
 - Devices file: The systemd service expects `/etc/otto-bgp/devices.csv` to exist. The installer does not create this file; you must supply it.
+- Virtual environment naming: Documentation metadata references "otto_venv" but actual installation creates different paths (`/usr/local/venv` for system, `~/.local/venv` for user).
+- Configuration management: Some documentation refers to configuration validation CLI commands that don't exist. Configuration validation is done at runtime, not via CLI.
+- Dependencies: Code uses bgpq4 (not bgpq3) and actual requirements.txt contains only 4 packages: junos-eznc, paramiko, PyYAML, pandas.
+- Autonomous mode: Not a separate installation mode but a configuration flag (`AUTONOMOUS_MODE=true`) applied to system installations.
 
 ### Data Backup Before Uninstall
 
@@ -1140,17 +1110,19 @@ sudo cp -r /var/lib/otto-bgp/policies /tmp/otto-bgp-backup/policies 2>/dev/null 
 sudo chown -R $USER:$USER /tmp/otto-bgp-backup
 ```
 
-### Clean Uninstall Script
+### Manual Uninstall (if uninstall.sh unavailable)
+
+**Note**: Use the provided `uninstall.sh` script when possible. The manual steps below are for reference only.
 
 ```bash
 #!/bin/bash
-# uninstall-otto-bgp.sh
+# Manual uninstall steps (use uninstall.sh instead)
 
-echo "Otto BGP Uninstallation"
-echo "======================="
+echo "Otto BGP Manual Uninstallation"
+echo "=============================="
 
 # Detect installation mode
-if [[ -d "/opt/otto-bgp" ]]; then
+if [[ -d "/usr/local/lib/otto-bgp" ]]; then
     echo "Detected system installation"
     
     # Stop services
@@ -1158,14 +1130,15 @@ if [[ -d "/opt/otto-bgp" ]]; then
     sudo systemctl disable otto-bgp.service otto-bgp.timer 2>/dev/null || true
     
     # Remove files
-    sudo rm -rf /opt/otto-bgp/
+    sudo rm -rf /usr/local/lib/otto-bgp/
+    sudo rm -rf /usr/local/venv/
+    sudo rm -f /usr/local/bin/otto-bgp
     sudo rm -rf /etc/otto-bgp/
     sudo rm -rf /var/lib/otto-bgp/
-    sudo rm -rf /var/log/otto-bgp/
     sudo rm -f /etc/systemd/system/otto-bgp.*
     
     # Remove user
-    sudo userdel otto.bgp 2>/dev/null || true
+    sudo userdel otto-bgp 2>/dev/null || true
     
     echo "System installation removed"
     
@@ -1174,7 +1147,10 @@ elif [[ -f "$HOME/.local/bin/otto-bgp" ]]; then
     
     # Remove user files
     rm -f ~/.local/bin/otto-bgp
-    rm -rf ~/.otto-bgp/
+    rm -rf ~/.local/lib/otto-bgp/
+    rm -rf ~/.local/venv/
+    rm -rf ~/.config/otto-bgp/
+    rm -rf ~/.local/share/otto-bgp/
     
     echo "User installation removed"
 else

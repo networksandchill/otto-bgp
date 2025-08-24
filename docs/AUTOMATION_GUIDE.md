@@ -26,6 +26,9 @@ Otto BGP v0.3.2 provides a router-aware pipeline to collect BGP context via SSH,
 - Device CSV fields: Router‑aware paths expect an `address` column (with optional `hostname`). The legacy loader accepts `address`/`ip`/`host`. Prefer `address[,hostname]` for consistency.
 - Known hosts and SSH hardening: NETCONF/SSH use strict host key checking and default known hosts at `/var/lib/otto-bgp/ssh-keys/known_hosts`. Ensure device host keys are present.
 - Email notifications: Best‑effort only. Notifications send on connect/preview/commit/rollback/disconnect when `autonomous_mode.notifications.email.enabled` is true and SMTP settings are valid. No retry/backoff beyond SMTP behavior.
+- No apply-confirm CLI command: Otto BGP does not provide a built-in `apply-confirm` command. Commit confirmation must be handled manually on the device or via NETCONF confirmed commits with timeouts.
+- RPKI validation dependency: RPKI validation requires pre-populated VRP cache files at configured paths. Cache must be updated externally or via autonomous preflight checks.
+- REST API availability: No built-in REST API endpoints are currently implemented. Integration requires direct CLI usage or Python library imports.
 
 ## Operational Modes
 
@@ -53,7 +56,9 @@ Otto BGP operates in three distinct modes to serve different operational needs:
 - **Execution**: `otto-bgp pipeline ... --autonomous` or the `otto-bgp-autonomous.service/timer`
 - **Operation**: Pipeline with unified safety manager; email notifications if configured
 - **Scope**: Low-risk changes are auto-applied; high-risk require manual intervention
-- **Notes**: Must be enabled in config; recommend system installation. RPKI preflight is enforced via `otto-bgp rpki-check` before autonomous runs.
+- **Two-Key Security**: Requires both `autonomous_mode.enabled = true` in configuration AND `--autonomous` flag at runtime
+- **RPKI Preflight**: Mandatory RPKI validation enforced via `otto-bgp-rpki-preflight.service` dependency before autonomous runs
+- **Notes**: Must be enabled in config; recommend system installation for security and reliability
 
 **Example Usage:**
 ```bash
@@ -188,16 +193,20 @@ done
 
 ### 4. Autonomous Operation Workflow
 
-Otto BGP v0.3.2 supports autonomous operation with always‑on guardrails, RPKI validation (config dependent), and email notifications if configured.
+Otto BGP v0.3.2 supports autonomous operation with always‑on guardrails, mandatory RPKI validation, and email notifications if configured.
 
 #### Setup Autonomous Mode
 ```bash
-# Install with autonomous mode
+# Install with autonomous mode (sets up configuration and systemd services)
 ./install.sh --autonomous
+
+# Two-key requirement for safety:
+# 1. Configuration: autonomous_mode.enabled must be true (set by install.sh)
+# 2. Runtime flag: --autonomous must be provided at execution time
 
 # Configure email notifications during setup:
 # - SMTP server and port
-# - TLS encryption settings
+# - TLS encryption settings  
 # - From and to email addresses
 # - Subject prefix for notifications
 ```
@@ -300,9 +309,11 @@ export OTTO_BGP_PROXY_KNOWN_HOSTS=/path/to/known_hosts
 - `collect`: Collect BGP peer data via SSH (`./otto-bgp collect devices.csv`)
 - `process`: Process BGP text or extract ASNs (`./otto-bgp process input.txt --extract-as`)
 - `policy`: Generate bgpq4 policies from an AS list (`./otto-bgp policy as_list.txt -s`)
+- `discover`: Discover BGP configurations and generate mappings (`./otto-bgp discover devices.csv`)
 - `apply`: Apply policies via NETCONF with safety controls (`./otto-bgp apply --router R1 --confirm`)
 - `pipeline`: Router‑aware end‑to‑end workflow (`./otto-bgp pipeline devices.csv`)
 - `list`: List discovered routers/AS/groups (requires prior discovery mappings)
+- `rpki-check`: Validate RPKI cache freshness and structure (`./otto-bgp rpki-check`)
 - `test-proxy`: Validate IRR proxy tunnel configuration (`./otto-bgp test-proxy --test-bgpq4`)
 
 ### Command Options
@@ -383,16 +394,29 @@ Minimal example `/etc/otto-bgp/config.json` matching v0.3.2:
     "command_timeout": 60
   },
   "output": {
-    "default_output_dir": "/var/lib/otto-bgp"
+    "default_output_dir": "/var/lib/otto-bgp",
+    "policies_subdir": "policies",
+    "create_timestamps": true
+  },
+  "logging": {
+    "level": "INFO",
+    "log_to_file": false,
+    "log_file": null
   },
   "installation_mode": {
     "type": "system",
-    "service_user": "otto-bgp"
+    "service_user": "otto-bgp",
+    "systemd_enabled": false
   },
   "autonomous_mode": {
     "enabled": false,
     "auto_apply_threshold": 100,
     "require_confirmation": true,
+    "safety_overrides": {
+      "max_session_loss_percent": 5.0,
+      "max_route_loss_percent": 10.0,
+      "monitoring_duration_seconds": 300
+    },
     "notifications": {
       "email": {
         "enabled": true,
@@ -401,7 +425,9 @@ Minimal example `/etc/otto-bgp/config.json` matching v0.3.2:
         "smtp_use_tls": true,
         "from_address": "otto-bgp@company.com",
         "to_addresses": ["network-team@company.com"],
-        "subject_prefix": "[Otto BGP Autonomous]"
+        "subject_prefix": "[Otto BGP Autonomous]",
+        "send_on_success": true,
+        "send_on_failure": true
       }
     }
   },
@@ -410,13 +436,19 @@ Minimal example `/etc/otto-bgp/config.json` matching v0.3.2:
     "fail_closed": true,
     "max_vrp_age_hours": 24,
     "vrp_cache_path": "/var/lib/otto-bgp/rpki/vrp_cache.json",
-    "allowlist_path": "/var/lib/otto-bgp/rpki/allowlist.json"
+    "allowlist_path": "/var/lib/otto-bgp/rpki/allowlist.json",
+    "max_invalid_percent": 0.0,
+    "max_notfound_percent": 25.0,
+    "require_vrp_data": true
   },
   "irr_proxy": {
     "enabled": false,
     "method": "ssh_tunnel",
     "jump_host": "",
     "jump_user": "",
+    "ssh_key_file": null,
+    "known_hosts_file": null,
+    "connection_timeout": 10,
     "tunnels": [
       { "name": "ntt", "local_port": 43001, "remote_host": "rr.ntt.net", "remote_port": 43 },
       { "name": "radb", "local_port": 43002, "remote_host": "whois.radb.net", "remote_port": 43 }
@@ -469,7 +501,7 @@ diff -ru ./policies/previous/ ./policies/$(date +%Y%m%d)/ | head -40
 # 2. Review configuration diff
 # 3. Commit with confirmation timeout
 # 4. Monitor BGP sessions and routing tables
-# 5. Confirm commit on the device (no `apply-confirm` subcommand in v0.3.2)
+# 5. Confirm commit on the device manually or via NETCONF confirmed commits
 ```
 
 ## Enhanced Policy Automation
@@ -890,23 +922,41 @@ sudo journalctl -u otto-bgp.service --since "1 hour ago" -n 200
 
 ### Custom Workflows
 
-Create custom automation workflows:
+Create custom automation workflows using Otto BGP components:
 
 ```python
-from otto_bgp.pipeline import CustomPipeline
+from otto_bgp.pipeline.workflow import BGPPolicyPipeline, PipelineConfig
+from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
+from otto_bgp.generators.bgpq4_wrapper import BGPq4Wrapper
 
-class MyBGPWorkflow(CustomPipeline):
-    def pre_discovery_hook(self):
-        """Custom pre-discovery logic"""
-        pass
+class CustomBGPWorkflow:
+    def __init__(self):
+        self.collector = JuniperSSHCollector()
+        self.generator = BGPq4Wrapper()
     
-    def post_generation_hook(self, policies):
+    def pre_discovery_validation(self, devices):
+        """Custom pre-discovery validation logic"""
+        validated_devices = []
+        for device in devices:
+            if self.validate_device_connectivity(device):
+                validated_devices.append(device)
+        return validated_devices
+    
+    def post_generation_validation(self, policies):
         """Custom post-generation validation"""
-        pass
+        for policy in policies:
+            if not self.validate_policy_syntax(policy):
+                raise ValueError(f"Policy validation failed: {policy}")
     
-    def pre_application_hook(self, router, policies):
-        """Custom pre-application checks"""
-        pass
+    def execute_custom_pipeline(self, devices_csv, output_dir):
+        """Execute custom pipeline with validation hooks"""
+        config = PipelineConfig(
+            devices_file=devices_csv,
+            output_directory=output_dir
+        )
+        
+        pipeline = BGPPolicyPipeline(config)
+        return pipeline.run_complete_pipeline()
 ```
 
 ### Performance Tuning
@@ -930,7 +980,7 @@ collector = JuniperSSHCollector(
 
 Future REST API endpoints (planned):
 
-```
+```http
 GET  /api/v1/routers              # List routers
 GET  /api/v1/routers/{id}         # Router details
 POST /api/v1/discover             # Trigger discovery

@@ -226,14 +226,14 @@ otto-bgp apply --router edge-router1 --policy-dir /var/lib/otto-bgp/policies
 
 **Autonomous Application:**
 ```bash
-# Standard autonomous application
-otto-bgp apply --autonomous --auto-threshold 100
+# Standard autonomous application (router required)
+otto-bgp apply --router edge-router1 --autonomous --auto-threshold 100
 
 # System-wide autonomous application
-otto-bgp apply --system --autonomous
+otto-bgp apply --router edge-router1 --system --autonomous
 
 # Autonomous with custom threshold (informational only)
-otto-bgp apply --autonomous --auto-threshold 200 --policy-dir /var/lib/otto-bgp/policies
+otto-bgp apply --router edge-router1 --autonomous --auto-threshold 200 --policy-dir /var/lib/otto-bgp/policies
 ```
 
 **Advanced Usage:**
@@ -389,27 +389,64 @@ def validate_autonomous_mode(args, config):
 
 ### Error Handling
 
+Otto BGP v0.3.2 provides enhanced error formatting with visual symbols and actionable guidance.
+
+**Error Message Symbols:**
+- `✓` Success operations
+- `⚠` Warnings and advisories  
+- `✗` Errors and failures
+- `🛡️` Safety and security events
+- `🔒` RPKI validation status
+- `🌐` Network operations
+- `⚙️` Configuration issues
+
 **Configuration Errors:**
 ```bash
 $ otto-bgp apply --autonomous
-ERROR: Autonomous mode requested but not enabled in configuration
-INFO: Run ./install.sh --autonomous to enable autonomous mode
+✗ Autonomous mode requested but not enabled in configuration
+⚙️ Configuration required: autonomous_mode.enabled must be true
+✓ Solution: Run ./install.sh --autonomous to enable autonomous mode
 ```
 
-**Invalid Arguments:**
+**Safety and Security Events:**
+```bash
+$ otto-bgp apply --router edge-router1 --force
+🛡️ Safety guardrail triggered: prefix_count_exceeded
+⚠ Risk Level: HIGH - proposed changes exceed 25% threshold
+✗ Action: Review policy changes and reduce scope, or use --confirm for manual approval
+
+$ otto-bgp collect devices.csv
+🔒 SSH host key verification failed for router1.company.com
+✗ Security: Host key mismatch detected - possible man-in-the-middle attack
+✓ Action: Verify host key fingerprint and update known_hosts file
+```
+
+**Validation Errors:**
 ```bash
 $ otto-bgp apply --auto-threshold -1
-ERROR: auto-threshold must be a positive integer
+✗ Input validation failed: auto-threshold must be a positive integer
+⚙️ Valid range: 1-10000 (recommended: 100-500)
 
-$ otto-bgp apply --router nonexistent-router
-ERROR: Router 'nonexistent-router' not found in configuration
+$ otto-bgp policy invalid_file.txt
+✗ Input file error: No AS numbers found in input file
+✓ Expected format: AS12345 or 12345 (one per line or mixed with text)
 ```
 
 **Network Errors:**
 ```bash
 $ otto-bgp discover devices.csv
-ERROR: Failed to connect to router1.company.com: Connection timeout
-INFO: Check SSH connectivity and credentials
+🌐 Network operation failed: SSH connection to router1.company.com
+✗ Connection timeout after 30 seconds
+✓ Check: Network connectivity, SSH credentials, and firewall rules
+```
+
+**RPKI Validation:**
+```bash
+$ otto-bgp policy as_numbers.txt
+🔒 RPKI validation status: 3 valid, 1 invalid, 2 not found
+⚠ AS64500: RPKI INVALID - origin validation failed
+✓ AS13335: RPKI VALID - origin validation passed
+ℹ AS99999: RPKI NOT FOUND - no ROA data available
 ```
 
 ## Environment Variables
@@ -499,26 +536,59 @@ Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CL
 
 ## Known Gaps and Limitations
 
-- No `config` subcommands: The CLI does not include `config show/validate`. Edit `/etc/otto-bgp/otto.env` or use `/etc/otto-bgp/config.json`.
-- BGPQ4 env vars: `OTTO_BGP_BGPQ4_*` variables are not read by the code. Selection is automatic or via `--dev` (Podman) for development.
-- Email recipients: `to_addresses` are not read from environment variables. Set them in config.json under `autonomous_mode.notifications.email.to_addresses`.
-- list command: Only supports `routers|as|groups` and plain‑text output. No `--format` or `--filter` options.
-- test-proxy: Has `--test-bgpq4` and `--timeout`. There is no `--test-as` flag; test uses a built‑in AS.
+### Command Limitations
+- **No `config` subcommands**: The CLI does not include `config show/validate`. Edit `/etc/otto-bgp/otto.env` or use `/etc/otto-bgp/config.json`.
+- **No `--parallel` flag support**: Parallel processing is handled internally by the application but is not exposed as a CLI option.
+- **Pipeline command limitations**: No `--separate`, `--input-file`, or `--dry-run` options. Pipeline operates on device CSV files only.
+- **list command**: Only supports `routers|as|groups` and plain-text output. No `--format` or `--filter` options.
+
+### Configuration and Environment
+- **BGPQ4 env vars**: `OTTO_BGP_BGPQ4_*` variables are not read by the code. Selection is automatic or via `--dev` (Podman) for development.
+- **Email recipients**: `to_addresses` are not read from environment variables. Set them in config.json under `autonomous_mode.notifications.email.to_addresses`.
+
+### Feature Gaps
+- **test-proxy**: Has `--test-bgpq4` and `--timeout`. There is no `--test-as` flag; test uses a built-in AS.
+- **Batch operations**: No native support for processing multiple device files in a single command.
+- **Configuration validation**: No built-in config file validation subcommand.
+
+### Exit Codes
+- Exit codes are comprehensive (80+ codes) covering all error conditions, not the simplified set shown in documentation.
 
 ## Exit Codes
 
-| Code | Meaning | Description |
-|------|---------|-------------|
+Otto BGP uses comprehensive exit codes following UNIX conventions for monitoring and automation integration.
+
+### Exit Code Categories
+
+| Range | Category | Description |
+|-------|----------|-------------|
 | `0` | Success | Operation completed successfully |
-| `1` | General Error | Configuration or argument error |
-| `2` | Invalid Usage | Invalid command line usage |
-| `3` | Safety Check Failed | Safety validation failed |
-| `4` | NETCONF Connection Failed | NETCONF connection failed |
-| `5` | Policy Validation Failed | Policy validation failed |
-| `6` | BGP Session Impact Critical | Critical BGP session impact detected |
-| `7` | Rollback Failed | Configuration rollback failed |
-| `8` | Autonomous Mode Blocked | Autonomous mode operation blocked |
-| `130` | Interrupted | User interruption (Ctrl+C) |
+| `1-2` | User/Configuration Errors | Basic usage and configuration errors |
+| `3-63` | Application Errors | Otto BGP specific operational errors |
+| `64-78` | System Errors | System-level errors (following sysexits.h) |
+| `128+` | Signal Termination | Process terminated by signals |
+
+### Key Exit Codes
+
+| Code | Name | Description |
+|------|------|-------------|
+| `0` | SUCCESS | Operation completed successfully |
+| `1` | GENERAL_ERROR | General error occurred |
+| `2` | INVALID_USAGE | Invalid command line usage |
+| `3` | SAFETY_CHECK_FAILED | Safety validation failed |
+| `4` | NETCONF_CONNECTION_FAILED | NETCONF connection failed |
+| `5` | POLICY_VALIDATION_FAILED | Policy validation failed |
+| `6` | BGP_SESSION_IMPACT_CRITICAL | Critical BGP session impact detected |
+| `7` | ROLLBACK_FAILED | Configuration rollback failed |
+| `8` | AUTONOMOUS_MODE_BLOCKED | Autonomous mode operation blocked |
+| `12` | HOST_KEY_VERIFICATION_FAILED | SSH host key verification failed |
+| `13` | COMMAND_INJECTION_DETECTED | Command injection attempt detected |
+| `16` | GUARDRAIL_VIOLATION | Safety guardrail violation |
+| `21` | VALIDATION_FAILED | Input validation failed |
+| `130` | SIGINT_TERMINATION | User interruption (Ctrl+C) |
+| `143` | SIGTERM_TERMINATION | Terminated by system signal |
+
+**Note**: The complete exit code system includes 80+ specific codes for precise error handling and monitoring integration. Use `echo $?` after command execution to retrieve the exit code.
 
 ## Best Practices
 
@@ -541,14 +611,14 @@ Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CL
 ### Performance Optimization
 
 ```bash
-# High-performance discovery
-otto-bgp discover devices.csv --parallel 10 --timeout 45
+# Optimized discovery with extended timeout
+otto-bgp discover devices.csv --timeout 45
 
-# Fast policy generation
-otto-bgp policy as_list.txt --parallel 8 --timeout 60
+# Policy generation with extended timeout
+otto-bgp policy as_list.txt --timeout 60
 
-# Efficient batch processing
-otto-bgp pipeline devices.csv --autonomous --output-dir /var/lib/otto-bgp --separate
+# Efficient autonomous pipeline
+otto-bgp pipeline devices.csv --autonomous --output-dir /var/lib/otto-bgp
 ```
 
 This CLI reference provides comprehensive documentation for all Otto BGP v0.3.2 commands, flags, and autonomous operation capabilities.

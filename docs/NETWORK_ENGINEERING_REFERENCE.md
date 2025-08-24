@@ -2,7 +2,7 @@
 
 ## Overview
 
-Otto BGP collects AS numbers from Juniper router configurations and generates corresponding prefix-list policies using bgpq4. It connects over SSH to collect data and can optionally apply policies via NETCONF.
+Otto BGP is an autonomous BGP policy generator that orchestrates transit traffic optimization. It collects BGP configuration data from Juniper routers via SSH, extracts AS numbers, validates them through RPKI, and generates prefix-list policies using bgpq4. The system includes comprehensive safety mechanisms and can apply policies via NETCONF with rollback capabilities.
 
 ## Juniper Router Configuration Requirements
 
@@ -163,68 +163,66 @@ Compare the output with your network team's device records. Each device should h
 ### Connection Parameters
 
 ```python
-# PyEZ Device parameters (effective subset used by Otto BGP)
+# PyEZ Device parameters (actual implementation from juniper_netconf.py)
 device_params = {
-    'host': '192.168.1.1',
-    'port': 830,
-    'user': 'otto-bgp',      # or pass via CLI / environment
-    'password': '***',       # or use SSH keys via system SSH configuration
+    'host': hostname,
+    'port': port,            # default 830
     'gather_facts': True,
-    'auto_probe': 30,
+    'auto_probe': timeout    # connection timeout in seconds
 }
+# Note: username and password are optional - uses SSH config if not provided
+# Otto BGP prefers SSH key-based authentication over passwords
 ```
 
 ### PyEZ Library Requirements
 
 Otto BGP requires these Python libraries for NETCONF operations:
 
-- junos-eznc: Juniper PyEZ library
-- jxmlease: XML handling
-- lxml: XML parsing
-- ncclient: NETCONF client protocol
+- junos-eznc (PyEZ): Juniper NETCONF automation library
 - paramiko: SSH protocol implementation
+- ncclient: NETCONF client protocol (dependency of PyEZ)
+- lxml: XML parsing (dependency of PyEZ)
+- jxmlease: XML handling (dependency of PyEZ)
+
+**Note**: Otto BGP will function in collection-only mode if PyEZ is not installed. Install with: `pip install junos-eznc`
 
 ### Configuration Loading
 
 NETCONF configuration operations use merge mode to preserve existing configuration:
 
 ```python
-# Configuration merge operation (Otto BGP loads text with merge=True)
-config_content = """
-policy-options {
-    prefix-list AS13335 {
-        1.1.1.0/24;
-        1.0.0.0/24;
-    }
-}
-"""
-config.load(config_content, format='text', merge=True)
+# Configuration merge operation from juniper_netconf.py
+# Combines multiple policies into single configuration load
+combined_config = self._combine_policies_for_load(policies)
+
+# Load configuration in merge mode (doesn't replace existing)
+self.config.load(combined_config, format='text', merge=True)
+
+# Preview changes before applying
+diff = self.config.diff()
+if diff:
+    logger.info(f"Configuration changes preview:\n{diff}")
 ```
 
 ### XML-RPC Command Structure
 
 NETCONF uses XML-RPC for configuration operations:
 
-```xml
-<rpc>
-    <edit-config>
-        <target>
-            <candidate/>
-        </target>
-        <config>
-            <configuration>
-                <policy-options>
-                    <prefix-list replace="replace">
-                        <name>13335</name>
-                        <prefix-list-item>
-                            <name>1.1.1.0/24</name>
-                        </prefix-list-item>
-                    </prefix-list>
-                </policy-options>
-            </configuration>
-        </config>
-    </edit-config>
-</rpc>
+```python
+# Otto BGP uses PyEZ for NETCONF operations, not raw XML-RPC
+# Actual policy combination from _combine_policies_for_load():
+combined = []
+combined.append("policy-options {")
+for policy in policies:
+    list_name = extract_prefix_list_name(policy['content'])
+    list_content = extract_prefix_list_content(policy['content'])
+    
+    combined.append(f"    replace: prefix-list {list_name} {{")
+    for line in list_content.strip().split('\n'):
+        if line.strip():
+            combined.append(f"        {line.strip()}")
+    combined.append("    }")
+combined.append("}")
 ```
 
 ## Permission Level Implementation
@@ -270,11 +268,21 @@ allow-commands "(show|commit|load|rollback|commit confirmed)"
 Confirmed commits provide automatic rollback capability:
 
 ```python
-# Execute confirmed commit with timeout
-result = config.commit(
-    comment="Otto BGP policy update",
-    confirm=120  # 120-second confirmation window
-)
+# Actual confirmed commit implementation from juniper_netconf.py
+def apply_with_confirmation(self, policies, confirm_timeout=120, comment=None):
+    if not comment:
+        comment = f"Otto BGP v0.3.2 - Applied {len(policies)} policies"
+    
+    # Perform confirmed commit with timeout
+    commit_result = self.config.commit(
+        comment=comment,
+        confirm=confirm_timeout  # Auto-rollback if not confirmed
+    )
+    
+    # User must confirm within timeout period
+    logger.warning(f"CONFIRMATION REQUIRED within {confirm_timeout} seconds!")
+    
+    return commit_result
 ```
 
 ### Automatic Rollback Triggers
@@ -299,6 +307,17 @@ admin@router> rollback 1
 admin@router> commit comment "Manual rollback to previous config"
 ```
 
+```python
+# Programmatic rollback from juniper_netconf.py
+def rollback_changes(self, rollback_id=None):
+    rollback_id = rollback_id or 0  # Default to last change
+    
+    self.config.rollback(rollback_id)
+    self.config.commit(comment=f"Otto BGP - Rollback to {rollback_id}")
+    
+    logger.info(f"Rollback to configuration {rollback_id} completed")
+```
+
 ### Commit History Tracking
 
 Every commit generates an entry with metadata:
@@ -318,37 +337,46 @@ admin@router> show system commit
 
 ### RFC-Compliant Range Validation
 
-AS numbers must comply with RFC 4893 specifications:
+AS numbers are strictly validated according to RFC 4893 specifications:
 
-- **Range**: 0 to 4294967295 (32-bit unsigned integer)
-- **Reserved Ranges**:
-  - 0: Reserved
-  - 23456: AS_TRANS
-  - 64496-64511: Documentation
-  - 64512-65534: Private use
-  - 65535: Reserved
-  - 65536-65551: Documentation
-  - 4200000000-4294967294: Private use
-  - 4294967295: Reserved
+- **Valid Range**: 0 to 4294967295 (32-bit unsigned integer)
+- **Reserved Ranges** (processed with warnings):
+  - 0: Reserved (RFC 7607)
+  - 23456: AS_TRANS (RFC 6793)
+  - 64496-64511: Documentation (RFC 5398)
+  - 64512-65534: Private use (RFC 6996)
+  - 65535: Reserved (RFC 7300)
+  - 65536-65551: Documentation (RFC 5398)
+  - 4200000000-4294967294: Private use (RFC 6996)
+  - 4294967295: Reserved (RFC 7300)
 
-### Input Sanitization
+### Input Sanitization and Security
 
-AS number validation prevents command injection:
+AS number validation prevents command injection and ensures data integrity:
 
 ```python
-def validate_as_number(as_input) -> int:
-    # Reject non-integer types
-    if isinstance(as_input, float):
-        raise ValueError("AS number must be integer")
+# Actual validation from bgpq4_wrapper.py
+def validate_as_number(as_number) -> int:
+    # Reject floats that could truncate
+    if isinstance(as_number, float):
+        raise ValueError(f"AS number must be integer, got float: {as_number}")
     
-    # Convert to integer
-    as_number = int(as_input)
+    # Convert string/other types to integer
+    if not isinstance(as_number, int):
+        try:
+            as_number = int(as_number)
+        except (ValueError, TypeError):
+            raise ValueError(f"AS number must be convertible to int: {as_number}")
     
-    # Validate range
+    # Validate RFC 4893 range (32-bit unsigned)
     if not 0 <= as_number <= 4294967295:
-        raise ValueError("AS number out of RFC 4893 range")
+        raise ValueError(f"AS number out of valid range (0-4294967295): {as_number}")
     
     return as_number
+
+# Additional filtering from as_extractor.py
+# Automatically filters IP octets (≤255) to prevent false positives
+# Warns about reserved AS ranges but still processes them
 ```
 
 ### bgpq4 Command Generation
@@ -357,7 +385,7 @@ Validated AS numbers generate safe bgpq4 commands:
 
 ```bash
 # Generated command for AS 13335
-bgpq4 -Jl AS13335 AS13335
+bgpq4 -Jl 13335 AS13335
 
 # Example output
 policy-options {
@@ -373,55 +401,77 @@ policy-options {
 
 ### bgpq4 Execution Parameters
 
-Otto BGP executes bgpq4 with specific parameters:
+Otto BGP executes bgpq4 with these validated parameters:
 
 ```bash
-bgpq4 -Jl <policy_name> AS<as_number>
+# Actual command structure from bgpq4_wrapper.py
+bgpq4 -Jl <validated_policy_name> AS<validated_as_number>
 ```
 
 Parameter explanation:
-- `-J`: Generate Juniper syntax
-- `-l <name>`: Set prefix-list name
-- `AS<number>`: Query specific AS number
+- `-J`: Generate Juniper syntax output
+- `-l <name>`: Set prefix-list name (AS number by default)
+- `AS<number>`: Query specific AS number (strictly validated 0-4294967295)
 
-### Policy Name Sanitization
+**Security Features**:
+- AS numbers validated against RFC 4893 range
+- Policy names sanitized (alphanumeric, underscore, hyphen only)
+- Command construction uses list format to prevent shell injection
+- Configurable timeouts (default 45 seconds) with subprocess management
 
-Policy names undergo sanitization for shell safety:
+### Policy Name Generation
+
+Otto BGP automatically generates policy names using AS numbers directly:
 
 ```python
-def sanitize_policy_name(name: str) -> str:
-    # Allow only alphanumeric, underscore, hyphen
-    if not re.match(r'^[A-Za-z0-9_-]+$', name):
-        raise ValueError("Invalid policy name characters")
+# Actual policy generation from bgpq4_wrapper.py
+def generate_policy_for_as(as_number: int, policy_name: str = None) -> PolicyGenerationResult:
+    if policy_name is None:
+        policy_name = str(as_number)  # Uses AS number directly
     
-    # Enforce length limit
-    if len(name) > 64:
-        raise ValueError("Policy name too long")
+    # Validates policy name for security
+    validated_name = validate_policy_name(policy_name)
     
-    return name
+    # Command construction with validation
+    command = [bgpq4_path, '-Jl', validated_name, f'AS{as_number}']
 ```
+
+**Policy Name Format**: Generated policies use the AS number directly (e.g., `prefix-list 13335` for AS13335).
 
 ### Policy Output Directory
 
-Router-specific policies are stored under the policy root directory:
+Router-specific policies are stored with this structure (v0.3.0+ router-aware architecture):
 
 ```
 policies/
-└── routers/
-    ├── edge-router1/
-    │   ├── AS13335_policy.txt
-    │   ├── AS8075_policy.txt
-    │   └── metadata.json
-    └── core-router1/
-        ├── AS174_policy.txt
-        └── metadata.json
+├── edge-router-01/
+│   ├── AS13335_policy.txt
+│   ├── AS8075_policy.txt
+│   └── metadata.json
+├── core-router-01/
+│   ├── AS174_policy.txt
+│   └── metadata.json
+└── reports/
+    ├── deployment_matrix.yaml
+    └── router_statistics.json
 ```
+
+**Router-Aware Features** (v0.3.0):
+- Per-router policy directories named by hostname
+- BGP group to AS number mappings preserved
+- Deployment matrices for operational visibility
+- Router interconnection relationship tracking
 
 ## Network Protocol Configuration
 
 ### SSH Connection Behavior
 
-SSH collection uses strict host key verification and per-command timeouts. Credentials can be key-based or password-based, as configured by system administrators.
+SSH collection uses strict host key verification with no exceptions in production. The system enforces key-based authentication and implements per-command timeouts. Connection parameters:
+
+- **Authentication**: SSH key-based (preferred) or username/password from environment variables
+- **Host Key Verification**: Strict verification against `/var/lib/otto-bgp/ssh-keys/known_hosts`
+- **Timeouts**: Configurable connection (default 30s) and command timeouts (default 60s)
+- **Parallel Collection**: Configurable worker count (default 5, max determined by `OTTO_BGP_SSH_MAX_WORKERS`)
 
 ### NETCONF Over SSH
 
@@ -434,11 +484,180 @@ ssh -p 830 otto-bgp@router.example.com -s netconf
 
 ### Parallel Collection
 
-Otto BGP collects from multiple devices in parallel when applicable. The maximum workers are configurable via environment; connection and command timeouts are enforced per device.
+Otto BGP implements thread-safe parallel collection with resource management:
+
+```python
+# Parallel collection with ThreadPoolExecutor
+with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    future_to_device = {
+        executor.submit(self.collect_with_retry, device): device
+        for device in devices
+    }
+```
+
+- **Worker Management**: Default 5 workers, configurable via `OTTO_BGP_SSH_MAX_WORKERS`
+- **Retry Logic**: Exponential backoff for transient failures
+- **Connection Cleanup**: Automatic resource cleanup with context managers
+- **Error Handling**: Per-device error isolation with detailed logging
+
+## RPKI Validation
+
+### RPKI/ROA Validation System (v0.3.2)
+
+Otto BGP implements comprehensive RPKI validation with tri-state logic:
+
+```bash
+# RPKI validation command
+./otto-bgp rpki-check input.txt --rpki-cache /var/lib/otto-bgp/rpki/
+```
+
+#### Validation States
+
+- **VALID**: Prefix matches valid ROA with correct AS number
+- **INVALID**: Prefix conflicts with ROA (wrong AS or too specific)
+- **NOTFOUND**: No ROA covers this prefix
+- **ERROR**: Validation system error (stale data, etc.)
+
+#### VRP Cache Management
+
+```bash
+# VRP cache structure
+/var/lib/otto-bgp/rpki/
+├── vrp_cache.csv          # CSV format VRP data
+├── vrp_cache.json         # JSON format (rpki-client/routinator)
+└── allowlist.txt          # Exception handling for NOTFOUND prefixes
+```
+
+#### Fail-Closed Design
+
+- **Stale VRP Data**: Validation fails if cache is older than configured threshold (default 24 hours)
+- **Missing Cache**: System operates without RPKI validation if no cache present
+- **Autonomous Mode**: RPKI validation required and enforced
+- **System Mode**: RPKI validation optional but recommended
+
+## Safety and Guardrails System (v0.3.2)
+
+### Always-Active Guardrails
+
+Otto BGP implements comprehensive safety mechanisms:
+
+#### Built-in Guardrails
+
+1. **Prefix Count Guardrail**: Prevents excessive prefix changes
+   - System mode: 25% maximum change threshold
+   - Autonomous mode: 10% maximum change threshold
+
+2. **Bogon Prefix Detection**: Blocks invalid/private prefixes
+   - RFC-defined bogon ranges (0.0.0.0/8, 10.0.0.0/8, etc.)
+   - Critical risk level - always blocks operation
+
+3. **Concurrent Operation Prevention**: Single operation at a time
+   - Lock file management: `/var/lib/otto-bgp/locks/operation.lock`
+   - Stale lock detection and cleanup
+
+4. **Signal Handling**: Graceful shutdown capabilities
+   - SIGTERM/SIGINT handlers for emergency stops
+   - Automatic resource cleanup on termination
+
+#### Mode-Based Safety
+
+**System Mode** (Interactive):
+- Guardrails active with warnings
+- RPKI validation optional
+- Confirmation required for policy application
+- Higher risk thresholds allowed
+
+**Autonomous Mode** (Unattended):
+- All guardrails strictly enforced
+- RPKI validation required
+- No confirmation prompts
+- Lower risk thresholds
+- Enhanced logging and notifications
+
+### Exit Code System
+
+Comprehensive exit codes for automation integration:
+
+- **0**: Success
+- **1-99**: General errors
+- **100-199**: Configuration errors
+- **200-299**: Network/connection errors
+- **300-399**: Validation errors (AS numbers, RPKI, syntax)
+- **400-499**: Safety/guardrail errors
+- **500-599**: Application errors (NETCONF, policy application)
 
 **For system administration procedures, service configuration, and backend troubleshooting, see the System Administrator Guide.**
 
-## BGP Policy Validation
+## Complete Command Reference
+
+Otto BGP provides 9 comprehensive subcommands for complete BGP policy lifecycle management:
+
+### Data Collection Commands
+
+```bash
+# Collect BGP peer data from Juniper devices
+./otto-bgp collect devices.csv --output-dir ./bgp-data
+
+# Process BGP data and extract AS numbers
+./otto-bgp process bgp-data.txt --extract-as -o as-numbers.txt
+```
+
+### Policy Generation Commands
+
+```bash
+# Generate BGP policies using bgpq4 (combined output)
+./otto-bgp policy input.txt -o output.txt
+
+# Generate separate files per AS
+./otto-bgp policy input.txt -s --output-dir ./policies
+
+# Test bgpq4 connectivity
+./otto-bgp policy --test
+```
+
+### Validation Commands
+
+```bash
+# RPKI/ROA validation for AS numbers
+./otto-bgp rpki-check input.txt --rpki-cache /var/lib/otto-bgp/rpki/
+```
+
+### Discovery Commands
+
+```bash
+# Discover BGP configurations and generate router mappings
+./otto-bgp discover devices.csv --output-dir ./discovery
+
+# List discovered routers, AS numbers, or BGP groups
+./otto-bgp list routers --output-dir ./discovery
+./otto-bgp list as --output-dir ./discovery  
+./otto-bgp list groups --output-dir ./discovery
+```
+
+### Policy Application Commands
+
+```bash
+# Apply BGP policies to routers via NETCONF (dry run)
+./otto-bgp apply --router edge-router-01 --dry-run
+
+# Apply with confirmation
+./otto-bgp apply --router edge-router-01 --confirm
+```
+
+### Automation Commands
+
+```bash
+# Execute complete router-aware pipeline
+./otto-bgp pipeline devices.csv --output-dir ./policies
+
+# Skip SSH collection (use existing data)
+./otto-bgp pipeline --input-file bgp-data.txt --output-dir ./policies
+
+# Test IRR proxy connectivity
+./otto-bgp test-proxy
+```
+
+## BGP Policy Application Testing
 
 ```bash
 # Test policy application in candidate configuration on the router
@@ -483,5 +702,70 @@ Maintain comprehensive audit trails:
 - **SSH Access**: Connection attempts and session durations
 - **Policy Generation**: AS number queries and policy creation events
 - **Error Conditions**: Failed operations with detailed error context
+
+## Known Gaps and Limitations
+
+### Technical Dependencies
+
+1. **PyEZ Requirement**: NETCONF policy application requires `junos-eznc` library
+   - Collection and policy generation work without PyEZ
+   - Install with: `pip install junos-eznc`
+   - Docker/Podman fallback available for bgpq4 if native executable unavailable
+
+2. **RPKI Cache Management**: 
+   - Manual VRP cache updates required (no automatic RPKI cache refresh)
+   - Fail-closed behavior when cache is stale (configurable threshold)
+   - No built-in RPKI validator - requires external rpki-client or routinator
+
+3. **SSH Host Key Management**:
+   - Initial host key collection requires manual setup via scripts
+   - No automatic host key rotation handling
+   - Setup mode should only be used for initial deployment
+
+### Operational Limitations
+
+1. **Parallel Processing Constraints**:
+   - SSH collection limited by network device capacity
+   - bgpq4 queries limited by IRR server rate limits
+   - Thread pool size configurable but bounded by system resources
+
+2. **Router Platform Support**:
+   - Designed specifically for Juniper devices running Junos
+   - NETCONF implementation uses PyEZ (Juniper-specific)
+   - BGP configuration parsing assumes Juniper syntax
+
+3. **Policy Application Scope**:
+   - Only manages `policy-options prefix-list` configurations
+   - Does not modify routing policies or import/export statements beyond basic import policy references
+   - Router-specific advanced BGP features not supported
+
+### Safety System Limitations
+
+1. **Guardrail Coverage**:
+   - Prefix count changes detected but historical baselines not maintained
+   - Bogon detection based on static RFC ranges (not dynamic threat intelligence)
+   - No integration with external BGP monitoring systems
+
+2. **Mode Detection**:
+   - Autonomous vs system mode determined by environment variables
+   - No runtime mode switching without restart
+   - Configuration changes require application restart
+
+3. **Error Recovery**:
+   - Limited automatic recovery from transient network failures
+   - NETCONF rollback requires manual confirmation in some scenarios
+   - No automatic policy validation against current router state
+
+### Performance Considerations
+
+1. **Memory Usage**:
+   - Large policy sets loaded entirely into memory
+   - VRP cache loaded completely at startup
+   - No streaming processing for very large datasets
+
+2. **Network Dependencies**:
+   - All operations require network connectivity to target devices
+   - No offline policy generation mode for network-isolated environments
+   - BGP4 queries require Internet connectivity to IRR databases
 
 This reference provides network engineering staff with the technical foundation to understand and work with Otto BGP router configurations, policy generation, and Juniper device integration. For backend system configuration and maintenance procedures, see the System Administrator Guide.

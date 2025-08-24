@@ -45,7 +45,6 @@ WorkingDirectory=/usr/local/lib/otto-bgp
 ExecStart=/usr/local/bin/otto-bgp pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/policies
 Environment=PYTHONPATH=/usr/local/lib/otto-bgp
 EnvironmentFile=-/etc/otto-bgp/otto.env
-EnvironmentFile=-/etc/otto-bgp/otto.env
 
 # Security hardening
 NoNewPrivileges=yes
@@ -138,6 +137,7 @@ Group=otto-bgp
 WorkingDirectory=/usr/local/lib/otto-bgp
 ExecStart=/usr/local/bin/otto-bgp pipeline /etc/otto-bgp/devices.csv --output-dir /var/lib/otto-bgp/policies --autonomous
 Environment=PYTHONPATH=/usr/local/lib/otto-bgp
+Environment=OTTO_BGP_AUTONOMOUS=true
 EnvironmentFile=-/etc/otto-bgp/otto.env
 
 # Network segmentation (allow local + RFC1918 by default)
@@ -628,16 +628,21 @@ Both modes use NETCONF for policy application. System mode requires operator con
 ### Environment Variables
 
 **Configuration Variables:**
-- `OTTO_BGP_MODE` - Set to "autonomous" for unattended operation
-- `OTTO_BGP_CONFIG_DIR` - Configuration directory (default: /etc/otto-bgp)
-- `OTTO_BGP_DATA_DIR` - Data directory (default: /var/lib/otto-bgp)
-- `OTTO_BGP_RPKI_CACHE_DIR` - RPKI cache directory
-- `SSH_USERNAME` / `SSH_PASSWORD` - SSH credentials (use keys in production)
+- `OTTO_BGP_MODE`: set to `autonomous` for unattended operation (used in some sample units; the CLI primarily keys on `OTTO_BGP_AUTONOMOUS`).
+- `OTTO_BGP_AUTONOMOUS`: `true` to run pipeline in autonomous mode.
+- `OTTO_BGP_CONFIG_DIR`: configuration directory (default: `/etc/otto-bgp`).
+- `OTTO_BGP_DATA_DIR`: data directory (default: `/var/lib/otto-bgp`).
+- `OTTO_BGP_LOG_FILE`: optional file path to enable file logging in addition to journal.
+- `OTTO_BGP_LOG_LEVEL`: log level (`INFO`, `DEBUG`, etc.).
+- `OTTO_BGP_RPKI_VRP_CACHE`: path to VRP cache file (default: `/var/lib/otto-bgp/rpki/vrp_cache.json`).
+- `OTTO_BGP_RPKI_ALLOWLIST`: path to NOTFOUND allowlist file (default: `/var/lib/otto-bgp/rpki/allowlist.json`).
+- `SSH_USERNAME` / `SSH_PASSWORD`: SSH credentials (key-based auth recommended).
 
 **Configuration Files:**
-- `/etc/otto-bgp/otto.conf` - Main configuration
-- `/var/lib/otto-bgp/ssh-keys/known_hosts` - SSH host keys
-- `/var/lib/otto-bgp/rpki/vrp_cache.csv` - RPKI cache
+- `/etc/otto-bgp/config.json`: main configuration (optional; environment variables also supported).
+- `/etc/otto-bgp/otto.env`: environment variables loaded by services/wrapper.
+- `/var/lib/otto-bgp/ssh-keys/known_hosts`: SSH host keys.
+- `/var/lib/otto-bgp/rpki/vrp_cache.json`: RPKI cache (JSON).
 
 ## IRR Proxy (bgpq4 via SSH Tunnels)
 
@@ -703,22 +708,22 @@ otto-bgp test-proxy --test-bgpq4 --timeout 20
 
 Operational notes:
 
-- Proxy-aware bgpq4: The CLI wires the proxy manager into bgpq4; tunnels must be established to be used. Use `otto-bgp test-proxy` to validate connectivity per-tunnel.
+- Proxy lifecycle: When `irr_proxy.enabled` is true, `otto-bgp policy` and the unified `pipeline` automatically establish tunnels and clean them up when finished. Use `otto-bgp test-proxy` to validate configuration and connectivity.
 - Multiple tunnels: Used for redundancy. When generating policies, the first CONNECTED tunnel is selected automatically; no load balancing between tunnels.
 - Containerized bgpq4: Proxy use requires native bgpq4. Docker/Podman modes do not include host networking, so `-h 127.0.0.1 -p <port>` from inside a container will not reach host SSH tunnels.
-- Parallelism: See the Known Gaps section regarding proxy interaction with parallel policy generation.
+- Parallelism: With proxy enabled, worker processes are automatically capped (max 4) and receive a snapshot of tunnel endpoints.
 
 ## Log Management
 
-### Log File Locations
+### Log Outputs
 
-Otto BGP generates logs in standard locations:
+- Default: logs emit to the systemd journal (`journalctl -u otto-bgp.service`).
+- Optional file: set `OTTO_BGP_LOG_FILE` (and optionally `OTTO_BGP_LOG_LEVEL`) in `/etc/otto-bgp/otto.env` to enable a rotating file log. Example:
 
-- **Application Log**: `/var/lib/otto-bgp/logs/otto-bgp.log`
-- **Discovery Log**: `/var/lib/otto-bgp/logs/discovery.log`
-- **NETCONF Log**: `/var/lib/otto-bgp/logs/netconf.log`
-- **Security Events**: `/var/lib/otto-bgp/logs/security.log`
-- **Systemd Journal**: `journalctl -u otto-bgp.service`
+```bash
+echo 'OTTO_BGP_LOG_FILE=/var/lib/otto-bgp/logs/otto-bgp.log' | sudo tee -a /etc/otto-bgp/otto.env
+echo 'OTTO_BGP_LOG_LEVEL=INFO' | sudo tee -a /etc/otto-bgp/otto.env
+```
 
 ### Syslog Integration
 
@@ -881,17 +886,15 @@ When updating Otto BGP:
 5. Test connectivity and functionality
 6. Resume automated operations
 
-This guide provides system administrators with comprehensive procedures for maintaining Otto BGP backend operations while network engineers focus on router configuration aspects.
+This guide provides system administrators with procedures for maintaining Otto BGP backend operations while network engineers focus on router configuration aspects.
 ## Known Gaps and Limitations
 
-- Installer scope: install.sh creates only otto-bgp.service and (non‑autonomous) otto-bgp.timer. The RPKI preflight and autonomous units shown here are optional manual deployments and are not created by the installer.
-- Paths: System installations use /usr/local/bin (wrapper), /usr/local/lib/otto-bgp (code), and /usr/local/venv (venv). Any /opt/otto-bgp paths are legacy/manual and not used by the installer.
-- Devices inventory: The service expects /etc/otto-bgp/devices.csv to exist. The installer does not create this file; administrators must provide it.
-- Environment variables: Recipients for email notifications (to_addresses) are not read from env. Configure them in /etc/otto-bgp/config.json under autonomous_mode.notifications.email.to_addresses.
-- No config CLI: There is no otto-bgp config show/validate command. Edit /etc/otto-bgp/otto.env or use /etc/otto-bgp/config.json.
-- Logging files: The application typically logs via journal and an optional single log file (OTTO_BGP_LOG_FILE). Separate security.log/netconf.log files referenced in some examples may not exist; prefer journalctl filters.
-- IRR proxy lifecycle: While the proxy manager is instantiated for `policy`/`pipeline` when `irr_proxy.enabled` is true, tunnels are not automatically established in those commands. `test-proxy` establishes and cleans up tunnels; policy generation only uses the proxy if tunnels are already established in the same process.
-- Proxy + parallel generation: Parallel generation WITH proxy is supported via tunnel snapshotting. Workers receive tunnel endpoint mapping and are automatically capped to 4 when proxy is active. Configure via `OTTO_BGP_BGPQ4_MAX_WORKERS` environment variable.
-- Tunnel selection: When multiple tunnels are configured, the first CONNECTED tunnel is used; there is no load balancing or server pinning exposed via CLI/config. The `irr_server` hint exists in code paths but is not wired to CLI.
-- IRR servers env var: `OTTO_BGP_IRR_SERVERS` appears in sample systemd env files but is not consumed by the current code.
-- Container modes: Docker/Podman bgpq4 runs do not use host networking; proxy tunnels bound on the host’s 127.0.0.1 are not reachable from inside the container. Use native bgpq4 with the proxy.
+- Installer scope: `install.sh` creates only `otto-bgp.service` and (when not in autonomous mode) a daily `otto-bgp.timer`. The autonomous and RPKI preflight units shown here are optional manual deployments and are not created by the installer.
+- Path conventions: System installations use `/usr/local/bin` (wrapper), `/usr/local/lib/otto-bgp` (code), and `/usr/local/venv` (venv). The sample units under `systemd/` use `/opt/otto-bgp` and are intended for manual deployments.
+- Devices inventory: The service expects `/etc/otto-bgp/devices.csv` to exist. The installer does not create this file; administrators must provide it.
+- Email recipients: Notification recipients (`to_addresses`) are not read from environment variables. Configure them in `/etc/otto-bgp/config.json` under `autonomous_mode.notifications.email.to_addresses`.
+- No config CLI: There is no `otto-bgp config` command. Edit `/etc/otto-bgp/otto.env` and/or `/etc/otto-bgp/config.json`.
+- Logging: By default logs go to the journal. A single rotating file log is supported via `OTTO_BGP_LOG_FILE`. Separate `security.log`/`netconf.log` files are not created by the application.
+- IRR proxy lifecycle: With `irr_proxy.enabled`, both `policy` and `pipeline` automatically create tunnels and clean them up on exit. There is no load balancing between tunnels; the first CONNECTED tunnel is used.
+- Proxy + parallel generation: When proxy is active, workers are capped to 4 and receive a snapshot of tunnel endpoints. You can limit workers with `OTTO_BGP_BGPQ4_MAX_WORKERS` as needed.
+- Tunnel selection detail: An `irr_server` hint exists in the generator API but is not exposed via CLI.

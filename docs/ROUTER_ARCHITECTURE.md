@@ -25,7 +25,7 @@ References: `otto_bgp/models/__init__.py`
 
 References: `otto_bgp/collectors/juniper_ssh.py`, `otto_bgp/discovery/inspector.py`, `otto_bgp/discovery/yaml_generator.py`
 
-Note: The legacy `discover` CLI command is temporarily disabled while error handling is standardized; discovery utilities remain available programmatically.
+CLI: `otto-bgp discover <devices.csv> --output-dir policies` runs discovery and writes to `policies/discovered/`.
 
 ### 3) Policy Generation
 
@@ -95,7 +95,7 @@ References: `otto_bgp/proxy/irr_tunnel.py` (imported as `otto_bgp.proxy`)
 
 Notes:
 - Discovery artifacts are written to `policies/discovered/` as `bgp-mappings.yaml` and `router-inventory.json` (not `router_mappings.yaml` or `router_inventory.yaml`).
-- There is no `applier.load_router_policies(...)` API; callers load files and pass policy dicts to the adapter/applier.
+- `JuniperPolicyApplier.load_router_policies(policies_dir)` is available to load `AS*_policy.txt` files into the list-of-dicts structure used by the applier.
 
 ## Directory Structure
 
@@ -113,7 +113,8 @@ policies/
 │       └── metadata.json
 └── reports/
     ├── deployment-matrix.csv    # Deployment matrix (reports module)
-    └── generation-log.json      # Generation logs (where produced)
+    ├── deployment-matrix.json   # JSON matrix (reports module)
+    └── deployment-summary.txt   # Human-readable summary (reports module)
 ```
 
 Related: `otto_bgp/reports/matrix.py` can also emit a text summary alongside CSV/JSON.
@@ -153,13 +154,19 @@ files = bgpq4.write_policies_to_files(batch, output_dir='policies/routers/edge-n
 
 ### Adapt & Apply (preview + confirmed commit)
 ```python
+from pathlib import Path
 from otto_bgp.appliers import JuniperPolicyApplier, PolicyAdapter, UnifiedSafetyManager
 
-# Load policy files → build policies list with {'as_number', 'content'}
-policies = [
-    { 'as_number': 13335, 'content': open('policies/routers/edge-nyc-1/AS13335_policy.txt').read() }
-]
+# Option A: Load policies from a directory
+applier = JuniperPolicyApplier()
+policies = applier.load_router_policies(Path('policies/routers/edge-nyc-1'))
 
+# Option B: Manually build [{'as_number', 'content'}] from files (equivalent)
+# policies = [
+#     { 'as_number': 13335, 'content': open('policies/routers/edge-nyc-1/AS13335_policy.txt').read() }
+# ]
+
+# Optional adaptation for custom import/policy chains
 adapter = PolicyAdapter()
 adapted = adapter.adapt_policies_for_router('edge-nyc-1', policies, bgp_groups={'external-peers': [13335]})
 
@@ -168,9 +175,8 @@ check = safety.validate_policies_before_apply(policies)
 if not check.safe_to_proceed:
     raise RuntimeError('Safety validation failed')
 
-applier = JuniperPolicyApplier()
 applier.connect_to_router(hostname='192.0.2.10', username='netconf', password='secret')
-applier.preview_changes(policies)
+diff = applier.preview_changes(policies)
 result = applier.apply_with_confirmation(policies, confirm_timeout=120, comment='Otto BGP policy update')
 ```
 
@@ -194,8 +200,12 @@ result = applier.apply_with_confirmation(policies, confirm_timeout=120, comment=
 - Diffing: `YAMLGenerator` emits human‑readable diffs of discovery changes.
 - Reports: `reports/matrix.py` generates CSV/JSON/text deployment matrices.
 
-## Roadmap (selected)
+## Known Gaps and Limitations
 
-- Multi‑vendor adapters (Cisco/Arista), REST API, and UI.
-- Distributed processing and event‑driven updates.
-- Richer post‑apply health checks and autonomous mode controls.
+- Version labels: Some generators and comments still embed `v0.3.0` in headers while the package exposes `v0.3.2` in several modules. Generated file headers may reflect `v0.3.0`.
+- Discover CLI diff flag: `otto-bgp discover --show-diff` invokes `generate_diff_report()` without building a diff first. To generate a diff, call `old = yaml_gen.load_previous_mappings(); new = mappings; diff = yaml_gen.diff_mappings(old, new); yaml_gen.generate_diff_report(diff)`.
+- NETCONF apply dependency: `JuniperPolicyApplier` requires PyEZ (`junos-eznc`). Without it, connect/apply methods are unavailable.
+- Adapter scope: `PolicyAdapter` and its merge logic are simplified and not a full Junos configuration parser. Validate outputs in a lab before use.
+- Vendor support: Discovery, adaptation, and applier paths target Junos. Other vendors are not implemented.
+- Reports: The reports module writes `deployment-matrix.csv`, `deployment-matrix.json`, and `deployment-summary.txt`. There is no `generation-log.json` writer in the current codebase.
+- IRR proxy: `IRRProxyManager` requires a reachable jump host and valid SSH key/known_hosts. If proxy tunnels cannot be established, bgpq4 runs without proxy.

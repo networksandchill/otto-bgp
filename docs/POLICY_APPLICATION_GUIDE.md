@@ -1,6 +1,6 @@
 # Otto BGP Policy Application Guide
 
-This guide explains how Otto BGP applies BGP policies to Juniper routers and provides workflows for development testing, autonomous operation, and traditional production deployment.
+This guide explains how Otto BGP applies BGP policies to Juniper routers using NETCONF and provides workflows for development testing, autonomous operation, and traditional production deployment.
 
 ## Table of Contents
 1. [Overview](#overview)
@@ -10,55 +10,75 @@ This guide explains how Otto BGP applies BGP policies to Juniper routers and pro
 5. [Production Workflow](#production-workflow)
 6. [Security Considerations](#security-considerations)
 7. [Troubleshooting](#troubleshooting)
+8. [Known Gaps and Limitations](#known-gaps-and-limitations)
 
 ## Overview
 
-Otto BGP v0.3.2 generates BGP prefix-list policies using bgpq4 and provides application methods including autonomous operation with safety controls, email notifications (when enabled), and risk-based decision making.
+Otto BGP v0.3.2 generates BGP prefix-list policies using bgpq4 and provides NETCONF-based application to Juniper routers. The system includes comprehensive safety mechanisms including always-active guardrails, autonomous operation modes, email notifications, and risk-based decision making.
 
 ### Policy Operation Modes
 
 - **Generation Only**: Creates Juniper policy-options configuration files for manual application
-- **Autonomous Mode**: Production-ready automatic policy application with risk-based decisions and email audit trail
-- **Interactive Mode**: Manual policy application with confirmation windows and safety checks
+- **Autonomous Mode**: Unattended automatic policy application with always-active guardrails, risk-based decisions, and email audit trail
+- **System Mode**: Interactive policy application with confirmation windows and safety checks
 
 ## Architecture
 
 ### Components
 
 ```
-Otto BGP v0.3.2 Enhanced Application Stack
+Otto BGP v0.3.2 NETCONF Application Stack
 ├── bgpq4 (IRR Query Engine)
 │   └── Generates prefix-lists from AS numbers
 ├── Policy Adapter (otto_bgp/appliers/adapter.py)
-│   └── Transforms policies for router contexts
+│   └── Transforms policies for router contexts and BGP groups
 ├── NETCONF Applier (otto_bgp/appliers/juniper_netconf.py)
-│   └── PyEZ-based policy application with event notifications
-├── Unified Safety Manager (otto_bgp/appliers/safety.py)
-│   ├── Always-on guardrails (prefix counts, bogons, optional RPKI)
-│   ├── Risk-based autonomous decision logic (low risk auto-apply)
+│   ├── PyEZ-based policy application via NETCONF
+│   ├── Configuration preview and diff generation
 │   ├── Confirmed commit with automatic rollback
-│   └── Email notifier for NETCONF events (when autonomous email enabled)
-└── Configuration Manager (otto_bgp/utils/config.py)
-    └── Autonomous mode configuration and email settings
+│   └── Connection management with proper cleanup
+├── Unified Safety Manager (otto_bgp/appliers/safety.py)
+│   ├── Always-active guardrail system (cannot be disabled)
+│   ├── Signal handling for graceful shutdown
+│   ├── Thread-safe rollback callback management
+│   ├── Risk-based autonomous decision logic
+│   └── Email notifications for all NETCONF events
+├── Guardrail Components (otto_bgp/appliers/guardrails.py)
+│   ├── Prefix count validation
+│   ├── Bogon prefix detection
+│   ├── Concurrent operation prevention
+│   ├── Signal handling for emergency stops
+│   └── Optional RPKI validation integration
+├── Exit Code System (otto_bgp/appliers/exit_codes.py)
+│   └── Structured exit codes (300+ codes) for automation
+└── Mode Manager (otto_bgp/appliers/mode_manager.py)
+    └── System vs autonomous mode management with safety thresholds
 ```
 
-### Enhanced Data Flow
+### NETCONF Application Data Flow
 
-1. **AS Discovery**: Extract AS numbers from router configurations
-2. **Policy Generation**: Query IRR databases via bgpq4
-3. **Policy Adaptation**: Transform for specific BGP groups
-4. **Safety Assessment**: Risk-level evaluation and autonomous decision logic
-5. **Application**: NETCONF commit with confirmation and event notifications
-6. **Audit Trail**: Email notifications for all NETCONF operations (success/failure)
-7. **Verification**: Post-application validation with monitoring recommendations
+1. **AS Discovery**: Extract AS numbers from router configurations or input files
+2. **Policy Generation**: Query IRR databases via bgpq4 to generate prefix-lists
+3. **Policy Adaptation**: Transform policies for specific routers and BGP groups
+4. **Safety Assessment**: Always-active guardrails evaluate risk level
+5. **NETCONF Connection**: Establish secure connection with SSH host key verification
+6. **Configuration Preview**: Generate diff without applying changes (dry-run mode)
+7. **Confirmed Commit**: Apply changes with automatic rollback window
+8. **Health Validation**: Post-commit verification of router health
+9. **Notification**: Email notifications for all NETCONF events (if enabled)
+10. **Cleanup**: Proper connection cleanup and resource management
 
-### RPKI Validation (optional)
+### RPKI Validation (Optional)
 
-When enabled in configuration, Otto validates generated policies using a local VRP cache (routinator/rpki-client JSON):
+When enabled via configuration, Otto validates generated policies using a local VRP (Validated ROA Payloads) cache:
 
-- Fail-closed and freshness checks are configurable (`rpki.fail_closed`, `rpki.max_vrp_age_hours`).
-- Guardrail enforces thresholds for INVALID/NOTFOUND rates before apply.
-- Autonomous mode considers RPKI results in the risk assessment.
+- **Cache Sources**: Supports routinator/rpki-client JSON format and CSV format
+- **Validation Logic**: Tri-state validation (VALID/INVALID/NOT_FOUND) with configurable thresholds
+- **Fail-Closed Mode**: Configurable behavior for stale or missing RPKI data
+- **Guardrail Integration**: RPKI validation integrated as an optional guardrail component
+- **Risk Assessment**: RPKI results contribute to overall risk level calculation
+
+**Note**: RPKI validation requires external RPKI cache setup and is not included in the base installation.
 
 ## Discovery & Router Mapping
 
@@ -136,21 +156,24 @@ otto-bgp policy as_numbers.txt --output-dir lab_policies --separate
 # Dry run to see what would change
 otto-bgp apply --router lab-router1 --policy-dir lab_policies --dry-run
 
-# Review the diff
+# Save diff for review
 otto-bgp apply --router lab-router1 --policy-dir lab_policies --dry-run > changes.diff
 ```
 
 #### Step 3: Apply with Confirmation
 
+**Important**: The current implementation requires manual confirmation via the router's CLI within the timeout window.
+
 ```bash
 # Apply with 2-minute confirmation window
 otto-bgp apply --router lab-router1 --policy-dir lab_policies --confirm --confirm-timeout 120
 
-# Monitor BGP sessions
-ssh otto-lab@lab-router1 "show bgp summary"
+# During the timeout window, connect to router and confirm:
+ssh otto-lab@lab-router1
+configure
+commit
 
-# If everything looks good, commit happens automatically after timeout
-# If issues occur, let timeout expire for automatic rollback
+# If no manual confirmation within timeout, changes are automatically rolled back
 ```
 
 #### Step 4: Verify Application
@@ -170,7 +193,7 @@ ssh otto-lab@lab-router1 "show bgp neighbor | match State"
 
 ### Overview
 
-Otto BGP v0.3.2 introduces production-ready autonomous operation that automatically applies low-risk BGP policy changes while maintaining comprehensive safety controls and audit trails.
+Otto BGP v0.3.2 provides autonomous operation that automatically applies low-risk BGP policy changes while maintaining always-active safety guardrails and comprehensive audit trails. Autonomous mode is controlled by the `OTTO_BGP_MODE=autonomous` environment variable and requires proper configuration for unattended operation.
 
 ### Autonomous Mode Setup
 
@@ -220,28 +243,31 @@ sudo journalctl -u otto-bgp.service | grep -i email
 
 Otto BGP autonomous mode only applies changes that meet strict safety criteria:
 
-- **Risk Level**: Only `low` risk changes are auto-applied
-- **Safety Validation**: All configured guardrails (incl. optional RPKI) must pass
-- **Confirmation Timeout**: Confirmed commits with automatic rollback
-- **Email Notifications**: Sent when BOTH autonomous mode and autonomous email notifications are enabled
+- **Risk Level Assessment**: Only `low` risk changes are auto-applied based on guardrail evaluation
+- **Always-Active Guardrails**: All enabled guardrails must pass (cannot be disabled in production)
+- **Safety Thresholds**: Configurable thresholds for prefix counts, RPKI validation rates, etc.
+- **Confirmed Commits**: Uses confirmed commit with automatic rollback if health checks fail
+- **Email Notifications**: Sent for all NETCONF events when both autonomous mode and email notifications are enabled
 
-#### Example Autonomous Commands
+#### Autonomous Mode Operation
+
+Autonomous mode is controlled by environment variables and configuration, not CLI flags:
 
 ```bash
-# Standard autonomous operation
-otto-bgp apply --autonomous --auto-threshold 100
+# Set autonomous mode via environment variable
+export OTTO_BGP_MODE=autonomous
 
-# System mode with autonomous decisions
-otto-bgp apply --system --autonomous
+# Run pipeline in autonomous mode
+otto-bgp pipeline devices.csv --output-dir /var/lib/otto-bgp/output
 
-# Full pipeline with autonomous application
-otto-bgp --autonomous --system pipeline devices.csv --output-dir /var/lib/otto-bgp/output
+# Apply policies in autonomous mode (mode detected automatically)
+otto-bgp apply --router router1 --policy-dir /var/lib/otto-bgp/output
 
-# Preview autonomous decisions (dry run)
-otto-bgp apply --autonomous --dry-run
+# Preview what autonomous mode would do (still requires explicit --dry-run)
+otto-bgp apply --router router1 --policy-dir policies --dry-run
 ```
 
-Note: Point `--policy-dir` to the directory where policies are generated (e.g., `/var/lib/otto-bgp/output`) if you are not using the default `policies/`.
+**Note**: The CLI does not include `--autonomous` or `--system` flags. Mode is detected from the `OTTO_BGP_MODE` environment variable or configuration files.
 
 #### Safety Thresholds and Configuration
 
@@ -290,7 +316,7 @@ Prefix Count: 150 (Reference threshold: 100)
 
 Configuration Diff:
 [+] policy-options {
-[+]     prefix-list AS13335 {
+[+]     replace: prefix-list AS13335 {
 [+]         1.1.1.0/24;
 [+]         1.0.0.0/24;
 [+]     }
@@ -309,7 +335,7 @@ Status: FAILED
 Router: router1.company.com
 Timestamp: 2025-08-17T14:35:22
 
-Error: Configuration check failed: prefix-list AS13335 already exists
+Error: Commit failed - configuration validation error
 Attempted Policies: 1
 Rollback Status: Automatic rollback attempted
 ```
@@ -507,11 +533,12 @@ set system syslog file netconf-log match NETCONF
 #### 1. PyEZ Not Available
 
 ```bash
-# Check if PyEZ is installed
+# Check if PyEZ is installed in your virtual environment
+source otto_venv/bin/activate
 python -c "import jnpr.junos; print('PyEZ available')"
 
-# If not, install it
-pip install junos-eznc
+# If not, install PyEZ and dependencies
+pip install junos-eznc jxmlease lxml ncclient
 ```
 
 #### 2. NETCONF Connection Failed
@@ -536,8 +563,17 @@ ssh otto-lab@lab-router1 "show configuration system login class bgp-policy-admin
 
 #### 4. Commit Failed
 
-```python
-# Debug commit issues
+Common commit failures and solutions:
+
+```bash
+# Check router disk space
+ssh otto-lab@lab-router1 "show system storage"
+
+# Check for configuration errors
+ssh otto-lab@lab-router1 "show system commit"
+
+# Debug via Python (in otto_venv)
+python3 -c "
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
 
@@ -545,33 +581,52 @@ dev = Device(host='lab-router1', user='otto-lab')
 dev.open()
 config = Config(dev)
 
-# Load and check
-config.load(path='policy.txt', merge=True)
-config.pdiff()  # Show pending diff
+# Load test policy
+config.load('policy-options { prefix-list test { 192.168.1.0/24; } }', format='text', merge=True)
 
-# Check for errors
-if config.commit_check():
-    print("Configuration is valid")
-else:
-    print("Configuration has errors")
-    
+# Check configuration validity
+result = config.commit_check()
+print(f'Commit check: {result}')
+
+# Show diff if valid
+if result:
+    print('Diff:')
+    print(config.pdiff())
+
+config.rollback()
 dev.close()
+"
 ```
 
 ### Logging and Debugging
 
 #### Enable Debug Logging
 
-```python
-# In otto_bgp/appliers/juniper_netconf.py
+```bash
+# Enable debug logging via environment variable
+export OTTO_BGP_LOG_LEVEL=DEBUG
+
+# Run with verbose output
+otto-bgp apply --router lab-router1 --dry-run --verbose
+
+# Check Otto BGP logs
+tail -f /var/lib/otto-bgp/logs/otto-bgp.log
+
+# Enable PyEZ debug logging (for development)
+export PYTHONPATH=/path/to/otto-bgp:$PYTHONPATH
+python3 -c "
 import logging
+import os
 logging.basicConfig(level=logging.DEBUG)
 
-# PyEZ debug
 from jnpr.junos import Device
-dev = Device(host='router', gather_facts=True, normalize=True)
+dev = Device(host='lab-router1', user='otto-lab', gather_facts=True)
 dev.open()
-print(dev.facts)  # Show device information
+print('Device Facts:')
+for key, value in dev.facts.items():
+    print(f'  {key}: {value}')
+dev.close()
+"
 ```
 
 #### Monitor Application
@@ -603,11 +658,17 @@ ssh otto-lab@router "monitor stop"
 ### 2. Use Confirmation Windows
 
 ```bash
-# Never skip confirmation in production-like environments
-./otto-bgp apply --router router1 --confirm --confirm-timeout 300
+# Always use confirmed commits with adequate timeout
+otto-bgp apply --router router1 --confirm --confirm-timeout 300
 
-# Have rollback plan ready (use router's native rollback)
-ssh admin@router1 "rollback 1; commit"
+# Manually confirm via router CLI within timeout window
+ssh admin@router1
+configure
+commit
+
+# If no confirmation, automatic rollback occurs
+# Manual rollback can be performed if needed:
+ssh admin@router1 "configure; rollback 1; commit"
 ```
 
 ### 3. Monitor After Application
@@ -664,13 +725,13 @@ validate-policies:
   stage: validate
   script:
     - python validate_policies.py policies/
-    - ./otto-bgp apply --router lab-router1 --dry-run
+    - otto-bgp apply --router lab-router1 --dry-run
   
 deploy-to-lab:
   stage: deploy
   when: manual
   script:
-    - ./otto-bgp apply --router lab-router1 --confirm
+    - otto-bgp apply --router lab-router1 --confirm
   environment:
     name: lab
 ```
@@ -685,7 +746,7 @@ deploy-to-lab:
   
   tasks:
     - name: Generate policies
-      command: ./otto-bgp policy as_list.txt -o /tmp/policies/
+      command: otto-bgp policy as_list.txt -o /tmp/policies/
       delegate_to: localhost
       
     - name: Load policies to router
@@ -709,22 +770,64 @@ deploy-to-lab:
 
 ## Conclusion
 
-Otto BGP v0.3.2 provides a complete pipeline for BGP policy management, from generation to autonomous application. The enhanced safety controls, risk-based decision logic, and comprehensive email audit trail make automated policy application suitable for production environments.
+Otto BGP v0.3.2 provides a complete pipeline for BGP policy management, from generation to NETCONF-based application. The always-active guardrail system, risk-based decision logic, and comprehensive audit trail enable both interactive and autonomous policy application.
 
 ### Deployment Recommendations
 
-**For Autonomous Mode (Recommended for Production):**
-1. Configure Otto BGP with `./install.sh --autonomous`
-2. Set up email notifications for complete audit trail
-3. Monitor systemd logs and email notifications
-4. Maintain rollback capability on routers
-5. Start with low auto_apply_threshold for context
+**For Autonomous Mode:**
+1. Configure Otto BGP with appropriate configuration files and environment variables
+2. Set up email notifications for complete audit trail of all NETCONF events
+3. Monitor systemd logs and email notifications for operational visibility
+4. Ensure SSH host key verification is properly configured
+5. Test guardrail system and rollback procedures in lab environment
 
-**For Traditional Manual Mode:**
-1. Generate policies with Otto BGP
-2. Review and validate changes
-3. Apply through your standard change process
-4. Monitor BGP health after changes
-5. Maintain rollback capability
+**For System Mode (Interactive):**
+1. Generate policies using Otto BGP policy generation features
+2. Use `--dry-run` to preview all changes before application
+3. Apply with confirmed commits and adequate timeout windows
+4. Monitor BGP session health during and after application
+5. Maintain documented rollback procedures
+
+**Prerequisites for All Modes:**
+- PyEZ (junos-eznc) and dependencies installed in Otto BGP virtual environment
+- NETCONF enabled on target Juniper routers with appropriate user permissions
+- SSH host key verification configured with known_hosts file
+- Guardrail system enabled (always active, cannot be disabled)
 
 For additional support, refer to the main README.md or create an issue in the Otto BGP repository.
+
+## Known Gaps and Limitations
+
+### NETCONF Implementation Limitations
+
+1. **Manual Confirmation Required**: The current NETCONF implementation requires manual confirmation of commits via the router's CLI within the timeout window. Otto BGP does not automatically confirm commits, requiring operator intervention.
+
+2. **PyEZ Dependency**: Policy application requires PyEZ (junos-eznc) and related dependencies. These are not installed by default and must be manually installed in the Otto BGP virtual environment.
+
+3. **Juniper Router Support Only**: NETCONF functionality is currently limited to Juniper routers. Other vendor support is not implemented.
+
+4. **Limited Health Validation**: Post-commit health checks are basic and focus primarily on management interface and BGP neighbor status. More comprehensive router health validation is not implemented.
+
+### Configuration and Setup Gaps
+
+1. **Installation Script Limitations**: The `./install.sh --autonomous` script referenced in documentation may not fully configure autonomous mode operation. Manual configuration may be required.
+
+2. **Email Notification Dependency**: Email notifications require external SMTP configuration and credentials stored in environment variables (e.g., `OTTO_BGP_SMTP_PASSWORD`). This setup is not automated.
+
+3. **RPKI Validation Optional**: RPKI validation is available but requires external RPKI cache setup and configuration. This is not included in base installation.
+
+### Operational Limitations
+
+1. **Limited Error Recovery**: While rollback capabilities exist, automated error recovery beyond basic rollback is limited. Complex failure scenarios may require manual intervention.
+
+2. **No Multi-Router Coordination**: Policy application is performed on individual routers without coordination across multiple devices. Network-wide policy changes must be orchestrated externally.
+
+3. **Limited Diff Analysis**: Configuration diff analysis is basic and may not catch all potential issues with complex policy changes.
+
+### Documentation Gaps
+
+1. **Example Policy Files**: Documentation lacks comprehensive examples of actual policy files and router directory structure.
+
+2. **Troubleshooting Coverage**: Troubleshooting section does not cover all common failure scenarios, particularly those related to network connectivity, authentication, and configuration errors.
+
+3. **Performance Characteristics**: Documentation does not provide guidance on performance characteristics, resource usage, or scaling limitations for large numbers of policies or prefixes.
