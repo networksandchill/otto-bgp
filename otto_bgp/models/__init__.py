@@ -1,5 +1,5 @@
 """
-Otto BGP v0.3.0 Data Models
+Otto BGP Data Models
 
 This module contains the core data models for Otto BGP's router-aware architecture.
 """
@@ -125,10 +125,10 @@ class PipelineResult:
 class DeviceInfo:
     """
     Enhanced device information for router-aware architecture.
-    Now includes mandatory hostname field for v0.3.0.
+    Now includes mandatory hostname field.
     """
     address: str
-    hostname: str  # NEW: Required field in v0.3.0
+    hostname: str  # Required field
     username: Optional[str] = None
     password: Optional[str] = None
     port: int = 22
@@ -136,21 +136,19 @@ class DeviceInfo:
     region: Optional[str] = None  # Optional: us-east, eu-west, etc.
     
     def __post_init__(self):
-        """Validate and auto-generate hostname if needed for backward compatibility."""
+        """Validate device information."""
         if not self.hostname:
-            # Auto-generate hostname from IP for backward compatibility
-            # Replace dots with hyphens for valid hostname
-            self.hostname = f"router-{self.address.replace('.', '-')}"
+            raise ValueError(f"Hostname is required for device {self.address}")
     
     @classmethod
     def from_csv_row(cls, row: dict) -> 'DeviceInfo':
         """
         Create DeviceInfo from CSV row.
-        Supports both old (address only) and new (address,hostname) formats.
+        Requires both address and hostname columns.
         """
         return cls(
             address=row['address'],
-            hostname=row.get('hostname', ''),  # Will auto-generate if empty
+            hostname=row['hostname'],  # Required field
             username=row.get('username'),
             password=row.get('password'),
             port=int(row.get('port', 22)),

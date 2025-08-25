@@ -1084,10 +1084,8 @@ sudo userdel otto-bgp
 - Directory locations: install.sh installs into `/usr/local/bin`, `/usr/local/lib/otto-bgp`, and `/usr/local/venv` for system mode; and into `~/.local/bin`, `~/.local/lib/otto-bgp`, and `~/.local/venv` for user mode. Any references to `/opt/otto-bgp` are for manual deployment and are not used by the installer.
 - Config CLI: There is no `otto-bgp config ...` CLI at this time. Prior references to `otto-bgp config show/validate` were removed. Edit `/etc/otto-bgp/otto.env` directly or create `/etc/otto-bgp/config.json` for advanced settings (see Configuration Management section above for complete documentation).
 - Email recipients in autonomous mode: Must be configured in `/etc/otto-bgp/config.json` under `autonomous_mode.notifications.email.to_addresses` as they cannot be set via environment variables. Without a JSON config, recipients default to `["network-engineers@company.com"]`. Use the provided `example-configs/config.json.example` template.
-- IRR proxy configuration: Tunnel configurations must be defined in config.json as they are complex array structures that cannot be set via environment variables. Use the provided `example-configs/config.json.example` template.
 - bgpq4 configuration via env: Runtime selection of bgpq4 is done via CLI and auto‑detection (native, docker, podman). The code does not read `OTTO_BGP_BGPQ4_*` environment variables. Ensure native `bgpq4` or Docker/Podman is available; use `otto-bgp policy --test` to verify.
 - Devices file: The systemd service expects `/etc/otto-bgp/devices.csv` to exist. The installer does not create this file; you must supply it.
-- Virtual environment naming: Documentation metadata references "otto_venv" but actual installation creates different paths (`/usr/local/venv` for system, `~/.local/venv` for user).
 - Configuration management: Some documentation refers to configuration validation CLI commands that don't exist. Configuration validation is done at runtime, not via CLI.
 - Dependencies: Code uses bgpq4 (not bgpq3) and actual requirements.txt contains only 4 packages: junos-eznc, paramiko, PyYAML, pandas.
 - Autonomous mode: Not a separate installation mode but a configuration flag (`AUTONOMOUS_MODE=true`) applied to system installations.
@@ -1318,7 +1316,7 @@ sudo journalctl -u otto-bgp.service --no-pager | grep -E "(ERROR|WARN|Failed)"
 ### Support Resources
 - **Configuration**: Check `/etc/otto-bgp/otto.env` (system) or `~/.config/otto-bgp/otto.env` (user)
 - **Environment**: Check installation-specific otto.env file
-- **Dependencies**: Ensure bgpq4, Python 3.9+, and paramiko are installed
+- **Dependencies**: Ensure bgpq4, Python 3.10+, and paramiko are installed
 - **Network**: Verify SSH access to devices and internet connectivity for bgpq4
 - **Autonomous Mode**: Check email configuration and SMTP connectivity
 - **NETCONF Events**: Monitor systemd logs for complete audit trail

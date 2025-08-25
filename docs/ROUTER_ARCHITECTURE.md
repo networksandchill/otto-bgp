@@ -11,7 +11,7 @@ Otto BGP v0.3.x implements a router‑aware architecture that discovers BGP cont
 - RouterProfile: Complete BGP profile carried through the pipeline.
   - Fields: `hostname: str`, `ip_address: str`, `bgp_config: str`, `discovered_as_numbers: Set[int]`, `bgp_groups: Dict[str, List[int]]`, `metadata: Dict`.
 - DeviceInfo: Enhanced device identity for collection.
-  - Fields: `address: str`, `hostname: str` (required in v0.3.0; auto‑generated from IP if omitted), optional `username`, `password`, `port`, `role`, `region`.
+  - Fields: `address: str`, `hostname: str` (required; auto‑generated from IP if omitted), optional `username`, `password`, `port`, `role`, `region`.
 
 References: `otto_bgp/models/__init__.py`
 
@@ -202,9 +202,7 @@ result = applier.apply_with_confirmation(policies, confirm_timeout=120, comment=
 
 ## Known Gaps and Limitations
 
-- Version labels: Some generators and comments still embed `v0.3.0` in headers while the package exposes `v0.3.2` in several modules. Generated file headers may reflect `v0.3.0`.
 - Discover CLI diff flag: `otto-bgp discover --show-diff` invokes `generate_diff_report()` without building a diff first. To generate a diff, call `old = yaml_gen.load_previous_mappings(); new = mappings; diff = yaml_gen.diff_mappings(old, new); yaml_gen.generate_diff_report(diff)`.
-- NETCONF apply dependency: `JuniperPolicyApplier` requires PyEZ (`junos-eznc`). Without it, connect/apply methods are unavailable.
 - Adapter scope: `PolicyAdapter` and its merge logic are simplified and not a full Junos configuration parser. Validate outputs in a lab before use.
 - Vendor support: Discovery, adaptation, and applier paths target Junos. Other vendors are not implemented.
 - Reports: The reports module writes `deployment-matrix.csv`, `deployment-matrix.json`, and `deployment-summary.txt`. There is no `generation-log.json` writer in the current codebase.

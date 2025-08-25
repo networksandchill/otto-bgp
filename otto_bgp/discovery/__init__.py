@@ -1,5 +1,5 @@
 """
-Otto BGP v0.3.2 Discovery Engine
+Otto BGP Discovery Engine
 
 This module provides auto-discovery of BGP configurations and relationships.
 It parses router configurations to extract BGP groups, AS numbers, and peer
@@ -24,4 +24,3 @@ __all__ = [
     'YAMLGenerator'
 ]
 
-__version__ = '0.3.2'

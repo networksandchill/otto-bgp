@@ -440,7 +440,7 @@ def generate_policy_for_as(as_number: int, policy_name: str = None) -> PolicyGen
 
 ### Policy Output Directory
 
-Router-specific policies are stored with this structure (v0.3.0+ router-aware architecture):
+Router-specific policies are stored with this structure (router-aware architecture):
 
 ```
 policies/
@@ -456,7 +456,7 @@ policies/
     └── router_statistics.json
 ```
 
-**Router-Aware Features** (v0.3.0):
+**Router-Aware Features**:
 - Per-router policy directories named by hostname
 - BGP group to AS number mappings preserved
 - Deployment matrices for operational visibility
@@ -707,34 +707,19 @@ Maintain comprehensive audit trails:
 
 ### Technical Dependencies
 
-1. **PyEZ Requirement**: NETCONF policy application requires `junos-eznc` library
-   - Collection and policy generation work without PyEZ
-   - Install with: `pip install junos-eznc`
-   - Docker/Podman fallback available for bgpq4 if native executable unavailable
-
-2. **RPKI Cache Management**: 
+1. **RPKI Cache Management**: 
    - Manual VRP cache updates required (no automatic RPKI cache refresh)
    - Fail-closed behavior when cache is stale (configurable threshold)
    - No built-in RPKI validator - requires external rpki-client or routinator
 
-3. **SSH Host Key Management**:
+2. **SSH Host Key Management**:
    - Initial host key collection requires manual setup via scripts
    - No automatic host key rotation handling
    - Setup mode should only be used for initial deployment
 
 ### Operational Limitations
 
-1. **Parallel Processing Constraints**:
-   - SSH collection limited by network device capacity
-   - bgpq4 queries limited by IRR server rate limits
-   - Thread pool size configurable but bounded by system resources
-
-2. **Router Platform Support**:
-   - Designed specifically for Juniper devices running Junos
-   - NETCONF implementation uses PyEZ (Juniper-specific)
-   - BGP configuration parsing assumes Juniper syntax
-
-3. **Policy Application Scope**:
+1. **Policy Application Scope**:
    - Only manages `policy-options prefix-list` configurations
    - Does not modify routing policies or import/export statements beyond basic import policy references
    - Router-specific advanced BGP features not supported
@@ -748,7 +733,6 @@ Maintain comprehensive audit trails:
 
 2. **Mode Detection**:
    - Autonomous vs system mode determined by environment variables
-   - No runtime mode switching without restart
    - Configuration changes require application restart
 
 3. **Error Recovery**:

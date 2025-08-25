@@ -15,7 +15,7 @@ from .juniper_netconf import (
     ApplicationError
 )
 from .adapter import PolicyAdapter, AdaptationResult
-from .safety import UnifiedSafetyManager, SafetyManager, SafetyCheckResult, create_safety_manager
+from .safety import UnifiedSafetyManager, SafetyCheckResult, create_safety_manager
 from .guardrails import (
     GuardrailComponent, GuardrailResult, GuardrailConfig,
     PrefixCountGuardrail, BogonPrefixGuardrail, 
@@ -29,7 +29,6 @@ __all__ = [
     'JuniperPolicyApplier',
     'PolicyAdapter',
     'UnifiedSafetyManager',
-    'SafetyManager',  # Backward compatibility
     'create_safety_manager',
     
     # Result classes
@@ -55,5 +54,3 @@ __all__ = [
     'ApplicationError'
 ]
 
-# Version of the applier module
-__version__ = '0.3.2'

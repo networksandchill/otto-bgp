@@ -534,7 +534,11 @@ set system syslog file netconf-log match NETCONF
 
 ```bash
 # Check if PyEZ is installed in your virtual environment
+# For development:
 source otto_venv/bin/activate
+# Or use production paths:
+# System: /usr/local/venv/bin/python
+# User: ~/.local/venv/bin/python
 python -c "import jnpr.junos; print('PyEZ available')"
 
 # If not, install PyEZ and dependencies
@@ -572,7 +576,7 @@ ssh otto-lab@lab-router1 "show system storage"
 # Check for configuration errors
 ssh otto-lab@lab-router1 "show system commit"
 
-# Debug via Python (in otto_venv)
+# Debug via Python (in development venv or production)
 python3 -c "
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
@@ -802,11 +806,9 @@ For additional support, refer to the main README.md or create an issue in the Ot
 
 1. **Manual Confirmation Required**: The current NETCONF implementation requires manual confirmation of commits via the router's CLI within the timeout window. Otto BGP does not automatically confirm commits, requiring operator intervention.
 
-2. **PyEZ Dependency**: Policy application requires PyEZ (junos-eznc) and related dependencies. These are not installed by default and must be manually installed in the Otto BGP virtual environment.
+2. **Juniper Router Support Only**: NETCONF functionality is currently limited to Juniper routers. Other vendor support is not implemented.
 
-3. **Juniper Router Support Only**: NETCONF functionality is currently limited to Juniper routers. Other vendor support is not implemented.
-
-4. **Limited Health Validation**: Post-commit health checks are basic and focus primarily on management interface and BGP neighbor status. More comprehensive router health validation is not implemented.
+3. **Limited Health Validation**: Post-commit health checks are basic and focus primarily on management interface and BGP neighbor status. More comprehensive router health validation is not implemented.
 
 ### Configuration and Setup Gaps
 

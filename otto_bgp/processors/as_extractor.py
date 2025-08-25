@@ -451,7 +451,6 @@ class ASNumberExtractor:
                  patterns: Optional[Dict[str, str]] = None,
                  warn_reserved: bool = True,
                  strict_validation: bool = True,
-                 enable_streaming: Optional[bool] = None,
                  streaming_memory_limit_mb: int = 50,
                  streaming_chunk_size: int = 8192,
                  ultra_efficient_mode: bool = False):
@@ -464,7 +463,6 @@ class ASNumberExtractor:
             patterns: Custom regex patterns for AS extraction
             warn_reserved: Log warnings for reserved AS number ranges
             strict_validation: Enable strict RFC-compliant validation
-            enable_streaming: Enable streaming mode (auto-detect if None)
             streaming_memory_limit_mb: Memory limit for streaming mode (MB)
             streaming_chunk_size: Buffer size for streaming file reads
             ultra_efficient_mode: Enable ultra-efficient mode for very large files
@@ -485,20 +483,9 @@ class ASNumberExtractor:
         self.strict_validation = strict_validation
         
         # Streaming configuration
-        self.enable_streaming = enable_streaming
         self.streaming_memory_limit_mb = streaming_memory_limit_mb
         self.streaming_chunk_size = streaming_chunk_size
         self.ultra_efficient_mode = ultra_efficient_mode
-        
-        # Check environment variable for streaming preference
-        if self.enable_streaming is None:
-            env_streaming = os.environ.get('OTTO_BGP_AS_EXTRACTOR_STREAMING', 'auto').lower()
-            if env_streaming == 'true':
-                self.enable_streaming = True
-            elif env_streaming == 'false':
-                self.enable_streaming = False
-            else:  # 'auto' - will be determined per file
-                self.enable_streaming = None
         
         # Check environment variable for ultra-efficient mode
         env_ultra = os.environ.get('OTTO_BGP_AS_EXTRACTOR_ULTRA', 'false').lower()
@@ -519,7 +506,7 @@ class ASNumberExtractor:
         
         self.logger.info(f"AS extractor initialized: range {min_as_number}-{max_as_number}, "
                         f"reserved_warnings={warn_reserved}, strict={strict_validation}, "
-                        f"streaming={self.enable_streaming if self.enable_streaming is not None else 'auto'}")
+                        f"streaming=enabled")
     
     def extract_as_numbers_from_text(self, 
                                    text: str, 
@@ -588,24 +575,9 @@ class ASNumberExtractor:
                                    file_path: Union[str, Path], 
                                    pattern_name: str = 'standard') -> ASExtractionResult:
         """
-        Extract AS numbers from file with automatic streaming optimization
-        
-        Args:
-            file_path: Path to input file
-            pattern_name: Name of regex pattern to use
-            
-        Returns:
-            ASExtractionResult with extracted AS numbers
+        Extract AS numbers from file (streaming only)
         """
-        file_path = Path(file_path)
-        
-        # Determine if streaming should be used
-        use_streaming = self._should_use_streaming(file_path)
-        
-        if use_streaming:
-            return self.extract_as_numbers_from_file_streaming(file_path, pattern_name)
-        else:
-            return self._extract_as_numbers_from_file_legacy(file_path, pattern_name)
+        return self.extract_as_numbers_from_file_streaming(file_path, pattern_name)
     
     def extract_as_numbers_from_file_streaming(self, 
                                              file_path: Union[str, Path], 
@@ -671,74 +643,6 @@ class ASNumberExtractor:
             self.logger.error(f"Error reading file {file_path}: {e}")
             raise
 
-    def _extract_as_numbers_from_file_legacy(self, 
-                                           file_path: Union[str, Path], 
-                                           pattern_name: str = 'standard') -> ASExtractionResult:
-        """
-        Extract AS numbers from file using legacy memory-intensive method
-        
-        Args:
-            file_path: Path to input file
-            pattern_name: Name of regex pattern to use
-            
-        Returns:
-            ASExtractionResult with extracted AS numbers
-        """
-        file_path = Path(file_path)
-        
-        try:
-            self.logger.debug(f"Using legacy extraction for {file_path}")
-            
-            with open(file_path, 'r', encoding='utf-8') as f:
-                text = f.read()
-            
-            result = self.extract_as_numbers_from_text(text, pattern_name)
-            result.source_file = str(file_path)
-            
-            self.logger.info(f"Processed file {file_path} (legacy): {len(result.as_numbers)} AS numbers extracted")
-            return result
-            
-        except FileNotFoundError:
-            self.logger.error(f"File not found: {file_path}")
-            raise
-        except Exception as e:
-            self.logger.error(f"Error reading file {file_path}: {e}")
-            raise
-    
-    def _should_use_streaming(self, file_path: Path) -> bool:
-        """
-        Determine if streaming should be used based on file size and configuration
-        
-        Args:
-            file_path: Path to the file
-            
-        Returns:
-            True if streaming should be used
-        """
-        # If explicitly configured, use that setting
-        if self.enable_streaming is not None:
-            return self.enable_streaming
-        
-        try:
-            # Auto-detect based on file size
-            file_size = file_path.stat().st_size
-            
-            # Use streaming for files larger than 10MB
-            size_threshold = 10 * 1024 * 1024  # 10MB
-            
-            use_streaming = file_size > size_threshold
-            
-            self.logger.debug(f"File size: {file_size:,} bytes, "
-                            f"threshold: {size_threshold:,} bytes, "
-                            f"using streaming: {use_streaming}")
-            
-            return use_streaming
-            
-        except OSError:
-            # If we can't get file size, default to legacy mode
-            self.logger.warning(f"Could not determine file size for {file_path}, using legacy mode")
-            return False
-    
     def _should_use_ultra_efficient(self, file_path: Path) -> bool:
         """
         Determine if ultra-efficient mode should be used based on file size and configuration
@@ -1087,10 +991,8 @@ class BGPTextProcessor:
             except OSError:
                 should_stream = False
         
-        if should_stream:
-            return self._process_file_streaming(input_path, output_path)
-        else:
-            return self._process_file_legacy(input_path, output_path)
+        # Always use streaming
+        return self._process_file_streaming(input_path, output_path)
     
     def _process_file_streaming(self, 
                                input_path: Path, 
@@ -1149,31 +1051,6 @@ class BGPTextProcessor:
             self.logger.error(f"Error processing file {input_path}: {e}")
             raise
     
-    def _process_file_legacy(self, 
-                            input_path: Path, 
-                            output_path: Optional[Path]) -> BGPProcessingResult:
-        """Process file using legacy memory-intensive approach"""
-        try:
-            self.logger.debug(f"Using legacy BGP processing for {input_path}")
-            
-            with open(input_path, 'r', encoding='utf-8') as f:
-                text = f.read()
-            
-            result = self.process_bgp_text_full(text)
-            
-            if output_path:
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(result.processed_text)
-                self.logger.info(f"Processed BGP file (legacy): {input_path} -> {output_path}")
-            
-            return result
-            
-        except FileNotFoundError:
-            self.logger.error(f"Input file not found: {input_path}")
-            raise
-        except Exception as e:
-            self.logger.error(f"Error processing file {input_path}: {e}")
-            raise
 
 
 class ASProcessor:
@@ -1219,10 +1096,8 @@ class ASProcessor:
             except OSError:
                 should_stream = False
         
-        if should_stream:
-            return self._process_bgp_file_streaming(file_path, pattern_name)
-        else:
-            return self._process_bgp_file_legacy(file_path, pattern_name)
+        # Always use streaming
+        return self._process_bgp_file_streaming(file_path, pattern_name)
     
     def _process_bgp_file_streaming(self, 
                                    file_path: Path,
@@ -1251,34 +1126,6 @@ class ASProcessor:
                     pass
             
             self.logger.info(f"Extracted {len(as_result.as_numbers)} AS numbers from {file_path} (streaming)")
-            return as_result
-            
-        except Exception as e:
-            self.logger.error(f"Error processing BGP file {file_path}: {e}")
-            raise
-    
-    def _process_bgp_file_legacy(self, 
-                                file_path: Path,
-                                pattern_name: str) -> ASExtractionResult:
-        """Process BGP file using legacy memory-intensive approach"""
-        try:
-            self.logger.info(f"Processing BGP file for AS extraction (legacy): {file_path}")
-            
-            # Read and clean BGP text
-            with open(file_path, 'r', encoding='utf-8') as f:
-                text = f.read()
-            
-            # Clean the BGP text first
-            bgp_result = self.bgp_processor.process_bgp_text_full(text)
-            
-            # Extract AS numbers from cleaned text
-            as_result = self.as_extractor.extract_as_numbers_from_text(
-                bgp_result.processed_text, 
-                pattern_name
-            )
-            as_result.source_file = str(file_path)
-            
-            self.logger.info(f"Extracted {len(as_result.as_numbers)} AS numbers from {file_path} (legacy)")
             return as_result
             
         except Exception as e:
@@ -1327,107 +1174,6 @@ class MemoryBenchmark:
             self.logger.warning(f"Error getting memory usage: {e}")
             return {"rss": 0, "vms": 0, "percent": 0}
     
-    def compare_extraction_methods(self, 
-                                  file_path: Union[str, Path],
-                                  pattern_name: str = 'standard') -> Dict[str, any]:
-        """Compare memory usage between streaming and legacy extraction methods"""
-        file_path = Path(file_path)
-        
-        if not file_path.exists():
-            raise FileNotFoundError(f"Test file not found: {file_path}")
-        
-        results = {
-            "file_path": str(file_path),
-            "file_size_mb": file_path.stat().st_size / 1024 / 1024,
-            "legacy": {},
-            "streaming": {}
-        }
-        
-        # Test legacy method
-        self.logger.info("Testing legacy extraction method...")
-        extractor_legacy = ASNumberExtractor(enable_streaming=False)
-        
-        memory_before = self.get_memory_usage()
-        import time
-        start_time = time.time()
-        
-        try:
-            result_legacy = extractor_legacy.extract_as_numbers_from_file(file_path, pattern_name)
-            end_time = time.time()
-            memory_after = self.get_memory_usage()
-            
-            results["legacy"] = {
-                "success": True,
-                "as_count": len(result_legacy.as_numbers),
-                "processing_time": end_time - start_time,
-                "memory_before_mb": memory_before["rss"],
-                "memory_after_mb": memory_after["rss"],
-                "memory_delta_mb": memory_after["rss"] - memory_before["rss"],
-                "peak_memory_mb": memory_after["rss"]
-            }
-            
-        except Exception as e:
-            results["legacy"] = {
-                "success": False,
-                "error": str(e),
-                "memory_before_mb": memory_before["rss"],
-                "memory_after_mb": self.get_memory_usage()["rss"]
-            }
-        
-        # Clean up memory before testing streaming
-        import gc
-        gc.collect()
-        
-        # Test streaming method
-        self.logger.info("Testing streaming extraction method...")
-        extractor_streaming = ASNumberExtractor(enable_streaming=True)
-        
-        memory_before = self.get_memory_usage()
-        start_time = time.time()
-        
-        try:
-            result_streaming = extractor_streaming.extract_as_numbers_from_file(file_path, pattern_name)
-            end_time = time.time()
-            memory_after = self.get_memory_usage()
-            
-            results["streaming"] = {
-                "success": True,
-                "as_count": len(result_streaming.as_numbers),
-                "processing_time": end_time - start_time,
-                "memory_before_mb": memory_before["rss"],
-                "memory_after_mb": memory_after["rss"],
-                "memory_delta_mb": memory_after["rss"] - memory_before["rss"],
-                "peak_memory_mb": memory_after["rss"]
-            }
-            
-            # Compare results for accuracy
-            if (results["legacy"].get("success") and 
-                result_legacy.as_numbers == result_streaming.as_numbers):
-                results["accuracy_check"] = "PASS - Identical results"
-            elif results["legacy"].get("success"):
-                results["accuracy_check"] = f"FAIL - Different results (legacy: {len(result_legacy.as_numbers)}, streaming: {len(result_streaming.as_numbers)})"
-            else:
-                results["accuracy_check"] = "UNABLE TO VERIFY - Legacy method failed"
-                
-        except Exception as e:
-            results["streaming"] = {
-                "success": False,
-                "error": str(e),
-                "memory_before_mb": memory_before["rss"],
-                "memory_after_mb": self.get_memory_usage()["rss"]
-            }
-        
-        # Calculate memory savings
-        if (results["legacy"].get("success") and results["streaming"].get("success")):
-            legacy_peak = results["legacy"]["peak_memory_mb"]
-            streaming_peak = results["streaming"]["peak_memory_mb"]
-            
-            if legacy_peak > 0:
-                memory_reduction = ((legacy_peak - streaming_peak) / legacy_peak) * 100
-                results["memory_reduction_percent"] = memory_reduction
-                results["memory_savings_mb"] = legacy_peak - streaming_peak
-        
-        return results
     
     def generate_test_file(self, 
                           output_path: Union[str, Path],

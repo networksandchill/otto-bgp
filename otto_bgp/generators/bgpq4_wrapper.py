@@ -51,7 +51,7 @@ class PolicyGenerationResult:
     execution_time: Optional[float] = None
     error_message: Optional[str] = None
     bgpq4_mode: Optional[str] = None
-    router_context: Optional[str] = None  # v0.3.0 router association
+    router_context: Optional[str] = None  # Router association
 
 
 @dataclass
@@ -1298,5 +1298,3 @@ class BGPq4Wrapper:
         )
 
 
-# Backward compatibility alias for existing imports  
-BgpQ4Wrapper = BGPq4Wrapper

@@ -1,6 +1,6 @@
-# Otto BGP v0.3.0 Configuration Examples
+# Otto BGP Configuration Examples
 
-This directory contains example configurations and workflows for Otto BGP v0.3.0 router-aware architecture.
+This directory contains example configurations and workflows for Otto BGP router-aware architecture.
 
 ## Configuration Files
 
@@ -13,7 +13,7 @@ Complete configuration example with all v0.3.2 features:
 - Logging configuration
 
 ### `devices.csv`
-Example device inventory with v0.3.0 router-aware format:
+Example device inventory with router-aware format:
 - Hostname field for router identification
 - Role and region metadata
 - Enhanced device information
@@ -61,7 +61,7 @@ For workflow examples, see the documentation:
    otto-bgp pipeline my-devices.csv --output-dir results
    ```
 
-## v0.3.0 Features Demonstrated
+## Features Demonstrated
 
 - ✅ **Router Discovery**: Automatic BGP configuration analysis
 - ✅ **Router-Specific Policies**: Per-router policy generation

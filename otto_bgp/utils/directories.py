@@ -1,5 +1,5 @@
 """
-Otto BGP v0.3.0 Directory Management
+Otto BGP Directory Management
 
 This module handles the creation and management of router-specific directory structures
 for the router-aware architecture.

@@ -36,8 +36,7 @@ class PipelineConfig:
     skip_ssh: bool = False
     input_file: Optional[str] = None  # For direct file processing
     dev_mode: bool = False  # Use Docker for bgpq4
-    router_aware: bool = True  # v0.3.0 router-specific generation
-    rpki_enabled: bool = True  # v0.3.2 RPKI validation
+    rpki_enabled: bool = True  # RPKI validation
 
 
 @dataclass
@@ -149,7 +148,7 @@ class BGPPolicyPipeline:
         self.bgp_data_collection = []
         self.as_extraction_results = None
         self.policy_results = []
-        self.router_profiles = []  # v0.3.0 router awareness
+        self.router_profiles = []  # Router awareness
         
     def _ensure_fresh_pipeline(self):
         """Enforce single-use pattern or reset state for reuse"""
@@ -159,90 +158,11 @@ class BGPPolicyPipeline:
         self._pipeline_used = True
         
     def run_complete_pipeline(self) -> PipelineResult:
-        """Execute the complete BGP policy generation pipeline (v0.3.0 router-aware)"""
+        """Execute the complete BGP policy generation pipeline (router-aware)"""
         self._ensure_fresh_pipeline()  # Ensure clean state for this run
-        if self.config.router_aware:
-            return self.run_router_aware_pipeline()
-        else:
-            return self._run_legacy_pipeline()
+        # Always use router-aware pipeline
+        return self.run_router_aware_pipeline()
     
-    def _run_legacy_pipeline(self) -> PipelineResult:
-        """
-        Execute the complete BGP policy generation pipeline
-        
-        Workflow:
-        1. Device discovery and SSH data collection
-        2. BGP text processing and AS extraction
-        3. BGP policy generation
-        4. Output file management
-        
-        Returns:
-            PipelineResult with execution summary
-        """
-        self.start_time = time.time()
-        errors = []
-        
-        try:
-            self.logger.info("Starting BGP policy generation pipeline")
-            
-            # Phase 1: Data Collection
-            if not self.config.skip_ssh:
-                self.logger.info("Phase 1: Collecting BGP data from devices")
-                bgp_text = self._collect_bgp_data()
-                if not bgp_text:
-                    errors.append("No BGP data collected from devices")
-                    return self._create_error_result(errors)
-            else:
-                # Direct file processing mode
-                self.logger.info("Phase 1: Reading BGP data from file")
-                bgp_text = self._read_input_file()
-                if not bgp_text:
-                    errors.append(f"Failed to read input file: {self.config.input_file}")
-                    return self._create_error_result(errors)
-            
-            # Phase 2: AS Extraction
-            self.logger.info("Phase 2: Extracting AS numbers and processing BGP text")
-            as_numbers = self._extract_as_numbers(bgp_text)
-            if not as_numbers:
-                errors.append("No valid AS numbers extracted from BGP data")
-                return self._create_error_result(errors)
-            
-            # Phase 3: Policy Generation
-            try:
-                self.logger.info(f"Phase 3: Generating BGP policies for {len(as_numbers)} AS numbers")
-                success_count = self._generate_policies(as_numbers)
-                
-                # Phase 4: Output Management
-                self.logger.info("Phase 4: Managing output files")
-                output_files = self._manage_output_files()
-            finally:
-                try:
-                    if self.bgp_generator.proxy_manager:
-                        self.bgp_generator.proxy_manager.cleanup_all_tunnels()
-                except Exception as e:
-                    self.logger.warning(f"Pipeline: Failed to cleanup proxy tunnels: {e}")
-            
-            execution_time = time.time() - self.start_time
-            
-            result = PipelineResult(
-                success=True,
-                devices_processed=len(self.bgp_data_collection),
-                routers_configured=0,  # Not tracked in legacy mode
-                as_numbers_found=len(as_numbers),
-                policies_generated=success_count,
-                execution_time=execution_time,
-                output_files=output_files,
-                router_directories=[],  # Not used in legacy mode
-                errors=errors
-            )
-            
-            self.logger.info(f"Pipeline completed successfully in {execution_time:.2f}s")
-            return result
-            
-        except Exception as e:
-            errors.append(f"Pipeline execution failed: {str(e)}")
-            self.logger.error(f"Pipeline execution failed: {str(e)}", exc_info=True)
-            return self._create_error_result(errors)
     
     def _collect_bgp_data(self) -> str:
         """
@@ -442,7 +362,7 @@ class BGPPolicyPipeline:
 
     def run_router_aware_pipeline(self) -> PipelineResult:
         """
-        Execute the v0.3.0 router-aware BGP policy generation pipeline
+        Execute the router-aware BGP policy generation pipeline
         
         Workflow:
         1. Load router profiles from devices CSV
@@ -459,7 +379,7 @@ class BGPPolicyPipeline:
         total_policies = 0
         
         try:
-            self.logger.info("Starting router-aware BGP policy generation pipeline (v0.3.0)")
+            self.logger.info("Starting router-aware BGP policy generation pipeline")
             
             # Phase 1: Load Router Profiles
             self.logger.info("Phase 1: Loading router profiles")
@@ -598,7 +518,7 @@ class BGPPolicyPipeline:
             return self._create_error_result(errors)
     
     def _load_router_profiles(self) -> List[RouterProfile]:
-        """Load router profiles from devices CSV (v0.3.0 format)"""
+        """Load router profiles from devices CSV (enhanced format)"""
         devices = self.ssh_collector.load_devices_from_csv(self.config.devices_file)
         profiles = []
         

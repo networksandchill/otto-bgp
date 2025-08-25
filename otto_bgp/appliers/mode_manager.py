@@ -10,7 +10,15 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
-from jnpr.junos.utils.config import Config
+
+# PyEZ imports with fallback for environments without PyEZ
+try:
+    from jnpr.junos.utils.config import Config
+    PYEZ_AVAILABLE = True
+except ImportError:
+    PYEZ_AVAILABLE = False
+    # Create dummy class for type hints
+    Config = type('Config', (), {})
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +61,7 @@ class AutoFinalizationStrategy(FinalizationStrategy):
         """
         if health_result.success:
             try:
-                cu.commit(comment=f"Otto v0.3.2 auto-confirmed: {commit_info.commit_id}")
+                cu.commit(comment=f"Otto auto-confirmed: {commit_info.commit_id}")
                 logger.info("Changes auto-finalized successfully")
             except Exception as e:
                 logger.error(f"Auto-finalization failed: {e}")

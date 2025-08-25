@@ -4,6 +4,7 @@
 
 ## Key Features
 
+- **Juniper-Tailored**: Purpose-built for Juniper routers with PyEZ-based NETCONF and Junos configuration generation
 - **Autonomous Operation**: Production-ready automatic policy application with risk-based decisions and email audit trail
 - **Router Discovery**: Automatic network topology understanding and BGP relationship mapping
 - **Security-First**: SSH host key verification, command injection prevention, strict input validation
@@ -73,7 +74,7 @@ sudo systemctl start otto-bgp.timer
 
 ## Prerequisites
 
-- **Linux/macOS** with Python 3.9+
+- **Linux/macOS** with Python 3.10+
 - **bgpq4** for policy generation
 - **SSH access** to target Juniper routers
 - **Virtual environment** (automatically created by installer)

@@ -22,13 +22,11 @@ Otto BGP v0.3.2 provides a router-aware pipeline to collect BGP context via SSH,
 
 **Current limitations:**
 - File logging: Console logging is default; file logging requires explicit configuration (`logging.log_to_file: true`, `logging.log_file`). Use `journalctl -u ...` for systemd logs.
-- PyEZ dependency: Policy application and autonomous NETCONF operations require PyEZ libraries (`junos-eznc`, `jxmlease`, `lxml`, `ncclient`). Without these, `apply` and autonomous application will fail.
 - Device CSV fields: Router‑aware paths expect an `address` column (with optional `hostname`). The legacy loader accepts `address`/`ip`/`host`. Prefer `address[,hostname]` for consistency.
 - Known hosts and SSH hardening: NETCONF/SSH use strict host key checking and default known hosts at `/var/lib/otto-bgp/ssh-keys/known_hosts`. Ensure device host keys are present.
 - Email notifications: Best‑effort only. Notifications send on connect/preview/commit/rollback/disconnect when `autonomous_mode.notifications.email.enabled` is true and SMTP settings are valid. No retry/backoff beyond SMTP behavior.
 - No apply-confirm CLI command: Otto BGP does not provide a built-in `apply-confirm` command. Commit confirmation must be handled manually on the device or via NETCONF confirmed commits with timeouts.
 - RPKI validation dependency: RPKI validation requires pre-populated VRP cache files at configured paths. Cache must be updated externally or via autonomous preflight checks.
-- REST API availability: No built-in REST API endpoints are currently implemented. Integration requires direct CLI usage or Python library imports.
 
 ## Operational Modes
 
@@ -261,6 +259,8 @@ sudo journalctl -u otto-bgp-autonomous.service -f | grep -i "autonomous\|netconf
 ### 5. IRR Proxy Workflow
 
 For restricted networks where direct IRR access is blocked, enable the proxy in configuration and use the proxy tester to validate SSH tunnel setup. In v0.3.2, `policy` and `pipeline` automatically use the proxy when `irr_proxy.enabled` is true; `test-proxy` provides targeted connectivity checks and an optional bgpq4 test through the proxy.
+
+**Note**: IRR proxy requires JSON configuration for tunnel definitions due to complex nested parameters. See [System Administrator Guide - IRR Proxy Configuration](SYSTEM_ADMIN_GUIDE.md#irr-proxy-configuration) for complete setup details.
 
 #### Configure Proxy
 ```bash
@@ -562,7 +562,7 @@ sudo journalctl -u otto-bgp-autonomous.service -f
 
 For testing against real lab routers with production-like configuration:
 
-- ✅ **Lab System**: Install prerequisites on dedicated lab server (Python 3.9+, bgpq4, SSH client)
+- ✅ **Lab System**: Install prerequisites on dedicated lab server (Python 3.10+, bgpq4, SSH client)
 - ✅ **Otto Deployment**: Clone and configure using installation and user setup steps
 - ✅ **Lab SSH Keys**: Generate production-style keypair via SSH key configuration
 - ✅ **Router Config**: Deploy SSH user and keys on lab routers using Juniper SSH user setup
@@ -978,13 +978,4 @@ collector = JuniperSSHCollector(
 
 ### Integration APIs
 
-Future REST API endpoints (planned):
-
-```http
-GET  /api/v1/routers              # List routers
-GET  /api/v1/routers/{id}         # Router details
-POST /api/v1/discover             # Trigger discovery
-POST /api/v1/generate             # Generate policies
-POST /api/v1/apply                # Apply policies
-GET  /api/v1/status               # System status
-```
+Otto BGP provides Python library integration for custom workflows and automation systems.

@@ -21,9 +21,20 @@ import time
 
 # Configuration imports for autonomous mode
 from otto_bgp.utils.config import get_config_manager
-from jnpr.junos.utils.config import Config
-from jnpr.junos import Device
-from jnpr.junos.exception import ConnectError, CommitError
+
+# PyEZ imports with fallback for environments without PyEZ
+try:
+    from jnpr.junos.utils.config import Config
+    from jnpr.junos import Device
+    from jnpr.junos.exception import ConnectError, CommitError
+    PYEZ_AVAILABLE = True
+except ImportError:
+    PYEZ_AVAILABLE = False
+    # Create dummy classes for type hints
+    Config = type('Config', (), {})
+    Device = type('Device', (), {})
+    ConnectError = Exception
+    CommitError = Exception
 
 # Guardrail and exit code imports
 from .guardrails import (
@@ -1075,7 +1086,7 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
             result = cu.commit(
                 confirm=hold_minutes,
                 sync=True,
-                comment="Otto BGP v0.3.2 - automated application"
+                comment="Otto BGP - automated application"
             )
             commit_id = getattr(result, 'commit_id', 'unknown')
             self.logger.info(f"Confirmed commit successful: {commit_id} ({hold_minutes}min window)")
@@ -1136,8 +1147,6 @@ class ApplicationResult:
     guardrail_results: Optional[Dict[str, Any]] = None
 
 
-# Backward compatibility alias
-SafetyManager = UnifiedSafetyManager
 
 
 # Factory function for creating safety manager instances

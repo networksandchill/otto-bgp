@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 # Unified safety manager for NETCONF event notifications and guardrails
-from otto_bgp.appliers.safety import UnifiedSafetyManager, SafetyManager
+from otto_bgp.appliers.safety import UnifiedSafetyManager
 
 # PyEZ imports with fallback for environments without PyEZ
 try:
@@ -346,7 +346,7 @@ class JuniperPolicyApplier:
             
             # Create commit comment
             if not comment:
-                comment = f"Otto BGP v0.3.0 - Applied {len(policies)} policies"
+                comment = f"Otto BGP - Applied {len(policies)} policies"
             
             # Perform confirmed commit
             self.logger.info(f"Initiating confirmed commit (timeout: {confirm_timeout}s)")

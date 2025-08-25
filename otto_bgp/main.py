@@ -25,8 +25,7 @@ from otto_bgp.utils.config import get_config_manager
 from otto_bgp.models import RouterProfile, DeviceInfo
 from otto_bgp.discovery import RouterInspector, YAMLGenerator
 from otto_bgp.utils.directories import DirectoryManager
-from otto_bgp.appliers import JuniperPolicyApplier, PolicyAdapter, SafetyManager
-from otto_bgp.appliers.safety import UnifiedSafetyManager
+from otto_bgp.appliers import JuniperPolicyApplier, PolicyAdapter, UnifiedSafetyManager, create_safety_manager
 from otto_bgp.appliers.exit_codes import OttoExitCodes
 from otto_bgp.validators.rpki import RPKIValidator
 from otto_bgp.utils.error_handling import (
@@ -121,9 +120,9 @@ def cmd_collect(args):
     
     # Write output files
     if args.output_dir:
-        output_files = collector.write_legacy_output_files(bgp_data, args.output_dir)
+        output_files = collector.write_outputs(bgp_data, args.output_dir)
     else:
-        output_files = collector.write_legacy_output_files(bgp_data)
+        output_files = collector.write_outputs(bgp_data)
     
     # Report results
     successful = sum(1 for data in bgp_data if data.success)
@@ -133,7 +132,7 @@ def cmd_collect(args):
     print(f"  Devices processed: {total}")
     print(f"  Successful: {successful}")
     print(f"  Failed: {total - successful}")
-    print(f"  Output files: {', '.join(output_files.values())}")
+    print(f"  Output files: {', '.join(output_files)}")
     
     return 0 if successful > 0 else 1
 
@@ -482,10 +481,9 @@ def cmd_apply(args):
         # Import here to fail gracefully if PyEZ not installed
         from otto_bgp.appliers.juniper_netconf import JuniperPolicyApplier
         from otto_bgp.appliers.adapter import PolicyAdapter
-        from otto_bgp.appliers.safety import SafetyManager
         
         # Initialize components
-        safety = SafetyManager()
+        safety = create_safety_manager()
         applier = JuniperPolicyApplier(logger, safety_manager=safety)
         adapter = PolicyAdapter(logger)
         
@@ -529,7 +527,7 @@ def cmd_apply(args):
         # Check autonomous mode decision
         autonomous_mode = getattr(args, 'autonomous', False)
         if autonomous_mode:
-            # Use SafetyManager to determine if policies can be auto-applied
+            # Use UnifiedSafetyManager to determine if policies can be auto-applied
             can_auto_apply = safety.should_auto_apply(policies)
             
             if can_auto_apply:
@@ -690,9 +688,9 @@ def cmd_pipeline(args):
         # Pass RPKI flag to pipeline
         rpki_enabled = not getattr(args, 'no_rpki', False)
         
-        # Legacy pipeline support for backward compatibility
+        # Direct file input handling
         if hasattr(args, 'input_file') and args.input_file:
-            # Direct file processing mode - use legacy pipeline
+            # Direct file processing mode
             result = run_pipeline(
                 devices_file='',  # Not used in direct mode
                 output_dir=getattr(args, 'output_dir', 'output'),
@@ -702,13 +700,13 @@ def cmd_pipeline(args):
                 rpki_enabled=rpki_enabled
             )
             
-            # Report legacy results
-            print(f"\nLegacy pipeline execution complete:")
+            # Report results
+            print(f"\nPipeline execution complete:")
             print(f"  Success: {result.success}")
             print(f"  Execution time: {result.execution_time:.2f}s")
             return 0 if result.success else 1
         
-        # New v0.3.2 unified pipeline
+        # Unified pipeline
         if not hasattr(args, 'devices_csv') or not args.devices_csv:
             logger.error("Device CSV file required for unified pipeline")
             print("Error: Device CSV file required")
@@ -1339,9 +1337,6 @@ def create_common_flags_parent():
     parent_parser.add_argument('--no-rpki', action='store_true',
                              help='Disable RPKI validation during policy generation (not recommended)')
     
-    # Hidden deprecated flag for backward compatibility (not shown in help)
-    parent_parser.add_argument('--production', action='store_true',
-                             help=argparse.SUPPRESS)
     
     return parent_parser
 
@@ -1499,16 +1494,10 @@ def create_parser():
 
 
 def validate_autonomous_mode(args, config):
-    """Validate autonomous mode settings and handle deprecated flags"""
+    """Validate autonomous mode settings"""
     from otto_bgp.utils.logging import get_logger
     logger = get_logger('otto-bgp.main')
     
-    # Handle deprecated --production flag (backward compatibility)
-    # Note: Flag is not in help but still parsed for compatibility
-    if hasattr(args, 'production') and getattr(args, 'production', False):
-        logger.warning("--production flag is deprecated, use --system instead")
-        args.system = True
-        print("Warning: --production flag is deprecated, use --system instead")
     
     # Check autonomous mode configuration
     if getattr(args, 'autonomous', False):

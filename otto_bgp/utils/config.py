@@ -80,7 +80,6 @@ class OutputConfig:
     bgp_data_filename: str = "bgp.txt"
     bgp_juniper_filename: str = "bgp-juniper.txt"
     create_timestamps: bool = True
-    backup_legacy_files: bool = True
     
     def __post_init__(self):
         """Load from environment variables if not set"""
@@ -504,14 +503,6 @@ class ConfigManager:
             rpki_data = data['rpki']
             self.config.rpki = RPKIConfig(**rpki_data)
         
-        # Backward compatibility: convert production_mode to system installation mode
-        if 'production_mode' in data and data['production_mode']:
-            self.logger.warning("'production_mode' is deprecated, use 'installation_mode.type: system' instead")
-            if not hasattr(self.config, 'installation_mode') or self.config.installation_mode is None:
-                self.config.installation_mode = InstallationModeConfig()
-            self.config.installation_mode.type = "system"
-            self.config.installation_mode.systemd_enabled = True
-            self.config.installation_mode.optimization_level = "enhanced"
     
     def _load_guardrail_env(self):
         """Load guardrail enablement and prefix thresholds from environment"""
@@ -536,7 +527,7 @@ class ConfigManager:
             strictness = None
 
         # Tight range validation: numeric sanity checks for safety
-        # These do not raise here; startup validation in SafetyManager will fail if invalid
+        # These do not raise here; startup validation in UnifiedSafetyManager will fail if invalid
         def _is_pos_int(v):
             try:
                 return isinstance(v, int) and v > 0

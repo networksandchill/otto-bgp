@@ -644,22 +644,36 @@ Both modes use NETCONF for policy application. System mode requires operator con
 - `/var/lib/otto-bgp/ssh-keys/known_hosts`: SSH host keys.
 - `/var/lib/otto-bgp/rpki/vrp_cache.json`: RPKI cache (JSON).
 
-## IRR Proxy (bgpq4 via SSH Tunnels)
+## IRR Proxy Configuration
 
-Use the IRR proxy when direct whois/IRR access is blocked. Otto establishes SSH local-port tunnels to IRR servers and points bgpq4 at `127.0.0.1:<local_port>`.
+### Overview
 
--
-  - Enabled: Configure `irr_proxy` in `/etc/otto-bgp/config.json` or via env.
-  - Tunnels: One or more to IRR servers (port 43) through a jump host.
-  - Security: Strict host key checking; dedicated key/known_hosts for the jump host.
+Use the IRR proxy when direct whois/IRR access is blocked by firewalls or network restrictions. Otto establishes SSH local-port tunnels to IRR servers and redirects bgpq4 queries through `127.0.0.1:<local_port>`.
 
-Example `irr_proxy` in `/etc/otto-bgp/config.json`:
+**Key Features:**
+- Multiple tunnel support for redundancy and load distribution
+- Automatic tunnel health monitoring and reconnection
+- Strict SSH host key verification for security
+- Parallel tunnel establishment for improved performance
 
+### Configuration Requirements
+
+**IRR proxy requires JSON configuration** due to its complex nested structure with multiple tunnels, each having distinct parameters. While basic settings can be set via environment variables, tunnel definitions must be specified in `/etc/otto-bgp/config.json`.
+
+**Why JSON is Required:**
+- **Complex array structures**: Multiple tunnels with individual parameters
+- **Clear validation**: Structured validation of tunnel configurations  
+- **Maintainability**: Easier to read and modify than 15+ environment variables
+- **Error prevention**: Reduces misconfiguration risks from manual env var setup
+
+### Complete Configuration Example
+
+`/etc/otto-bgp/config.json`:
 ```json
 {
   "irr_proxy": {
     "enabled": true,
-    "jump_host": "bastion.example.com",
+    "jump_host": "bastion.example.com", 
     "jump_user": "admin",
     "ssh_key_file": "/var/lib/otto-bgp/ssh-keys/proxy-key",
     "known_hosts_file": "/var/lib/otto-bgp/ssh-keys/proxy-known-hosts",
@@ -667,20 +681,40 @@ Example `irr_proxy` in `/etc/otto-bgp/config.json`:
     "health_check_interval": 300,
     "max_retries": 3,
     "tunnels": [
-      { "name": "whois-radb", "local_port": 43001, "remote_host": "whois.radb.net", "remote_port": 43 },
-      { "name": "whois-ripe", "local_port": 43002, "remote_host": "whois.ripe.net", "remote_port": 43 }
+      {
+        "name": "whois-radb",
+        "local_port": 43001,
+        "remote_host": "whois.radb.net", 
+        "remote_port": 43
+      },
+      {
+        "name": "whois-ripe",
+        "local_port": 43002,
+        "remote_host": "whois.ripe.net",
+        "remote_port": 43
+      },
+      {
+        "name": "whois-arin",
+        "local_port": 43003,
+        "remote_host": "whois.arin.net",
+        "remote_port": 43
+      }
     ]
   }
 }
 ```
 
-Optional environment variables (read on startup):
+### Environment Variable Overrides
+
+Basic settings can be overridden via environment variables:
 
 - `OTTO_BGP_PROXY_ENABLED`: `true|1|yes` to enable
 - `OTTO_BGP_PROXY_JUMP_HOST`: proxy jump host
-- `OTTO_BGP_PROXY_JUMP_USER`: proxy jump user
+- `OTTO_BGP_PROXY_JUMP_USER`: proxy jump user  
 - `OTTO_BGP_PROXY_SSH_KEY`: path to private key
 - `OTTO_BGP_PROXY_KNOWN_HOSTS`: path to known_hosts for the jump host
+
+**Note**: Tunnel configurations cannot be set via environment variables and must be defined in JSON.
 
 Key and host key setup for the proxy jump host:
 

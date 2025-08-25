@@ -22,7 +22,7 @@ from contextlib import contextmanager
 # Import secure host key verification
 from otto_bgp.utils.ssh_security import get_host_key_policy
 
-# Import v0.3.0 models
+# Import models
 from otto_bgp.models import DeviceInfo, RouterProfile
 
 # Import parallel execution utilities
@@ -140,11 +140,11 @@ class JuniperSSHCollector:
     
     def load_devices_from_csv(self, csv_path: str) -> List[DeviceInfo]:
         """
-        Load device information from CSV file - Enhanced for v0.3.0 router-aware architecture
+        Load device information from CSV file - Enhanced for router-aware architecture
         
         Supports both formats:
-        - v0.2.0: address only (backward compatibility)
-        - v0.3.0: address,hostname (enhanced format)
+        - Legacy format: address only
+        - Enhanced format: address,hostname
         
         Args:
             csv_path: Path to CSV file with 'address' column and optional 'hostname' column
@@ -164,10 +164,12 @@ class JuniperSSHCollector:
             with open(csv_file, 'r', newline='') as file:
                 reader = csv.DictReader(file)
                 
-                # Check if hostname column exists
-                has_hostname = 'hostname' in reader.fieldnames if reader.fieldnames else False
+                # Validate required CSV headers
+                required_headers = {'address', 'hostname'}
+                if not required_headers.issubset(set(reader.fieldnames or [])):
+                    raise ValueError(f"CSV must contain required columns: {required_headers}. Found: {reader.fieldnames}")
                 
-                self.logger.info(f"CSV format detected: {'v0.3.0 (with hostname)' if has_hostname else 'v0.2.0 (address only)'}")
+                self.logger.info("CSV format validated: enhanced format with hostname")
                 
                 for row_num, row in enumerate(reader, start=2):
                     try:
@@ -192,10 +194,6 @@ class JuniperSSHCollector:
                 raise ValueError(f"No valid devices found in {csv_path}")
             
             self.logger.info(f"Loaded {len(devices)} devices from {csv_path}")
-            
-            # Log backward compatibility notice if needed
-            if not has_hostname:
-                self.logger.info("Note: Using auto-generated hostnames for v0.2.0 format CSV. Consider updating to v0.3.0 format with explicit hostnames.")
             
             return devices
             
@@ -478,46 +476,37 @@ class JuniperSSHCollector:
         
         return bgp_results
     
-    def write_legacy_output_files(self, bgp_data: List[BGPPeerData], 
-                                output_dir: str = ".") -> Dict[str, str]:
-        """
-        Write output in legacy format for compatibility
+    def write_outputs(self, bgp_data: List[BGPPeerData], 
+                     output_dir: Optional[str] = None) -> List[str]:
+        """Write BGP data to output files (non-legacy format)"""
+        if not output_dir:
+            output_dir = Path("bgp-data")
+        else:
+            output_dir = Path(output_dir)
         
-        Args:
-            bgp_data: List of BGP data collected from devices
-            output_dir: Directory to write output files
-            
-        Returns:
-            Dictionary mapping file type to file path
-        """
-        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_files = []
         
-        # Legacy file paths
-        bgp_txt_path = output_dir / "bgp.txt"
-        bgp_juniper_path = output_dir / "bgp-juniper.txt"
-        
-        # Clear existing files
-        bgp_txt_path.write_text("")
-        bgp_juniper_path.write_text("")
-        
-        # Write data in legacy format
         for data in bgp_data:
             if data.success and data.bgp_config:
-                # Write to bgp-juniper.txt (with device address header)
-                with open(bgp_juniper_path, "a") as f:
-                    f.write(f"{data.device.address}\n")
-                    f.write(f"{data.bgp_config}\n")
-                
-                # Write to bgp.txt (BGP config only)
-                with open(bgp_txt_path, "ab") as f:
-                    f.write(data.bgp_config.encode('utf-8'))
+                # Write per-router file
+                output_file = output_dir / f"{data.device.hostname}_bgp.txt"
+                output_file.write_text(data.bgp_config)
+                output_files.append(str(output_file))
+                self.logger.info(f"Wrote BGP data for {data.device.hostname} to {output_file}")
         
-        self.logger.info(f"Legacy output files written: {bgp_txt_path}, {bgp_juniper_path}")
+        # Write combined file
+        combined_file = output_dir / "all_routers_bgp.txt"
+        combined_content = "\n".join([
+            f"# Router: {data.device.hostname}\n{data.bgp_config}"
+            for data in bgp_data if data.success and data.bgp_config
+        ])
+        combined_file.write_text(combined_content)
+        output_files.append(str(combined_file))
         
-        return {
-            "bgp_txt": str(bgp_txt_path),
-            "bgp_juniper": str(bgp_juniper_path)
-        }
+        self.logger.info(f"Output files written: {output_files}")
+        return output_files
+    
 
 
 # Removed unused helper functions

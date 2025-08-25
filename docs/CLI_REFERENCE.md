@@ -538,7 +538,6 @@ Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CL
 
 ### Command Limitations
 - **No `config` subcommands**: The CLI does not include `config show/validate`. Edit `/etc/otto-bgp/otto.env` or use `/etc/otto-bgp/config.json`.
-- **No `--parallel` flag support**: Parallel processing is handled internally by the application but is not exposed as a CLI option.
 - **Pipeline command limitations**: No `--separate`, `--input-file`, or `--dry-run` options. Pipeline operates on device CSV files only.
 - **list command**: Only supports `routers|as|groups` and plain-text output. No `--format` or `--filter` options.
 

@@ -195,10 +195,6 @@ All guardrail outputs aggregate into a unified risk level (LOW/MEDIUM/HIGH/CRITI
 
 ## Known Gaps and Limitations
 
-**Platform Limitations:**
-- **Juniper-only implementation:** Collection via SSH and NETCONF application target Junos exclusively; other network vendors (Cisco, Arista, etc.) are not supported
-- **Python 3.10+ requirement:** Uses modern Python features not available in older distributions
-
 **RPKI Implementation Gaps:**
 - **Configuration-dependent validation:** RPKI checks only run when VRP cache paths and settings are provided in configuration
 - **Cache staleness handling:** Fail-closed behavior when VRP data exceeds configured age threshold may block legitimate operations
