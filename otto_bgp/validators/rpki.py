@@ -399,7 +399,7 @@ class StreamingVRPProcessor:
                                 max_length = prefix_len
                             
                             yield VRPEntry(
-                                asn=int(roa['asn']),
+                                asn=int(str(roa['asn']).replace('AS', '').replace('as', '')),
                                 prefix=roa['prefix'],
                                 max_length=int(max_length),
                                 ta=roa.get('ta', 'unknown')
@@ -464,7 +464,7 @@ class StreamingVRPProcessor:
                     for roa in data['roas']:
                         try:
                             yield VRPEntry(
-                                asn=roa['asn'],
+                                asn=int(str(roa['asn']).replace('AS', '').replace('as', '')),
                                 prefix=roa['prefix'],
                                 max_length=roa.get('maxLength', int(roa['prefix'].split('/')[1])),
                                 ta=roa.get('ta', 'unknown')
@@ -999,7 +999,7 @@ class RPKIValidator:
             sanitized_prefix = self._sanitize_prefix(prefix)
             sanitized_asn = self._sanitize_asn(asn)
             
-            if not self._cache_file:
+            if not self.vrp_cache_path or not self.vrp_cache_path.exists():
                 raise ValueError("RPKI cache file required for validation")
             
             return self._validate_prefix_streaming(sanitized_prefix, sanitized_asn)
@@ -1143,7 +1143,7 @@ class RPKIValidator:
                 'message': f"Invalid AS number: {e}"
             }
         
-        if not self._cache_file:
+        if not self.vrp_cache_path or not self.vrp_cache_path.exists():
             raise ValueError("RPKI cache file required for validation")
         
         return self._check_as_validity_streaming(validated_asn)

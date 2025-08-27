@@ -68,8 +68,13 @@ sudo dnf install -y python3 python3-pip python3-venv git openssh-clients curl
 
 # bgpq4 (required for policy generation)
 # Debian/Ubuntu: sudo apt install bgpq4
-# RHEL/CentOS: sudo dnf install epel-release && sudo dnf install bgpq4
+# RHEL/CentOS/Rocky Linux: sudo dnf install epel-release && sudo dnf install bgpq4
 # Or use containerized version with Docker/Podman
+
+# rpki-client (optional but recommended for RPKI validation)
+# Debian/Ubuntu: sudo apt install rpki-client
+# RHEL/CentOS/Rocky Linux: sudo dnf install epel-release && sudo dnf install rpki-client
+# FreeBSD: pkg install rpki-client
 ```
 
 ## Installation Methods
@@ -301,7 +306,7 @@ which bgpq4  # Should show /usr/bin/bgpq4
 # Update system
 sudo dnf update -y
 
-# Enable EPEL repository (required for bgpq4)
+# Enable EPEL repository (required for bgpq4 and rpki-client)
 sudo dnf install -y epel-release
 
 # Install dependencies
@@ -310,9 +315,14 @@ sudo dnf install -y python3 python3-pip python3-venv git openssh-clients systemd
 # Install bgpq4 from EPEL
 sudo dnf install -y bgpq4
 
-# Verify bgpq4 installation
+# Install rpki-client from EPEL (recommended for RPKI validation)
+sudo dnf install -y rpki-client
+
+# Verify installations
 bgpq4 --help
+rpki-client --help
 which bgpq4  # Should show /usr/bin/bgpq4
+which rpki-client  # Should show /usr/bin/rpki-client
 ```
 
 **Note:** The Otto BGP installation script will automatically handle EPEL repository setup for RHEL-based systems when needed.

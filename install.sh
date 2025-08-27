@@ -154,6 +154,16 @@ check_requirements() {
         fi
     fi
     
+    # Check rpki-client for RPKI cache generation
+    if timeout "$TIMEOUT" command -v rpki-client >/dev/null 2>&1; then
+        log_success "Found rpki-client"
+    else
+        log_warn "rpki-client not found (optional for RPKI cache generation)"
+        log_warn "Install: apt-get install rpki-client (Debian/Ubuntu)"
+        log_warn "         dnf install rpki-client (RHEL/CentOS)"
+        log_warn "         pkg install rpki-client (FreeBSD)"
+    fi
+    
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing required tools: ${missing[*]}"
         echo ""
@@ -175,7 +185,7 @@ create_directories() {
     log_info "Creating directories..."
     
     mkdir -p "$BIN_DIR" "$LIB_DIR" "$CONFIG_DIR"
-    mkdir -p "$DATA_DIR"/{ssh-keys,logs,cache,policies}
+    mkdir -p "$DATA_DIR"/{ssh-keys,logs,cache,policies,rpki}
     
     if [[ "$INSTALL_MODE" == "system" ]]; then
         # Create service user if needed
@@ -567,6 +577,48 @@ CPUQuota=50%
 WantedBy=multi-user.target
 EOF
     
+    # Create RPKI cache update service
+    sudo tee /etc/systemd/system/otto-bgp-rpki-update.service > /dev/null << EOF
+[Unit]
+Description=Otto BGP RPKI Cache Update
+Documentation=file://$LIB_DIR/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$DATA_DIR/rpki
+ExecStart=/usr/bin/rpki-client -j -o $DATA_DIR/rpki/vrp_cache.json
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=$DATA_DIR/rpki
+EnvironmentFile=-$CONFIG_DIR/otto.env
+Environment="RPKI_TRUST_ANCHOR_DIR=/var/lib/rpki-client/ta"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Create RPKI cache update timer
+    sudo tee /etc/systemd/system/otto-bgp-rpki-update.timer > /dev/null << EOF
+[Unit]
+Description=Otto BGP RPKI Cache Update Timer
+Documentation=file://$LIB_DIR/README.md
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
+EOF
+    
     # Create timer for scheduled execution (if not autonomous mode)
     if [[ "$AUTONOMOUS_MODE" != true ]]; then
         sudo tee /etc/systemd/system/otto-bgp.timer > /dev/null << EOF
@@ -593,9 +645,18 @@ EOF
     
     log_info "SystemD services configured. To enable:"
     echo "  sudo systemctl enable otto-bgp.service"
+    echo "  sudo systemctl enable otto-bgp-rpki-update.service"
+    echo "  sudo systemctl enable otto-bgp-rpki-update.timer"
     if [[ "$AUTONOMOUS_MODE" != true ]]; then
         echo "  sudo systemctl enable otto-bgp.timer"
+        echo ""
+        echo "To start services:"
+        echo "  sudo systemctl start otto-bgp-rpki-update.timer"
         echo "  sudo systemctl start otto-bgp.timer"
+    else
+        echo ""
+        echo "To start RPKI updates:"
+        echo "  sudo systemctl start otto-bgp-rpki-update.timer"
     fi
 }
 

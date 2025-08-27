@@ -1,6 +1,6 @@
 # Otto BGP v0.3.2 - Orchestrated Transit Traffic Optimizer
 
-**Automated BGP policy generation and application** with router-aware architecture. Otto autonomously generates Juniper policies from network data and provides configurable automation for policy application, from development to production deployment.
+**Automated BGP policy generation and application** with router-aware architecture. Otto autonomously generates Juniper policies from network data using Linux packages **bgpq4** for policy generation and **rpki-client** for RPKI validation data. Provides configurable automation for policy application, from development to production deployment.
 
 ## Key Features
 
@@ -76,6 +76,7 @@ sudo systemctl start otto-bgp.timer
 
 - **Linux/macOS** with Python 3.10+
 - **bgpq4** for policy generation
+- **rpki-client** for RPKI validation data (optional but recommended)
 - **SSH access** to target Juniper routers
 - **Virtual environment** (automatically created by installer)
 
