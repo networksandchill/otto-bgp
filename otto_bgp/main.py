@@ -371,10 +371,18 @@ def cmd_discover(args):
         
         # Show diff if requested
         if getattr(args, 'show_diff', False):
-            diff_content = yaml_gen.generate_diff_report()
-            if diff_content:
-                print("\nChanges detected:")
-                print(diff_content)
+            diff_report_path = yaml_gen.generate_diff_report_from_current(mappings)
+            if diff_report_path and diff_report_path.exists():
+                print(f"\nDiff report generated: {diff_report_path}")
+                
+                # Read and display diff report content
+                try:
+                    with open(diff_report_path, 'r') as f:
+                        diff_content = f.read()
+                    print("\nChanges detected:")
+                    print(diff_content)
+                except Exception as e:
+                    print(f"Warning: Could not read diff report: {e}")
             else:
                 print("\nNo changes detected since last discovery")
         

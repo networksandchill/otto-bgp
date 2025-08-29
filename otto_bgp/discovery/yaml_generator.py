@@ -453,3 +453,59 @@ class YAMLGenerator:
         self.logger.info(f"Generated diff report: {report_file}")
         
         return report_file
+    
+    def generate_diff_report_from_current(self, current_mappings: Dict) -> Optional[Path]:
+        """
+        Generate diff report comparing current mappings to the latest history snapshot.
+        
+        This convenience method handles loading previous mappings from history and
+        calling diff calculation automatically for CLI integration.
+        
+        Args:
+            current_mappings: Current mappings to compare against history.
+            
+        Returns:
+            Path to generated diff report, or None if no previous mappings exist.
+        """
+        # Ensure history directory exists
+        if not self.history_dir.exists():
+            self.logger.info("No history directory found for diff comparison")
+            return None
+        
+        # Find history files for bgp-mappings snapshots (timestamp sorted)
+        history_files = sorted(self.history_dir.glob("bgp-mappings_*.yaml"))
+        
+        if not history_files:
+            self.logger.info("No previous mappings found in history for diff comparison")
+            return None
+        
+        # Load most recent history file (lexicographically latest timestamp)
+        latest_history = history_files[-1]
+        self.logger.debug(f"Loading previous mappings from: {latest_history}")
+        
+        try:
+            with open(latest_history, 'r') as f:
+                previous_mappings = yaml.safe_load(f)
+            
+            if not previous_mappings:
+                self.logger.warning(f"Previous mappings file is empty: {latest_history}")
+                return None
+            
+            # Calculate diff using existing method
+            diff = self.diff_mappings(previous_mappings, current_mappings)
+            
+            # Generate and return diff report path
+            diff_report_path = self.generate_diff_report(diff)
+            self.logger.info(f"Generated diff report: {diff_report_path}")
+            
+            return diff_report_path
+            
+        except yaml.YAMLError as e:
+            self.logger.error(f"Failed to parse YAML from history file {latest_history}: {e}")
+            return None
+        except FileNotFoundError:
+            self.logger.error(f"History file not found: {latest_history}")
+            return None  
+        except Exception as e:
+            self.logger.error(f"Failed to generate diff report from current mappings: {e}")
+            return None
