@@ -263,22 +263,6 @@ class RPKIValidationResult:
             self.timestamp = datetime.now()
 
 
-@dataclass
-class VRPDataset:
-    """Complete VRP dataset with metadata"""
-    vrp_entries: List[VRPEntry]
-    metadata: Dict[str, Any]
-    generated_time: datetime
-    expires_time: Optional[datetime] = None
-    source_format: str = "unknown"  # rpki-client, routinator, etc.
-    
-    def is_stale(self, max_age_hours: int = 24) -> bool:
-        """Check if VRP data is stale"""
-        if self.expires_time:
-            return datetime.now() > self.expires_time
-        
-        age = datetime.now() - self.generated_time
-        return age > timedelta(hours=max_age_hours)
 
 
 class StreamingVRPProcessor:
@@ -917,7 +901,6 @@ class RPKIValidator:
                  allowlist_path: Optional[Path] = None,
                  fail_closed: bool = True,
                  max_vrp_age_hours: int = 24,
-                 streaming_mode: bool = True,
                  max_memory_mb: int = 10,
                  chunk_size: int = 1000,
                  logger: Optional[logging.Logger] = None):
@@ -929,7 +912,6 @@ class RPKIValidator:
             allowlist_path: Path to NOTFOUND allowlist file
             fail_closed: Fail closed when VRP data is stale (default True)
             max_vrp_age_hours: Maximum age for VRP data before considered stale
-            streaming_mode: Enable streaming VRP processing for memory efficiency (default True)
             max_memory_mb: Maximum memory usage for VRP cache in MB (default 50MB)
             chunk_size: Chunk size for streaming processing (default 1000)
             logger: Optional logger instance
@@ -939,40 +921,25 @@ class RPKIValidator:
         self.allowlist_path = allowlist_path or Path("/var/lib/otto-bgp/rpki/allowlist.json")
         self.fail_closed = fail_closed
         self.max_vrp_age_hours = max_vrp_age_hours
-        self.streaming_mode = streaming_mode
+        # Streaming architecture components (always enabled)
+        self._streaming_processor = StreamingVRPProcessor(
+            cache_path=self.vrp_cache_path,
+            chunk_size=chunk_size,
+            logger=self.logger
+        )
+        self._lazy_cache = LazyVRPCache(
+            streaming_processor=self._streaming_processor,
+            max_memory_bytes=max_memory_mb * 1024 * 1024,
+            max_cache_entries=chunk_size * 10,  # 10 chunks worth
+            logger=self.logger
+        )
         
-        # Streaming architecture components
-        if self.streaming_mode:
-            self._streaming_processor = StreamingVRPProcessor(
-                cache_path=self.vrp_cache_path,
-                chunk_size=chunk_size,
-                logger=self.logger
-            )
-            self._lazy_cache = LazyVRPCache(
-                streaming_processor=self._streaming_processor,
-                max_memory_bytes=max_memory_mb * 1024 * 1024,
-                max_cache_entries=chunk_size * 10,  # 10 chunks worth
-                logger=self.logger
-            )
-            
-            # VRP metadata from streaming processor
-            self._vrp_metadata = self._streaming_processor.get_metadata()
-            self._vrp_dataset = None  # Not used in streaming mode
-            self._file_format = self._streaming_processor._file_format
-            
-            self.logger.info(f"RPKI validator initialized in STREAMING mode - "
-                           f"Memory limit: {max_memory_mb}MB, Chunk size: {chunk_size}")
-        else:
-            # Legacy mode: load full dataset into memory
-            self._streaming_processor = None
-            self._lazy_cache = None
-            self._vrp_dataset: Optional[VRPDataset] = None
-            self._vrp_index: Dict[str, List[VRPEntry]] = {}
-            self._file_format = 'json'  # Default for legacy mode
-            self._load_vrp_data()
-            
-            self.logger.info(f"RPKI validator initialized in LEGACY mode - "
-                           f"VRP entries: {len(self._vrp_dataset.vrp_entries) if self._vrp_dataset else 0}")
+        # VRP metadata from streaming processor
+        self._vrp_metadata = self._streaming_processor.get_metadata()
+        self._file_format = self._streaming_processor._file_format
+        
+        self.logger.info(f"RPKI validator initialized - "
+                       f"Memory limit: {max_memory_mb}MB, Chunk size: {chunk_size}")
         
         # Common components
         self._allowlist: Set[Tuple[str, int]] = set()  # (prefix, asn) tuples
@@ -1627,66 +1594,35 @@ class RPKIValidator:
         Returns detailed statistics for both streaming and legacy modes,
         including memory usage, cache performance, and validation metrics.
         """
+        # Streaming mode statistics (always enabled)
+        cache_stats = self._lazy_cache.get_cache_stats()
+        estimated_vrp_count = self._estimate_total_vrp_count()
+        
         stats = {
             'mode': 'streaming',
             'allowlist_entries': len(self._allowlist),
-            'vrp_data_age': None,
-            'vrp_data_stale': None,
+            'vrp_entries': estimated_vrp_count,
+            'vrp_data_age': 'Available via streaming',
+            'vrp_data_stale': not self.vrp_cache_path.exists(),
             'memory_optimization': {
-                'streaming_enabled': self.streaming_mode,
-                'memory_usage_mb': None,
-                'memory_reduction_percent': None,
-                'cache_performance': None
+                'streaming_enabled': True,
+                'memory_usage_mb': cache_stats['estimated_memory_usage_mb'],
+                'memory_limit_mb': cache_stats['memory_limit_mb'],
+                'memory_reduction_percent': self._calculate_memory_reduction(
+                    estimated_vrp_count, cache_stats['estimated_memory_usage_mb']
+                ),
+                'cache_performance': {
+                    'hit_rate_percent': cache_stats['hit_rate_percent'],
+                    'total_requests': cache_stats['cache_stats']['hits'] + cache_stats['cache_stats']['misses'],
+                    'cache_hits': cache_stats['cache_stats']['hits'],
+                    'cache_misses': cache_stats['cache_stats']['misses'],
+                    'evictions': cache_stats['cache_stats']['evictions'],
+                    'memory_pressure_events': cache_stats['cache_stats']['memory_pressure_events'],
+                    'cached_prefix_keys': cache_stats['cached_prefix_keys'],
+                    'cached_asn_keys': cache_stats['cached_asn_keys']
+                }
             }
         }
-        
-        if self.streaming_mode and self._lazy_cache:
-            # Streaming mode statistics
-            cache_stats = self._lazy_cache.get_cache_stats()
-            estimated_vrp_count = self._estimate_total_vrp_count()
-            
-            stats.update({
-                'vrp_entries': estimated_vrp_count,
-                'vrp_data_age': 'Available via streaming',
-                'vrp_data_stale': not self.vrp_cache_path.exists(),
-                'memory_optimization': {
-                    'streaming_enabled': True,
-                    'memory_usage_mb': cache_stats['estimated_memory_usage_mb'],
-                    'memory_limit_mb': cache_stats['memory_limit_mb'],
-                    'memory_reduction_percent': self._calculate_memory_reduction(
-                        estimated_vrp_count, cache_stats['estimated_memory_usage_mb']
-                    ),
-                    'cache_performance': {
-                        'hit_rate_percent': cache_stats['hit_rate_percent'],
-                        'total_requests': cache_stats['cache_stats']['hits'] + cache_stats['cache_stats']['misses'],
-                        'cache_hits': cache_stats['cache_stats']['hits'],
-                        'cache_misses': cache_stats['cache_stats']['misses'],
-                        'evictions': cache_stats['cache_stats']['evictions'],
-                        'memory_pressure_events': cache_stats['cache_stats']['memory_pressure_events'],
-                        'cached_prefix_keys': cache_stats['cached_prefix_keys'],
-                        'cached_asn_keys': cache_stats['cached_asn_keys']
-                    }
-                }
-            })
-        else:
-            # Legacy mode statistics
-            vrp_count = len(self._vrp_dataset.vrp_entries) if self._vrp_dataset else 0
-            # Memory usage is handled by streaming cache
-            
-            stats.update({
-                'vrp_entries': vrp_count,
-                'memory_optimization': {
-                    'streaming_enabled': False,
-                    'memory_usage_mb': estimated_memory_mb,
-                    'memory_reduction_percent': 75.0,  # Streaming architecture reduction
-                    'cache_performance': None
-                }
-            })
-            
-            if self._vrp_dataset:
-                age = datetime.now() - self._vrp_dataset.generated_time
-                stats['vrp_data_age'] = str(age)
-                stats['vrp_data_stale'] = self._vrp_dataset.is_stale(self.max_vrp_age_hours)
         
         return stats
     
@@ -1729,14 +1665,6 @@ class RPKIValidator:
         
         Provides actionable insights for memory optimization.
         """
-        if not self.streaming_mode:
-            return {
-                'memory_pressure': 'unknown',
-                'recommendations': ['Enable streaming mode for memory optimization'],
-                'current_mode': 'legacy',
-                'streaming_available': True
-            }
-        
         cache_stats = self._lazy_cache.get_cache_stats()
         memory_usage_percent = (cache_stats['estimated_memory_usage_mb'] / cache_stats['memory_limit_mb']) * 100
         
@@ -1915,49 +1843,6 @@ class RPKIValidator:
             covering_vrp=matching_vrps[0]  # Include first covering VRP for reference
         )
     
-    def _load_vrp_data(self):
-        """Load VRP data from cache"""
-        try:
-            if not self.vrp_cache_path.exists():
-                self.logger.warning(f"VRP cache file not found: {self.vrp_cache_path}")
-                return
-            
-            with open(self.vrp_cache_path, 'r') as f:
-                cache_data = json.load(f)
-            
-            # Parse cached VRP data
-            vrp_entries = []
-            for entry_data in cache_data.get('vrp_entries', []):
-                try:
-                    vrp_entry = VRPEntry(
-                        asn=entry_data['asn'],
-                        prefix=entry_data['prefix'],
-                        max_length=entry_data['max_length'],
-                        ta=entry_data.get('ta', 'unknown')
-                    )
-                    vrp_entries.append(vrp_entry)
-                except Exception as e:
-                    self.logger.debug(f"Skipping invalid VRP entry: {e}")
-            
-            # Create dataset
-            metadata = cache_data.get('metadata', {})
-            generated_time = datetime.fromisoformat(cache_data.get('generated_time', datetime.now().isoformat()))
-            
-            self._vrp_dataset = VRPDataset(
-                vrp_entries=vrp_entries,
-                metadata=metadata,
-                generated_time=generated_time,
-                source_format=cache_data.get('source_format', 'cached')
-            )
-            
-            # Build lookup index
-            self._build_vrp_index()
-            
-            self.logger.info(f"Loaded {len(vrp_entries)} VRP entries from cache")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load VRP cache: {e}")
-    
     def _load_allowlist(self):
         """Load allowlist from file"""
         try:
@@ -2001,110 +1886,7 @@ class RPKIValidator:
         except Exception as e:
             self.logger.error(f"Failed to save allowlist: {e}")
     
-    def _cache_vrp_data(self):
-        """Cache VRP data to file"""
-        try:
-            if not self._vrp_dataset:
-                return
-            
-            # Create directory if needed
-            self.vrp_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            cache_data = {
-                'vrp_entries': [
-                    {
-                        'asn': vrp.asn,
-                        'prefix': vrp.prefix,
-                        'max_length': vrp.max_length,
-                        'ta': vrp.ta
-                    }
-                    for vrp in self._vrp_dataset.vrp_entries
-                ],
-                'metadata': self._vrp_dataset.metadata,
-                'generated_time': self._vrp_dataset.generated_time.isoformat(),
-                'source_format': self._vrp_dataset.source_format
-            }
-            
-            with open(self.vrp_cache_path, 'w') as f:
-                json.dump(cache_data, f, indent=2)
-                
-        except Exception as e:
-            self.logger.error(f"Failed to cache VRP data: {e}")
     
-    def _build_vrp_index(self):
-        """Build index for fast VRP lookups"""
-        self._vrp_index = {}
-        
-        if not self._vrp_dataset:
-            return
-        
-        for vrp in self._vrp_dataset.vrp_entries:
-            # Index by network address for faster lookups
-            try:
-                network = ip_network(vrp.prefix)
-                network_addr = str(network.network_address)
-                
-                if network_addr not in self._vrp_index:
-                    self._vrp_index[network_addr] = []
-                self._vrp_index[network_addr].append(vrp)
-                
-            except Exception:
-                continue
-    
-    def _detect_vrp_format(self, vrp_data: Dict[str, Any]) -> str:
-        """Auto-detect VRP data format"""
-        if 'roas' in vrp_data:
-            return "rpki-client"
-        elif 'roa-count' in vrp_data or 'version' in vrp_data:
-            return "routinator"
-        else:
-            return "generic"
-    
-    def _parse_rpki_client_format(self, vrp_data: Dict[str, Any]) -> VRPDataset:
-        """Parse rpki-client VRP format"""
-        vrp_entries = []
-        
-        for roa in vrp_data.get('roas', []):
-            try:
-                vrp_entry = VRPEntry(
-                    asn=roa['asn'],
-                    prefix=roa['prefix'],
-                    max_length=roa.get('maxLength', int(roa['prefix'].split('/')[1])),
-                    ta=roa.get('ta', 'unknown')
-                )
-                vrp_entries.append(vrp_entry)
-            except Exception as e:
-                self.logger.debug(f"Skipping invalid ROA entry: {e}")
-        
-        return VRPDataset(
-            vrp_entries=vrp_entries,
-            metadata=vrp_data.get('metadata', {}),
-            generated_time=datetime.now(),  # rpki-client doesn't provide timestamp
-            source_format="rpki-client"
-        )
-    
-    def _parse_routinator_format(self, vrp_data: Dict[str, Any]) -> VRPDataset:
-        """Parse routinator VRP format"""
-        vrp_entries = []
-        
-        for vrp in vrp_data.get('validated-roa-payloads', []):
-            try:
-                vrp_entry = VRPEntry(
-                    asn=vrp['asn'],
-                    prefix=vrp['prefix'],
-                    max_length=vrp.get('max-length', int(vrp['prefix'].split('/')[1])),
-                    ta=vrp.get('ta', 'unknown')
-                )
-                vrp_entries.append(vrp_entry)
-            except Exception as e:
-                self.logger.debug(f"Skipping invalid VRP entry: {e}")
-        
-        return VRPDataset(
-            vrp_entries=vrp_entries,
-            metadata=vrp_data.get('metadata', {}),
-            generated_time=datetime.now(),  # Parse from metadata if available
-            source_format="routinator"
-        )
 
 
 class RPKIGuardrail(GuardrailComponent):
