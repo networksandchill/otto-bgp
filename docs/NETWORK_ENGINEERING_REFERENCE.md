@@ -743,9 +743,9 @@ Maintain comprehensive audit trails:
 ### Performance Considerations
 
 1. **Memory Usage**:
-   - Large policy sets loaded entirely into memory
-   - VRP cache loaded completely at startup
-   - No streaming processing for very large datasets
+   - Large policy sets are loaded into memory during generation
+   - RPKI VRP validation supports streaming and lazy caching to reduce memory usage
+   - Policy generation itself does not stream; memory scales with AS set size
 
 2. **Network Dependencies**:
    - All operations require network connectivity to target devices

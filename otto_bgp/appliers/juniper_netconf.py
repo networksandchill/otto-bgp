@@ -310,7 +310,7 @@ class JuniperPolicyApplier:
                                confirm_timeout: int = 120,
                                comment: Optional[str] = None) -> ApplicationResult:
         """
-        Apply policies with automatic rollback if not confirmed
+        Apply policies with mode-aware finalization
         
         Args:
             policies: List of policies to apply
@@ -331,7 +331,18 @@ class JuniperPolicyApplier:
         hostname = self.device.hostname
         self.logger.info(f"Applying {len(policies)} policies to {hostname}")
         
+        # Import mode manager for finalization strategy
+        import os
+        from otto_bgp.appliers.mode_manager import ModeManager, CommitInfo, HealthResult
+        
         try:
+            # Detect mode and get finalization strategy
+            mode = os.getenv('OTTO_BGP_MODE', 'system').lower()
+            mode_manager = ModeManager(mode)
+            finalization_strategy = mode_manager.get_finalization_strategy()
+            
+            self.logger.info(f"Using {mode_manager.get_mode_description()} mode")
+            
             # Generate diff first
             diff = self.preview_changes(policies)
             
@@ -373,6 +384,19 @@ class JuniperPolicyApplier:
                     }
                 )
             
+            # NEW: Mode-aware finalization
+            commit_info = CommitInfo(
+                commit_id=commit_id or "unknown",
+                timestamp=datetime.now().isoformat(),
+                success=True
+            )
+            
+            # Run health checks
+            health_result = self._run_health_checks()
+            
+            # Apply finalization strategy based on mode
+            finalization_strategy.execute(self.config, commit_info, health_result)
+            
             # Create successful result
             result = ApplicationResult(
                 success=True,
@@ -382,10 +406,6 @@ class JuniperPolicyApplier:
                 commit_id=commit_id,
                 timestamp=datetime.now().isoformat()
             )
-            
-            # Note: In real usage, user must confirm within timeout
-            # or changes will be automatically rolled back
-            self.logger.warning(f"CONFIRMATION REQUIRED within {confirm_timeout} seconds!")
             
             return result
             
@@ -488,6 +508,39 @@ class JuniperPolicyApplier:
                 )
             
             return False
+    
+    def _run_health_checks(self, timeout: int = 30):
+        """
+        Execute post-commit health validation
+        
+        Args:
+            timeout: Health check timeout
+            
+        Returns:
+            HealthResult with validation details
+        """
+        from otto_bgp.appliers.mode_manager import HealthResult
+        
+        if not self.connected or not self.device:
+            return HealthResult(success=False, details=[], error="Device not connected")
+        
+        checks = []
+        try:
+            # Management interface check
+            mgmt_info = self.device.rpc.get_interface_information(interface_name='fxp0')
+            checks.append("Management interface: OK")
+            
+            # BGP neighbor check
+            bgp_info = self.device.rpc.get_bgp_neighbor_information()
+            established = len(bgp_info.xpath('.//bgp-peer[peer-state="Established"]'))
+            checks.append(f"BGP neighbors established: {established}")
+            
+            self.logger.info(f"Health checks passed: {checks}")
+            return HealthResult(success=True, details=checks)
+            
+        except Exception as e:
+            self.logger.error(f"Health check failed: {e}")
+            return HealthResult(success=False, details=[], error=str(e))
     
     def disconnect(self):
         """Close connection to router"""

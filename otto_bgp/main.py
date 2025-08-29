@@ -607,38 +607,22 @@ def cmd_apply(args):
             applier.disconnect()
             return 1
         
-        # Apply with confirmation
-        if args.confirm:
-            print(f"\nApplying policies with {args.confirm_timeout}s confirmation timeout...")
-            print("You must confirm the commit within this time or it will be rolled back!")
-            
-            result = applier.apply_with_confirmation(
-                policies=policies,
-                confirm_timeout=args.confirm_timeout,
-                comment=args.comment or f"Otto BGP policy update for {args.router}"
-            )
-        else:
-            print("\nWARNING: Applying without confirmation - changes are permanent!")
-            print("Use --confirm for automatic rollback safety")
-            
-            # For non-confirmed commits, we need different logic
-            # This is simplified - real implementation would differ
-            result = applier.apply_with_confirmation(
-                policies=policies,
-                confirm_timeout=0,  # No confirmation timeout
-                comment=args.comment or f"Otto BGP policy update for {args.router}"
-            )
+        # Apply policies with mode-aware finalization
+        confirm_timeout = args.confirm_timeout if args.confirm else 120  # Default timeout
+        print(f"\nApplying policies using mode-aware finalization...")
+        
+        result = applier.apply_with_confirmation(
+            policies=policies,
+            confirm_timeout=confirm_timeout,
+            comment=args.comment or f"Otto BGP policy update for {args.router}"
+        )
         
         # Report results
         if result.success:
             print(f"\n✓ Successfully applied {result.policies_applied} policies to {args.router}")
             if result.commit_id:
                 print(f"  Commit ID: {result.commit_id}")
-            
-            if args.confirm:
-                print(f"\n⚠ CONFIRMATION REQUIRED within {args.confirm_timeout} seconds!")
-                print("  Confirm the commit on the router within the timeout period")
-                print("  Or changes will be automatically rolled back")
+            print("  Mode-aware finalization completed")
         else:
             print(f"\n✗ Failed to apply policies: {result.error_message}")
             return 1

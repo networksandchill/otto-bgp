@@ -804,11 +804,9 @@ For additional support, refer to the main README.md or create an issue in the Ot
 
 ### NETCONF Implementation Limitations
 
-1. **Manual Confirmation Required**: The current NETCONF implementation requires manual confirmation of commits via the router's CLI within the timeout window. Otto BGP does not automatically confirm commits, requiring operator intervention.
+1. **Juniper Router Support Only**: NETCONF functionality is currently limited to Juniper routers. Other vendor support is not implemented.
 
-2. **Juniper Router Support Only**: NETCONF functionality is currently limited to Juniper routers. Other vendor support is not implemented.
-
-3. **Limited Health Validation**: Post-commit health checks are basic and focus primarily on management interface and BGP neighbor status. More comprehensive router health validation is not implemented.
+2. **Limited Health Validation**: Post-commit health checks are basic and focus primarily on management interface and BGP neighbor status. More comprehensive router health validation is not implemented.
 
 ### Configuration and Setup Gaps
 

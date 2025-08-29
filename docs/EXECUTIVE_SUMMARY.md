@@ -216,6 +216,6 @@ All guardrail outputs aggregate into a unified risk level (LOW/MEDIUM/HIGH/CRITI
 - **Log aggregation:** Structured logging exists but requires external log management for centralized monitoring
 
 **Scalability Considerations:**
-- **Memory usage with large AS sets:** Memory consumption scales linearly with AS set size and bgpq4 output volume
+- **Memory usage with large AS sets:** Memory consumption scales with AS set size and bgpq4 output volume; RPKI VRP validation uses streaming and lazy caching to reduce memory during validation.
 - **Sequential processing:** Router processing is sequential; no parallel SSH collection across multiple devices
-- **Lock file cleanup:** Stale operation locks require manual cleanup if processes terminate unexpectedly
+- **Concurrent operation locks:** A process lock prevents concurrent runs. Stale locks are automatically removed when the holding PID is gone.
