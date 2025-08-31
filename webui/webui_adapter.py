@@ -675,7 +675,10 @@ async def control_systemd_service(request: Request, user: dict = Depends(require
         allowed_services = [
             'otto-bgp.service',
             'otto-bgp-autonomous.service', 
-            'otto-bgp.timer'
+            'otto-bgp.timer',
+            'otto-bgp-webui-adapter.service',
+            'otto-bgp-rpki-update.service',
+            'otto-bgp-rpki-update.timer'
         ]
         
         if action not in allowed_actions:

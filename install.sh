@@ -23,7 +23,7 @@ AUTONOMOUS_MODE=false
 SKIP_BGPQ4=false
 FORCE_INSTALL=false
 TIMEOUT=30
-OTTO_WEBUI_ENABLE_SERVICE_CONTROL="${OTTO_WEBUI_ENABLE_SERVICE_CONTROL:-false}"  # Default to false
+OTTO_WEBUI_ENABLE_SERVICE_CONTROL="${OTTO_WEBUI_ENABLE_SERVICE_CONTROL:-true}"  # Default to true for WebUI functionality
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -848,6 +848,16 @@ otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-autonomous.ser
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp.timer
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp.timer
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-webui-adapter.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-webui-adapter.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-webui-adapter.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl reload otto-bgp-webui-adapter.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-rpki-update.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-rpki-update.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-update.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-rpki-update.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-rpki-update.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-update.timer
 EOF
     
     # Validate sudoers syntax before installing
@@ -879,6 +889,7 @@ Group=$SERVICE_USER
 WorkingDirectory=$LIB_DIR
 Environment=PYTHONPATH=$LIB_DIR
 Environment=OTTO_WEBUI_ROOT=/usr/local/share/otto-bgp/webui
+Environment=OTTO_WEBUI_ENABLE_SERVICE_CONTROL=true
 EnvironmentFile=-$CONFIG_DIR/otto.env
 ExecStart=$VENV_DIR/bin/uvicorn webui_adapter:app --host 0.0.0.0 --port 8443 --ssl-certfile $CONFIG_DIR/tls/cert.pem --ssl-keyfile $CONFIG_DIR/tls/key.pem
 Restart=on-failure
