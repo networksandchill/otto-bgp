@@ -7,7 +7,6 @@ import type {
 
 class ApiClient {
   private client: AxiosInstance
-  private csrfToken: string | null = null
 
   constructor() {
     this.client = axios.create({
@@ -16,13 +15,11 @@ class ApiClient {
       withCredentials: true, // Include cookies for refresh tokens
     })
 
-    // Request interceptor to add CSRF token
+    // Request interceptor to add Authorization header
     this.client.interceptors.request.use((config) => {
-      if (this.csrfToken) {
-        config.headers['X-CSRF-Token'] = this.csrfToken
-      }
-      if (this.getAccessToken()) {
-        config.headers['Authorization'] = `Bearer ${this.getAccessToken()}`
+      const token = this.getAccessToken()
+      if (token) {
+        config.headers['Authorization'] = `Bearer ${token}`
       }
       return config
     })
@@ -38,6 +35,11 @@ class ApiClient {
           
           try {
             await this.refreshToken()
+            // Update Authorization header with new token before retry
+            const newToken = this.getAccessToken()
+            if (newToken) {
+              originalRequest.headers['Authorization'] = `Bearer ${newToken}`
+            }
             return this.client(originalRequest)
           } catch (refreshError) {
             // Refresh failed, redirect to login
@@ -61,13 +63,8 @@ class ApiClient {
     return sessionStorage.getItem('access_token')
   }
 
-  private setCsrfToken(token: string) {
-    this.csrfToken = token
-  }
-
   public clearTokens() {
     sessionStorage.removeItem('access_token')
-    this.csrfToken = null
   }
 
   // Setup endpoints
@@ -99,9 +96,8 @@ class ApiClient {
     const response = await this.client.post<LoginResponse>('/auth/login', credentials)
     const { access_token } = response.data
     
-    // Store tokens
+    // Store token
     this.setAccessToken(access_token)
-    this.setCsrfToken(access_token)
     
     return response.data
   }
@@ -116,7 +112,6 @@ class ApiClient {
     const { access_token } = response.data
     
     this.setAccessToken(access_token)
-    this.setCsrfToken(access_token)
   }
 
   async logout(): Promise<void> {
