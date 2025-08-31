@@ -293,6 +293,46 @@ async def setup_config(request: Request):
         os.replace(tmp_path, CONFIG_PATH)
         os.chmod(CONFIG_PATH, 0o600)
         
+        # Create devices.csv from SSH configuration if provided
+        if 'ssh' in config_data and config_data['ssh'].get('hostname'):
+            devices_csv_path = Path('/etc/otto-bgp/devices.csv')
+            try:
+                # Extract SSH details
+                ssh_config = config_data['ssh']
+                hostname = ssh_config.get('hostname', '').strip()
+                username = ssh_config.get('username', 'admin').strip()
+                
+                # Determine if hostname is IP or DNS name
+                import socket
+                device_name = hostname
+                try:
+                    # Try to parse as IP address
+                    socket.inet_aton(hostname.split(':')[0])  # Remove port if present
+                    # It's an IP, create a generic hostname
+                    device_name = f"router-{hostname.replace('.', '-').replace(':', '-')}"
+                except socket.error:
+                    # It's already a hostname, use as-is
+                    pass
+                
+                # Create CSV content
+                csv_content = "address,hostname,username,role,region\n"
+                csv_content += f"{hostname},{device_name},{username},edge,default\n"
+                
+                # Write devices.csv atomically
+                with tempfile.NamedTemporaryFile('w', dir=str(devices_csv_path.parent), delete=False) as tmp:
+                    tmp.write(csv_content)
+                    tmp_path = tmp.name
+                
+                os.replace(tmp_path, devices_csv_path)
+                os.chmod(devices_csv_path, 0o644)
+                
+                logger.info(f"Created devices.csv with device: {hostname}")
+                audit_log("devices_csv_created", user="setup", resource=hostname)
+                
+            except Exception as e:
+                logger.warning(f"Failed to create devices.csv: {str(e)}")
+                # Don't fail setup if devices.csv creation fails
+        
         audit_log("initial_config_created", user="setup")
         return JSONResponse({'success': True})
         
