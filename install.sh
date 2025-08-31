@@ -210,7 +210,7 @@ create_directories() {
         
         # Set ownership
         sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" 2>/dev/null || true
-        sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/tls" \
+        sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" \
                       /usr/local/share/otto-bgp/webui 2>/dev/null || true
         sudo chmod 700 "$DATA_DIR/ssh-keys" 2>/dev/null || true
     else
