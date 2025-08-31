@@ -23,6 +23,7 @@ AUTONOMOUS_MODE=false
 SKIP_BGPQ4=false
 FORCE_INSTALL=false
 TIMEOUT=30
+OTTO_WEBUI_ENABLE_SERVICE_CONTROL="${OTTO_WEBUI_ENABLE_SERVICE_CONTROL:-false}"  # Default to false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
