@@ -1051,6 +1051,11 @@ async def get_system_logs(
                     continue
         
         audit_log("logs_viewed", user=user.get('sub'), resource=f"{service}:{level}")
+        
+        # Sort logs by timestamp (most recent first)
+        # Journalctl returns oldest first, so reverse for WebUI display
+        logs.reverse()
+        
         return JSONResponse({"logs": logs})
         
     except Exception as e:
