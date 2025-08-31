@@ -301,6 +301,8 @@ async def setup_config(request: Request):
                 ssh_config = config_data['ssh']
                 hostname = ssh_config.get('hostname', '').strip()
                 username = ssh_config.get('username', 'admin').strip()
+                password = ssh_config.get('password', '').strip()
+                key_path = ssh_config.get('key_path', '').strip()
                 
                 # Determine if hostname is IP or DNS name
                 import socket
@@ -329,9 +331,66 @@ async def setup_config(request: Request):
                 logger.info(f"Created devices.csv with device: {hostname}")
                 audit_log("devices_csv_created", user="setup", resource=hostname)
                 
+                # Create otto.env file with SSH credentials if not exists
+                otto_env_path = Path('/etc/otto-bgp/otto.env')
+                env_lines = []
+                
+                # Read existing file if it exists
+                if otto_env_path.exists():
+                    with open(otto_env_path, 'r') as f:
+                        env_lines = f.readlines()
+                
+                # Update or add SSH settings
+                ssh_settings = {}
+                if username:
+                    ssh_settings['SSH_USERNAME'] = username
+                if password:
+                    ssh_settings['SSH_PASSWORD'] = password
+                elif key_path:
+                    ssh_settings['SSH_KEY_PATH'] = key_path
+                else:
+                    # Default to common SSH key location
+                    ssh_settings['SSH_KEY_PATH'] = '/home/otto-bgp/.ssh/id_rsa'
+                
+                # Update env_lines with new settings
+                updated_keys = set()
+                new_lines = []
+                for line in env_lines:
+                    if '=' in line:
+                        key = line.split('=')[0].strip()
+                        if key in ssh_settings:
+                            new_lines.append(f"{key}={ssh_settings[key]}\n")
+                            updated_keys.add(key)
+                        else:
+                            new_lines.append(line)
+                    else:
+                        new_lines.append(line)
+                
+                # Add any new settings that weren't in the file
+                for key, value in ssh_settings.items():
+                    if key not in updated_keys:
+                        new_lines.append(f"{key}={value}\n")
+                
+                # Add other important settings if not present
+                if not any('OTTO_BGP_CONFIG_DIR' in line for line in new_lines):
+                    new_lines.append("OTTO_BGP_CONFIG_DIR=/etc/otto-bgp\n")
+                if not any('OTTO_BGP_DATA_DIR' in line for line in new_lines):
+                    new_lines.append("OTTO_BGP_DATA_DIR=/var/lib/otto-bgp\n")
+                
+                # Write otto.env atomically
+                with tempfile.NamedTemporaryFile('w', dir=str(otto_env_path.parent), delete=False) as tmp:
+                    tmp.writelines(new_lines)
+                    tmp_path = tmp.name
+                
+                os.replace(tmp_path, otto_env_path)
+                os.chmod(otto_env_path, 0o600)
+                
+                logger.info("Created/updated otto.env with SSH settings")
+                audit_log("otto_env_created", user="setup")
+                
             except Exception as e:
-                logger.warning(f"Failed to create devices.csv: {str(e)}")
-                # Don't fail setup if devices.csv creation fails
+                logger.warning(f"Failed to create devices.csv or otto.env: {str(e)}")
+                # Don't fail setup if file creation fails
         
         audit_log("initial_config_created", user="setup")
         return JSONResponse({'success': True})
