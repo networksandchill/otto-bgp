@@ -903,6 +903,7 @@ EOF
             log_warn "Failed to install WebUI systemd service (optional)"
             return 0
         }
+        sudo chmod 644 /etc/systemd/system/otto-bgp-webui-adapter.service
         log_success "WebUI systemd service created"
     else
         log_warn "Failed to create WebUI systemd service file"
