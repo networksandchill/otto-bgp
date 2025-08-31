@@ -7,6 +7,7 @@ import type {
 
 class ApiClient {
   private client: AxiosInstance
+  private refreshPromise: Promise<void> | null = null
 
   constructor() {
     this.client = axios.create({
@@ -33,8 +34,15 @@ class ApiClient {
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true
           
+          // Use singleton refresh promise to prevent concurrent refreshes
+          if (!this.refreshPromise) {
+            this.refreshPromise = this.refreshToken().finally(() => {
+              this.refreshPromise = null
+            })
+          }
+          
           try {
-            await this.refreshToken()
+            await this.refreshPromise
             // Update Authorization header with new token before retry
             const newToken = this.getAccessToken()
             if (newToken) {

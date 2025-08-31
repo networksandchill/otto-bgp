@@ -37,7 +37,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const { data: sessionData, isLoading, error: sessionError } = useQuery({
     queryKey: ['session'],
     queryFn: () => apiClient.getSession(),
-    retry: false,
+    retry: (failureCount, error: any) => {
+      // Retry once for 401 errors (token might need refresh)
+      if (error?.response?.status === 401 && failureCount < 1) {
+        return true
+      }
+      return false
+    },
     enabled: !user && !!sessionStorage.getItem('access_token'),
   })
 
@@ -49,7 +55,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         role: sessionData.role,
       })
       setError(null)
-    } else if (sessionError) {
+    } else if (sessionError && sessionError.response?.status !== 401) {
+      // Only clear tokens for non-401 errors
+      // 401s are handled by the axios interceptor's token refresh
       setUser(null)
       apiClient.clearTokens()
     }
