@@ -662,13 +662,22 @@ async def get_systemd_units(names: str = "", user: dict = Depends(require_role('
 @app.post("/api/systemd/control")
 async def control_systemd_service(request: Request, user: dict = Depends(require_role('admin'))):
     """Control systemd services (if enabled)"""
-    if os.environ.get('OTTO_WEBUI_ENABLE_SERVICE_CONTROL') != 'true':
-        return JSONResponse({"error": "Service control disabled"}, status_code=403)
+    # Log environment variable status
+    service_control_enabled = os.environ.get('OTTO_WEBUI_ENABLE_SERVICE_CONTROL')
+    print(f"[DEBUG] OTTO_WEBUI_ENABLE_SERVICE_CONTROL = {service_control_enabled}")
+    
+    if service_control_enabled != 'true':
+        return JSONResponse({
+            "success": False,
+            "message": f"Service control disabled. Environment variable is: {service_control_enabled}"
+        }, status_code=403)
     
     try:
         data = await request.json()
         action = data.get('action')
         service = data.get('service')
+        
+        print(f"[DEBUG] Service control request: action={action}, service={service}")
         
         # Validate inputs
         allowed_actions = ['start', 'stop', 'restart', 'reload']
@@ -689,10 +698,22 @@ async def control_systemd_service(request: Request, user: dict = Depends(require
         
         # Execute via sudo (requires sudoers configuration)
         try:
+            # Get current user for debugging
+            import pwd
+            current_user = pwd.getpwuid(os.getuid()).pw_name
+            print(f"[DEBUG] Running as user: {current_user}")
+            
+            cmd = ['sudo', '-n', 'systemctl', action, service]
+            print(f"[DEBUG] Executing command: {' '.join(cmd)}")
+            
             result = subprocess.run(
-                ['sudo', '-n', 'systemctl', action, service],  # -n for non-interactive
+                cmd,
                 capture_output=True, text=True, timeout=30
             )
+            
+            print(f"[DEBUG] Command exit code: {result.returncode}")
+            print(f"[DEBUG] Command stdout: {result.stdout}")
+            print(f"[DEBUG] Command stderr: {result.stderr}")
             
             if result.returncode == 0:
                 audit_log(f"service_{action}", user=user.get('sub'), resource=service)
@@ -729,6 +750,50 @@ async def control_systemd_service(request: Request, user: dict = Depends(require
             
     except Exception as e:
         return JSONResponse({"error": f"Service control failed: {str(e)}"}, status_code=500)
+
+# Service control test endpoint
+@app.get("/api/systemd/test-permissions")
+async def test_service_permissions(user: dict = Depends(require_role('admin'))):
+    """Test service control permissions and environment"""
+    import pwd
+    import grp
+    
+    try:
+        current_user = pwd.getpwuid(os.getuid()).pw_name
+        current_groups = [grp.getgrgid(g).gr_name for g in os.getgroups()]
+        
+        # Test sudo access
+        sudo_test = subprocess.run(
+            ['sudo', '-n', 'systemctl', 'status', 'otto-bgp.service'],
+            capture_output=True, text=True, timeout=5
+        )
+        
+        # Check sudoers file
+        sudoers_path = Path("/etc/sudoers.d/otto-bgp-webui")
+        sudoers_exists = sudoers_path.exists()
+        
+        return JSONResponse({
+            "environment": {
+                "OTTO_WEBUI_ENABLE_SERVICE_CONTROL": os.environ.get('OTTO_WEBUI_ENABLE_SERVICE_CONTROL'),
+                "user": current_user,
+                "groups": current_groups,
+                "uid": os.getuid(),
+                "gid": os.getgid()
+            },
+            "sudo_test": {
+                "success": sudo_test.returncode == 0,
+                "exit_code": sudo_test.returncode,
+                "stderr": sudo_test.stderr[:200] if sudo_test.stderr else None
+            },
+            "sudoers_file": {
+                "exists": sudoers_exists,
+                "path": str(sudoers_path)
+            }
+        })
+    except Exception as e:
+        return JSONResponse({
+            "error": f"Test failed: {str(e)}"
+        }, status_code=500)
 
 # RPKI Status endpoint
 @app.get("/api/rpki/status")
