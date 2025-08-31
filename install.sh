@@ -864,6 +864,7 @@ EOF
 
 create_webui_systemd_service() {
     log_info "Creating WebUI systemd service..."
+    log_info "SERVICE_USER=$SERVICE_USER, LIB_DIR=$LIB_DIR, VENV_DIR=$VENV_DIR, CONFIG_DIR=$CONFIG_DIR"
     
     cat > /tmp/otto-bgp-webui-adapter.service << EOF
 [Unit]
@@ -896,12 +897,17 @@ SyslogIdentifier=otto-bgp-webui
 WantedBy=multi-user.target
 EOF
     
-    sudo mv /tmp/otto-bgp-webui-adapter.service /etc/systemd/system/ || {
-        log_warn "Failed to install WebUI systemd service (optional)"
+    if [[ -f /tmp/otto-bgp-webui-adapter.service ]]; then
+        log_info "Service file created successfully, moving to systemd..."
+        sudo mv /tmp/otto-bgp-webui-adapter.service /etc/systemd/system/ || {
+            log_warn "Failed to install WebUI systemd service (optional)"
+            return 0
+        }
+        log_success "WebUI systemd service created"
+    else
+        log_warn "Failed to create WebUI systemd service file"
         return 0
-    }
-    
-    log_success "WebUI systemd service created"
+    fi
 }
 
 enable_webui_service() {
