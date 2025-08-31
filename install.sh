@@ -867,6 +867,7 @@ otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-update.se
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-rpki-update.timer
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-rpki-update.timer
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-update.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
 EOF
     
     # Validate sudoers syntax before installing

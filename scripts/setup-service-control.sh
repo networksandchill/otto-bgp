@@ -81,9 +81,6 @@ $SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl status otto-bgp-rpki-updat
 
 # Allow daemon-reload for applying changes
 $SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
-
-# Allow journalctl for reading logs
-$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/journalctl
 EOF
 
 # Validate sudoers syntax
