@@ -237,7 +237,7 @@ class ApiClient {
     role: string
     region: string
   }): Promise<{ success: boolean; device: any }> {
-    const response = await this.client.post('/devices/add', device)
+    const response = await this.client.post('/devices', device)
     return response.data
   }
 

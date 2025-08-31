@@ -596,13 +596,11 @@ async def list_devices(user: dict = Depends(get_current_user)):
         logger.error(f"Failed to read devices: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to read devices: {str(e)}")
 
-@app.post("/api/devices/add")
+@app.post("/api/devices")
 async def add_device(request: Request, user: dict = Depends(require_role('admin'))):
     """Add a new device to devices.csv"""
-    logger.info(f"POST /api/devices/add called with user: {user.get('sub', 'unknown')} (full user: {user})")
     try:
         device_data = await request.json()
-        logger.info(f"Device data received: {device_data}")
         
         # Validate required fields
         required_fields = ['address', 'hostname', 'username', 'role', 'region']
