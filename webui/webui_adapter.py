@@ -185,19 +185,28 @@ def _require_setup_token(request: Request) -> bool:
 
 def get_current_user(request: Request):
     """Extract user from JWT token"""
-    token = request.headers.get('Authorization')
-    if not token or not token.startswith('Bearer '):
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        try:
+            client = getattr(request, 'client', None)
+            client_ip = getattr(client, 'host', 'unknown') if client else 'unknown'
+        except Exception:
+            client_ip = 'unknown'
+        logger.info(f"401 auth missing/invalid Authorization header on {request.url.path} from {client_ip}")
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    token = token.replace('Bearer ', '')
+    token = auth_header.replace('Bearer ', '')
     try:
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         if payload.get('type') != 'access':
+            logger.info(f"401 invalid token type on {request.url.path} for sub={payload.get('sub')}")
             raise HTTPException(status_code=401, detail="Invalid token type")
         return payload
     except jwt_exceptions.ExpiredSignatureError:
+        logger.info(f"401 expired access token on {request.url.path}")
         raise HTTPException(status_code=401, detail="Token expired")
-    except jwt_exceptions.InvalidTokenError:
+    except jwt_exceptions.InvalidTokenError as e:
+        logger.info(f"401 invalid access token on {request.url.path}: {e}")
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
@@ -516,11 +525,13 @@ async def refresh_token(request: Request):
     """Refresh access token using refresh token cookie"""
     refresh_token = request.cookies.get("otto_refresh_token")
     if not refresh_token:
+        logger.info("401 refresh denied: no refresh cookie present")
         return JSONResponse({'error': 'No refresh token'}, status_code=401)
 
     try:
         payload = jwt.decode(refresh_token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         if payload.get('type') != 'refresh':
+            logger.info("401 refresh denied: wrong token type")
             return JSONResponse({'error': 'Invalid token type'}, status_code=401)
 
         # Create new tokens
@@ -537,12 +548,14 @@ async def refresh_token(request: Request):
             samesite="strict",
             max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
         )
-
+        logger.info(f"200 refresh ok: issued new tokens for user={token_data.get('sub')}")
         return response
 
     except jwt_exceptions.ExpiredSignatureError:
+        logger.info("401 refresh denied: refresh token expired")
         return JSONResponse({'error': 'Refresh token expired'}, status_code=401)
     except jwt_exceptions.InvalidTokenError:
+        logger.info("401 refresh denied: invalid refresh token")
         return JSONResponse({'error': 'Invalid refresh token'}, status_code=401)
 
 

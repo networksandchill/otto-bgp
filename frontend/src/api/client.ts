@@ -20,7 +20,14 @@ class ApiClient {
     this.client.interceptors.request.use((config) => {
       const token = this.getAccessToken()
       if (token) {
-        config.headers['Authorization'] = `Bearer ${token}`
+        // Axios v1 may use AxiosHeaders; support both shapes
+        const h: any = (config.headers ?? {}) as any
+        if (typeof h.set === 'function') {
+          h.set('Authorization', `Bearer ${token}`)
+          config.headers = h
+        } else {
+          (config.headers as any) = { ...(config.headers || {}), Authorization: `Bearer ${token}` }
+        }
       }
       return config
     })
@@ -30,8 +37,9 @@ class ApiClient {
       (response) => response,
       async (error) => {
         const originalRequest = error.config
-        
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        const reqUrl: string = (originalRequest?.url || '').toString()
+
+        if (error.response?.status === 401 && !originalRequest._retry && !reqUrl.includes('/auth/refresh')) {
           originalRequest._retry = true
           
           // Use singleton refresh promise to prevent concurrent refreshes
@@ -46,7 +54,13 @@ class ApiClient {
             // Update Authorization header with new token before retry
             const newToken = this.getAccessToken()
             if (newToken) {
-              originalRequest.headers['Authorization'] = `Bearer ${newToken}`
+              const hdrs: any = (originalRequest.headers ?? {}) as any
+              if (typeof hdrs.set === 'function') {
+                hdrs.set('Authorization', `Bearer ${newToken}`)
+                originalRequest.headers = hdrs
+              } else {
+                originalRequest.headers = { ...(originalRequest.headers || {}), Authorization: `Bearer ${newToken}` }
+              }
             }
             return this.client(originalRequest)
           } catch (refreshError) {
