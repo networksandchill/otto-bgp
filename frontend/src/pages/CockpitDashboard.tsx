@@ -210,10 +210,30 @@ const CockpitDashboard: React.FC = () => {
           severity: 'error',
         })
       }
-    } catch (error) {
+    } catch (error: any) {
+      // Extract meaningful error message from axios error
+      let errorMessage = `Failed to ${action} ${serviceName}`
+      
+      if (error.response?.data?.message) {
+        // Backend provided a specific error message
+        errorMessage = error.response.data.message
+      } else if (error.response?.data?.error) {
+        // Alternative error field
+        errorMessage = error.response.data.error
+      } else if (error.response?.status === 403) {
+        errorMessage = 'Permission denied. Sudo permissions may not be configured.'
+      } else if (error.response?.status === 404) {
+        errorMessage = `Service ${serviceName} not found`
+      } else if (error.response?.status === 500) {
+        errorMessage = `Service command failed. Check system logs for details.`
+      } else if (error.message) {
+        // Generic error message
+        errorMessage = error.message
+      }
+      
       setSnackbar({
         open: true,
-        message: `Error controlling service: ${error}`,
+        message: errorMessage,
         severity: 'error',
       })
     } finally {
