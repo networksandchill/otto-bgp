@@ -865,32 +865,36 @@ EOF
 create_webui_systemd_service() {
     log_info "Creating WebUI systemd service..."
     
-    # Copy and customize systemd service template
-    if [[ -f "$LIB_DIR/systemd/otto-bgp-webui-adapter.service" ]]; then
-        cp "$LIB_DIR/systemd/otto-bgp-webui-adapter.service" /tmp/otto-bgp-webui-adapter.service
-        
-        # Replace placeholders
-        sed -i "s|SERVICE_USER_PLACEHOLDER|$SERVICE_USER|g" /tmp/otto-bgp-webui-adapter.service
-        sed -i "s|LIB_DIR_PLACEHOLDER|$LIB_DIR|g" /tmp/otto-bgp-webui-adapter.service
-        sed -i "s|CONFIG_DIR_PLACEHOLDER|$CONFIG_DIR|g" /tmp/otto-bgp-webui-adapter.service
-        sed -i "s|VENV_DIR_PLACEHOLDER|$VENV_DIR|g" /tmp/otto-bgp-webui-adapter.service
-        
-        sudo mv /tmp/otto-bgp-webui-adapter.service /etc/systemd/system/ || {
-            log_warn "Failed to install WebUI systemd service (optional)"
-            return 0
-        }
-        sudo chmod 644 /etc/systemd/system/otto-bgp-webui-adapter.service
-        
-        # Fix SELinux context if SELinux is enabled
-        if command -v restorecon >/dev/null 2>&1; then
-            sudo restorecon /etc/systemd/system/otto-bgp-webui-adapter.service 2>/dev/null || true
-        fi
-        
-        log_success "WebUI systemd service created from template"
-    else
-        log_warn "WebUI systemd service template not found - WebUI service will not be available"
-        return 0
-    fi
+    # Create service file directly using tee (same pattern as other services)
+    sudo tee /etc/systemd/system/otto-bgp-webui-adapter.service > /dev/null << EOF
+[Unit]
+Description=Otto BGP WebUI Adapter (Direct TLS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$LIB_DIR
+Environment=PYTHONPATH=$LIB_DIR
+Environment=OTTO_WEBUI_ROOT=/usr/local/share/otto-bgp/webui
+EnvironmentFile=-$CONFIG_DIR/otto.env
+ExecStart=$VENV_DIR/bin/uvicorn webui_adapter:app --host 0.0.0.0 --port 8443 --ssl-certfile $CONFIG_DIR/tls/cert.pem --ssl-keyfile $CONFIG_DIR/tls/key.pem
+Restart=on-failure
+RestartSec=10
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otto-bgp-webui
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    log_success "WebUI systemd service created"
 }
 
 enable_webui_service() {
