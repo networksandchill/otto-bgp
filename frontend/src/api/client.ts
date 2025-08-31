@@ -1,0 +1,184 @@
+import axios, { AxiosInstance } from 'axios'
+import type {
+  LoginRequest, LoginResponse, SessionInfo, SetupState, SetupAdminRequest,
+  AppConfig, ConfigValidationResponse, DeploymentMatrix, SystemDResponse,
+  ServiceControlRequest, SMTPConfig
+} from '../types'
+
+class ApiClient {
+  private client: AxiosInstance
+  private csrfToken: string | null = null
+
+  constructor() {
+    this.client = axios.create({
+      baseURL: '/api',
+      timeout: 30000,
+      withCredentials: true, // Include cookies for refresh tokens
+    })
+
+    // Request interceptor to add CSRF token
+    this.client.interceptors.request.use((config) => {
+      if (this.csrfToken) {
+        config.headers['X-CSRF-Token'] = this.csrfToken
+      }
+      if (this.getAccessToken()) {
+        config.headers['Authorization'] = `Bearer ${this.getAccessToken()}`
+      }
+      return config
+    })
+
+    // Response interceptor for token refresh
+    this.client.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        const originalRequest = error.config
+        
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true
+          
+          try {
+            await this.refreshToken()
+            return this.client(originalRequest)
+          } catch (refreshError) {
+            // Refresh failed, redirect to login
+            this.clearTokens()
+            window.location.href = '/login'
+            return Promise.reject(refreshError)
+          }
+        }
+        
+        return Promise.reject(error)
+      }
+    )
+  }
+
+  // Token management
+  private setAccessToken(token: string) {
+    sessionStorage.setItem('access_token', token)
+  }
+
+  private getAccessToken(): string | null {
+    return sessionStorage.getItem('access_token')
+  }
+
+  private setCsrfToken(token: string) {
+    this.csrfToken = token
+  }
+
+  public clearTokens() {
+    sessionStorage.removeItem('access_token')
+    this.csrfToken = null
+  }
+
+  // Setup endpoints
+  async getSetupState(): Promise<SetupState> {
+    const response = await this.client.get<SetupState>('/setup/state')
+    return response.data
+  }
+
+  async setupAdmin(data: SetupAdminRequest, setupToken: string): Promise<void> {
+    await this.client.post('/setup/admin', data, {
+      headers: { 'X-Setup-Token': setupToken }
+    })
+  }
+
+  async setupConfig(config: AppConfig, setupToken: string): Promise<void> {
+    await this.client.post('/setup/config', config, {
+      headers: { 'X-Setup-Token': setupToken }
+    })
+  }
+
+  async completeSetup(setupToken: string): Promise<void> {
+    await this.client.post('/setup/complete', {}, {
+      headers: { 'X-Setup-Token': setupToken }
+    })
+  }
+
+  // Authentication endpoints
+  async login(credentials: LoginRequest): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/login', credentials)
+    const { csrf_token } = response.data
+    
+    // Store tokens
+    this.setAccessToken(csrf_token)
+    this.setCsrfToken(csrf_token)
+    
+    return response.data
+  }
+
+  async getSession(): Promise<SessionInfo> {
+    const response = await this.client.get<SessionInfo>('/auth/session')
+    return response.data
+  }
+
+  async refreshToken(): Promise<void> {
+    const response = await this.client.post<{ csrf_token: string }>('/auth/refresh')
+    const { csrf_token } = response.data
+    
+    this.setAccessToken(csrf_token)
+    this.setCsrfToken(csrf_token)
+  }
+
+  async logout(): Promise<void> {
+    try {
+      await this.client.post('/auth/logout')
+    } finally {
+      this.clearTokens()
+    }
+  }
+
+  // Configuration endpoints
+  async getConfig(): Promise<AppConfig> {
+    const response = await this.client.get<AppConfig>('/config')
+    return response.data
+  }
+
+  async updateConfig(config: AppConfig): Promise<{ success: boolean; backup?: string; message?: string }> {
+    const response = await this.client.put('/config', config)
+    return response.data
+  }
+
+  async validateConfig(config: AppConfig): Promise<ConfigValidationResponse> {
+    const response = await this.client.post<ConfigValidationResponse>('/config/validate', {
+      config_json: config
+    })
+    return response.data
+  }
+
+  async testSmtp(smtpConfig: SMTPConfig): Promise<{ success: boolean; message?: string }> {
+    const response = await this.client.post('/config/test-smtp', smtpConfig)
+    return response.data
+  }
+
+  // Reports endpoints
+  async getDeploymentMatrix(): Promise<DeploymentMatrix> {
+    const response = await this.client.get<DeploymentMatrix>('/reports/matrix')
+    return response.data
+  }
+
+  async getDiscoveryMappings(): Promise<DeploymentMatrix> {
+    const response = await this.client.get<DeploymentMatrix>('/reports/discovery')
+    return response.data
+  }
+
+  // SystemD endpoints
+  async getSystemdUnits(unitNames: string[]): Promise<SystemDResponse> {
+    const names = unitNames.join(',')
+    const response = await this.client.get<SystemDResponse>(`/systemd/units?names=${names}`)
+    return response.data
+  }
+
+  async controlService(request: ServiceControlRequest): Promise<{ success: boolean; message?: string }> {
+    const response = await this.client.post('/systemd/control', request)
+    return response.data
+  }
+
+  // Health check
+  async healthCheck(): Promise<{ status: string; timestamp: string }> {
+    const response = await this.client.get('/healthz')
+    return response.data
+  }
+}
+
+export const apiClient = new ApiClient()
+export default apiClient

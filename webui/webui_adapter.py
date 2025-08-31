@@ -1,0 +1,707 @@
+#!/usr/bin/env python3
+"""
+Otto BGP WebUI Adapter
+Production FastAPI backend with authentication, setup mode, and API endpoints.
+"""
+
+import os
+import json
+import csv
+import subprocess
+import logging
+import tempfile
+import shutil
+import time
+import smtplib
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+from datetime import datetime, timedelta
+from logging.handlers import TimedRotatingFileHandler
+
+import jwt
+from fastapi import FastAPI, Request, Depends, HTTPException, status
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.security import HTTPBearer
+from fastapi.middleware.cors import CORSMiddleware
+from passlib.hash import bcrypt
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# Import Otto BGP modules
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+
+try:
+    from otto_bgp.utils.config import ConfigManager
+    from otto_bgp.reports.matrix import DeploymentMatrix
+    from otto_bgp.appliers.exit_codes import OttoExitCodes
+except ImportError:
+    # Graceful fallback if modules not available
+    ConfigManager = None
+    DeploymentMatrix = None
+    OttoExitCodes = None
+
+# Configuration paths
+USERS_PATH = Path('/etc/otto-bgp/users.json')
+CONFIG_PATH = Path('/etc/otto-bgp/config.json')
+SETUP_TOKEN_PATH = Path('/etc/otto-bgp/.setup_token')
+JWT_SECRET_PATH = Path('/etc/otto-bgp/.jwt_secret')
+WEBUI_ROOT = Path(os.environ.get('OTTO_WEBUI_ROOT', '/usr/local/share/otto-bgp/webui'))
+
+# JWT Configuration
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Otto BGP WebUI",
+    description="Web interface for Otto BGP management",
+    version="0.3.2",
+    docs_url=None,  # Disable auto docs in production
+    redoc_url=None
+)
+
+# Security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+# Setup audit logging
+def setup_audit_logging():
+    audit_logger = logging.getLogger("otto.audit")
+    audit_logger.setLevel(logging.INFO)
+    
+    # Create logs directory
+    log_dir = Path("/var/lib/otto-bgp/logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    handler = TimedRotatingFileHandler(
+        log_dir / "audit.log", when="midnight", interval=1, backupCount=90
+    )
+    
+    class JSONFormatter(logging.Formatter):
+        def format(self, record):
+            return json.dumps({
+                "timestamp": datetime.utcnow().isoformat(),
+                "user": getattr(record, 'user', 'system'),
+                "action": record.msg,
+                "resource": getattr(record, 'resource', None),
+                "result": getattr(record, 'result', 'success')
+            })
+    
+    handler.setFormatter(JSONFormatter())
+    audit_logger.addHandler(handler)
+    return audit_logger
+
+audit_logger = setup_audit_logging()
+
+def audit_log(action: str, user: str = None, **kwargs):
+    audit_logger.info(action, extra={'user': user, **kwargs})
+
+# JWT utilities
+def get_jwt_secret() -> str:
+    """Load JWT secret from file"""
+    try:
+        if JWT_SECRET_PATH.exists():
+            return JWT_SECRET_PATH.read_text().strip()
+    except Exception:
+        pass
+    # Fallback for development
+    return "dev-secret-change-in-production"
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """Create JWT access token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    to_encode.update({"exp": expire, "type": "access"})
+    return jwt.encode(to_encode, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+
+def create_refresh_token(data: dict):
+    """Create JWT refresh token"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "type": "refresh"})
+    return jwt.encode(to_encode, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+
+# Setup mode utilities
+def needs_setup() -> dict:
+    """Check if setup is required"""
+    reasons = []
+    if not USERS_PATH.exists():
+        reasons.append('missing_users')
+    if not CONFIG_PATH.exists():
+        reasons.append('missing_config')
+    return {'needs_setup': bool(reasons), 'reasons': reasons}
+
+def _require_setup_token(request: Request) -> bool:
+    """Validate setup token from request headers"""
+    token = request.headers.get('X-Setup-Token')
+    if not token or not SETUP_TOKEN_PATH.exists():
+        return False
+    try:
+        return token.strip() == SETUP_TOKEN_PATH.read_text().strip()
+    except Exception:
+        return False
+
+# Authentication utilities
+security = HTTPBearer(auto_error=False)
+
+def get_current_user(request: Request):
+    """Extract user from JWT token"""
+    token = request.headers.get('Authorization')
+    if not token or not token.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    token = token.replace('Bearer ', '')
+    try:
+        payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
+        if payload.get('type') != 'access':
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def require_role(required_role: str):
+    """Dependency to require specific role"""
+    def _require_role(user: dict = Depends(get_current_user)):
+        if user.get('role') != required_role and required_role != 'read_only':
+            if user.get('role') != 'admin':
+                raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return user
+    return _require_role
+
+# Setup mode gating middleware
+@app.middleware('http')
+async def setup_gate(request: Request, call_next):
+    """Gate all non-setup endpoints during setup mode"""
+    path = request.url.path
+    
+    # Allow setup endpoints, health check, and static files during setup
+    if (path.startswith('/api/setup') or 
+        path.startswith('/assets') or 
+        path.startswith('/healthz') or
+        path == '/' or 
+        path == '/setup'):
+        return await call_next(request)
+    
+    # Check if setup is needed
+    state = needs_setup()
+    if state['needs_setup']:
+        return JSONResponse({'error': 'setup_required'}, status_code=403)
+    
+    return await call_next(request)
+
+# Static file serving
+if WEBUI_ROOT.exists():
+    app.mount("/assets", StaticFiles(directory=WEBUI_ROOT / "assets"), name="assets")
+
+@app.get("/")
+async def serve_index():
+    """Serve main SPA index.html"""
+    index_path = WEBUI_ROOT / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return HTMLResponse("<h1>Otto BGP WebUI</h1><p>Frontend assets not found</p>")
+
+# Health endpoint
+@app.get("/healthz")
+async def healthz():
+    """Health check endpoint"""
+    return JSONResponse({"status": "ok", "timestamp": datetime.utcnow().isoformat()})
+
+# Setup endpoints
+@app.get('/api/setup/state')
+async def get_setup_state():
+    """Get setup state"""
+    state = needs_setup()
+    hostname = os.uname().nodename
+    return JSONResponse({**state, 'hostname': hostname})
+
+@app.post('/api/setup/admin')
+async def setup_admin(request: Request):
+    """Create first admin user"""
+    if not _require_setup_token(request):
+        return JSONResponse({'error': 'invalid_setup_token'}, status_code=403)
+    
+    try:
+        data = await request.json()
+        user = {
+            'username': data.get('username'),
+            'email': data.get('email'),
+            'password_hash': bcrypt.hash(data.get('password')),
+            'role': 'admin',
+            'created_at': datetime.utcnow().isoformat()
+        }
+        
+        # Create users file
+        USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(USERS_PATH, 'w') as f:
+            json.dump({'users': [user]}, f, indent=2)
+        os.chmod(USERS_PATH, 0o600)
+        
+        audit_log("admin_user_created", user="setup", resource=data.get('username'))
+        return JSONResponse({'success': True})
+        
+    except Exception as e:
+        return JSONResponse({'error': f'Setup failed: {str(e)}'}, status_code=500)
+
+@app.post('/api/setup/config')
+async def setup_config(request: Request):
+    """Set initial configuration"""
+    if not _require_setup_token(request):
+        return JSONResponse({'error': 'invalid_setup_token'}, status_code=403)
+    
+    try:
+        config_data = await request.json()
+        
+        # Create config file atomically
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile('w', dir=str(CONFIG_PATH.parent), delete=False) as tmp:
+            json.dump(config_data, tmp, indent=2)
+            tmp_path = tmp.name
+        
+        if CONFIG_PATH.exists():
+            shutil.copystat(CONFIG_PATH, tmp_path)
+        os.replace(tmp_path, CONFIG_PATH)
+        os.chmod(CONFIG_PATH, 0o600)
+        
+        audit_log("initial_config_created", user="setup")
+        return JSONResponse({'success': True})
+        
+    except Exception as e:
+        return JSONResponse({'error': f'Config setup failed: {str(e)}'}, status_code=500)
+
+@app.post('/api/setup/complete')
+async def setup_complete(request: Request):
+    """Complete setup and remove token"""
+    if not _require_setup_token(request):
+        return JSONResponse({'error': 'invalid_setup_token'}, status_code=403)
+    
+    try:
+        if SETUP_TOKEN_PATH.exists():
+            SETUP_TOKEN_PATH.unlink()
+        audit_log("setup_completed", user="setup")
+        return JSONResponse({'success': True})
+    except Exception:
+        return JSONResponse({'success': True})  # Don't fail if token removal fails
+
+# Authentication endpoints
+@app.post("/api/auth/login")
+async def login(request: Request):
+    """User login with JWT tokens"""
+    try:
+        data = await request.json()
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return JSONResponse({'error': 'Username and password required'}, status_code=400)
+        
+        # Load users
+        if not USERS_PATH.exists():
+            return JSONResponse({'error': 'No users configured'}, status_code=500)
+        
+        with open(USERS_PATH) as f:
+            users_data = json.load(f)
+        
+        # Find user
+        user = None
+        for u in users_data.get('users', []):
+            if u.get('username') == username:
+                user = u
+                break
+        
+        if not user or not bcrypt.verify(password, user.get('password_hash', '')):
+            audit_log("login_failed", user=username, result="failed")
+            return JSONResponse({'error': 'Invalid credentials'}, status_code=401)
+        
+        # Create tokens
+        token_data = {'sub': username, 'role': user.get('role', 'read_only')}
+        access_token = create_access_token(token_data)
+        refresh_token = create_refresh_token(token_data)
+        
+        # Create response with refresh token cookie
+        response = JSONResponse({
+            'user': username,
+            'role': user.get('role', 'read_only'),
+            'csrf_token': access_token  # Use access token as CSRF token
+        })
+        
+        response.set_cookie(
+            key="otto_refresh_token",
+            value=refresh_token,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+        )
+        
+        audit_log("login_successful", user=username)
+        return response
+        
+    except Exception as e:
+        return JSONResponse({'error': f'Login failed: {str(e)}'}, status_code=500)
+
+@app.get("/api/auth/session")
+async def get_session(user: dict = Depends(get_current_user)):
+    """Get current session info"""
+    expires_at = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    return JSONResponse({
+        'user': user.get('sub'),
+        'role': user.get('role'),
+        'expires_at': expires_at.isoformat()
+    })
+
+@app.post("/api/auth/refresh")
+async def refresh_token(request: Request):
+    """Refresh access token using refresh token cookie"""
+    refresh_token = request.cookies.get("otto_refresh_token")
+    if not refresh_token:
+        return JSONResponse({'error': 'No refresh token'}, status_code=401)
+    
+    try:
+        payload = jwt.decode(refresh_token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
+        if payload.get('type') != 'refresh':
+            return JSONResponse({'error': 'Invalid token type'}, status_code=401)
+        
+        # Create new tokens
+        token_data = {'sub': payload.get('sub'), 'role': payload.get('role')}
+        new_access_token = create_access_token(token_data)
+        new_refresh_token = create_refresh_token(token_data)
+        
+        response = JSONResponse({'csrf_token': new_access_token})
+        response.set_cookie(
+            key="otto_refresh_token",
+            value=new_refresh_token,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+        )
+        
+        return response
+        
+    except jwt.ExpiredSignatureError:
+        return JSONResponse({'error': 'Refresh token expired'}, status_code=401)
+    except jwt.JWTError:
+        return JSONResponse({'error': 'Invalid refresh token'}, status_code=401)
+
+@app.post("/api/auth/logout")
+async def logout(user: dict = Depends(get_current_user)):
+    """Logout and clear refresh token"""
+    response = JSONResponse({'success': True})
+    response.set_cookie(
+        key="otto_refresh_token",
+        value="",
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=0  # Expire immediately
+    )
+    
+    audit_log("logout", user=user.get('sub'))
+    return response
+
+# Reports endpoints
+@app.get("/api/reports/matrix")
+async def get_deployment_matrix(user: dict = Depends(require_role('read_only'))):
+    """Get deployment matrix report"""
+    matrix_path = Path("/var/lib/otto-bgp/policies/reports/deployment-matrix.json")
+    if matrix_path.exists():
+        try:
+            with open(matrix_path) as f:
+                data = json.load(f)
+            audit_log("matrix_viewed", user=user.get('sub'))
+            return JSONResponse(data)
+        except Exception as e:
+            return JSONResponse({'error': f'Failed to load matrix: {str(e)}'}, status_code=500)
+    
+    return JSONResponse({'error': 'Matrix not found - run pipeline first'}, status_code=404)
+
+@app.get("/api/reports/discovery")
+async def get_discovery_mappings(user: dict = Depends(require_role('read_only'))):
+    """Get discovery mappings (uses deployment matrix)"""
+    matrix_path = Path("/var/lib/otto-bgp/policies/reports/deployment-matrix.json")
+    if matrix_path.exists():
+        try:
+            with open(matrix_path) as f:
+                data = json.load(f)
+            audit_log("discovery_viewed", user=user.get('sub'))
+            return JSONResponse(data)
+        except Exception as e:
+            return JSONResponse({'error': f'Failed to load discovery: {str(e)}'}, status_code=500)
+    
+    # Return empty structure as fallback
+    empty_discovery = {
+        "routers": {},
+        "as_distribution": {},
+        "bgp_groups": {},
+        "statistics": {},
+        "generated_at": datetime.utcnow().isoformat(),
+        "note": "No data available - run 'otto-bgp pipeline' first"
+    }
+    return JSONResponse(empty_discovery)
+
+# Configuration utilities
+def redact_sensitive_fields(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Redact passwords and sensitive data before sending to client"""
+    config = config.copy()
+    
+    # Redact SSH password
+    if 'ssh' in config and 'password' in config['ssh']:
+        config['ssh']['password'] = "*****"
+    
+    # Redact SMTP password
+    if 'smtp' in config and 'password' in config['smtp']:
+        config['smtp']['password'] = "*****"
+    
+    return config
+
+def validate_smtp_config(smtp: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Validate SMTP configuration"""
+    issues = []
+    
+    if smtp.get('enabled'):
+        if not smtp.get('host'):
+            issues.append({"path": "smtp.host", "msg": "SMTP host required when enabled"})
+        
+        port = smtp.get('port', 587)
+        if port not in [25, 587, 465]:
+            issues.append({"path": "smtp.port", "msg": f"Invalid SMTP port {port}"})
+        
+        if smtp.get('use_tls') and port == 25:
+            issues.append({"path": "smtp.port", "msg": "Port 25 typically doesn't use TLS"})
+        
+        if not smtp.get('from_address'):
+            issues.append({"path": "smtp.from_address", "msg": "From address required"})
+        
+        to_addresses = smtp.get('to_addresses', [])
+        if not to_addresses:
+            issues.append({"path": "smtp.to_addresses", "msg": "At least one recipient required"})
+    
+    return issues
+
+# Configuration endpoints
+@app.get("/api/config")
+async def get_config(user: dict = Depends(require_role('read_only'))):
+    """Get current configuration (with sensitive fields redacted)"""
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH) as f:
+                config = json.load(f)
+            
+            # Redact sensitive fields for display
+            config = redact_sensitive_fields(config)
+            audit_log("config_viewed", user=user.get('sub'))
+            return JSONResponse(config)
+            
+        except Exception as e:
+            return JSONResponse({'error': f'Failed to load config: {str(e)}'}, status_code=500)
+    
+    return JSONResponse({'error': 'Config not found'}, status_code=404)
+
+@app.put("/api/config")
+async def update_config(request: Request, user: dict = Depends(require_role('admin'))):
+    """Update configuration with validation and atomic writes"""
+    try:
+        new_config = await request.json()
+    except Exception as e:
+        return JSONResponse({"error": f"Invalid JSON: {e}"}, status_code=400)
+    
+    # Load existing config to preserve passwords if not changed
+    existing_config = {}
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH) as f:
+                existing_config = json.load(f)
+        except Exception:
+            pass
+    
+    # Preserve existing passwords if new ones are "*****"
+    if 'ssh' in new_config and new_config['ssh'].get('password') == "*****":
+        if 'ssh' in existing_config and 'password' in existing_config['ssh']:
+            new_config['ssh']['password'] = existing_config['ssh']['password']
+    
+    if 'smtp' in new_config and new_config['smtp'].get('password') == "*****":
+        if 'smtp' in existing_config and 'password' in existing_config['smtp']:
+            new_config['smtp']['password'] = existing_config['smtp']['password']
+    
+    # Validate configuration
+    issues = []
+    
+    # Validate SMTP if present
+    if 'smtp' in new_config:
+        smtp_issues = validate_smtp_config(new_config['smtp'])
+        issues.extend(smtp_issues)
+    
+    # Validate paths exist
+    if 'ssh' in new_config and 'key_path' in new_config['ssh']:
+        key_path = Path(new_config['ssh']['key_path'])
+        if not key_path.exists():
+            issues.append({"path": "ssh.key_path", "msg": f"SSH key not found: {key_path}"})
+    
+    if issues:
+        return JSONResponse({"error": "Validation failed", "issues": issues}, status_code=400)
+    
+    # Create backup
+    backup_path = None
+    if CONFIG_PATH.exists():
+        backup_path = f"{CONFIG_PATH}.bak-{int(time.time())}"
+        shutil.copy2(CONFIG_PATH, backup_path)
+    
+    # Write atomically
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=CONFIG_PATH.parent, delete=False) as tmp:
+            json.dump(new_config, tmp, indent=2)
+            tmp_path = tmp.name
+        
+        # Preserve permissions
+        if CONFIG_PATH.exists():
+            shutil.copystat(CONFIG_PATH, tmp_path)
+        
+        # Atomic rename
+        os.rename(tmp_path, CONFIG_PATH)
+        
+        audit_log("config_updated", user=user.get('sub'))
+        return JSONResponse({
+            "success": True, 
+            "backup": backup_path,
+            "message": "Configuration updated successfully"
+        })
+        
+    except Exception as e:
+        # Clean up temp file on error
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
+        return JSONResponse({"error": f"Failed to save config: {str(e)}"}, status_code=500)
+
+@app.post("/api/config/test-smtp")
+async def test_smtp_connection(request: Request, user: dict = Depends(require_role('admin'))):
+    """Test SMTP configuration by sending a test email"""
+    try:
+        smtp_config = await request.json()
+        
+        # Validate first
+        issues = validate_smtp_config(smtp_config)
+        if issues:
+            return JSONResponse({"error": "Invalid SMTP config", "issues": issues}, status_code=400)
+        
+        # Create test message
+        msg = MIMEMultipart()
+        msg['From'] = smtp_config['from_address']
+        msg['To'] = smtp_config['to_addresses'][0]
+        msg['Subject'] = "Otto BGP SMTP Test"
+        
+        body = "This is a test email from Otto BGP WebUI to verify SMTP configuration."
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Connect and send
+        if smtp_config.get('use_tls'):
+            server = smtplib.SMTP(smtp_config['host'], smtp_config.get('port', 587))
+            server.starttls()
+        else:
+            server = smtplib.SMTP(smtp_config['host'], smtp_config.get('port', 25))
+        
+        if smtp_config.get('username') and smtp_config.get('password'):
+            server.login(smtp_config['username'], smtp_config['password'])
+        
+        server.send_message(msg)
+        server.quit()
+        
+        audit_log("smtp_test_success", user=user.get('sub'))
+        return JSONResponse({"success": True, "message": "Test email sent successfully"})
+        
+    except Exception as e:
+        audit_log("smtp_test_failed", user=user.get('sub'), result="failed")
+        return JSONResponse({"error": f"SMTP test failed: {str(e)}"}, status_code=500)
+
+# SystemD endpoints
+@app.get("/api/systemd/units")
+async def get_systemd_units(names: str = "", user: dict = Depends(require_role('read_only'))):
+    """Get systemd unit status"""
+    units = [u.strip() for u in names.split(',') if u.strip()] if names else []
+    results = []
+    
+    for unit in units:
+        try:
+            result = subprocess.run(
+                ['systemctl', 'show', '-p', 'ActiveState,SubState,Description', unit],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            # Parse systemctl output
+            unit_info = {"name": unit}
+            for line in result.stdout.strip().split('\n'):
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    unit_info[key.lower()] = value
+            
+            results.append(unit_info)
+        except Exception as e:
+            results.append({"name": unit, "error": str(e)})
+    
+    return JSONResponse({"units": results})
+
+# Service control endpoints (optional, enabled by environment variable)
+@app.post("/api/systemd/control")
+async def control_systemd_service(request: Request, user: dict = Depends(require_role('admin'))):
+    """Control systemd services (if enabled)"""
+    if os.environ.get('OTTO_WEBUI_ENABLE_SERVICE_CONTROL') != 'true':
+        return JSONResponse({"error": "Service control disabled"}, status_code=403)
+    
+    try:
+        data = await request.json()
+        action = data.get('action')
+        service = data.get('service')
+        
+        # Validate inputs
+        allowed_actions = ['start', 'stop', 'restart', 'reload']
+        allowed_services = [
+            'otto-bgp.service',
+            'otto-bgp-autonomous.service', 
+            'otto-bgp.timer'
+        ]
+        
+        if action not in allowed_actions:
+            return JSONResponse({"error": "Invalid action"}, status_code=400)
+        
+        if service not in allowed_services:
+            return JSONResponse({"error": "Invalid service"}, status_code=400)
+        
+        # Execute via sudo (requires sudoers configuration)
+        result = subprocess.run(
+            ['sudo', 'systemctl', action, service],
+            capture_output=True, text=True, timeout=30
+        )
+        
+        if result.returncode == 0:
+            audit_log(f"service_{action}", user=user.get('sub'), resource=service)
+            return JSONResponse({"success": True, "message": f"Service {action} completed"})
+        else:
+            return JSONResponse({
+                "error": f"Service {action} failed", 
+                "details": result.stderr
+            }, status_code=500)
+            
+    except Exception as e:
+        return JSONResponse({"error": f"Service control failed: {str(e)}"}, status_code=500)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8443)
