@@ -97,11 +97,11 @@ class ApiClient {
   // Authentication endpoints
   async login(credentials: LoginRequest): Promise<LoginResponse> {
     const response = await this.client.post<LoginResponse>('/auth/login', credentials)
-    const { csrf_token } = response.data
+    const { access_token } = response.data
     
     // Store tokens
-    this.setAccessToken(csrf_token)
-    this.setCsrfToken(csrf_token)
+    this.setAccessToken(access_token)
+    this.setCsrfToken(access_token)
     
     return response.data
   }
@@ -112,11 +112,11 @@ class ApiClient {
   }
 
   async refreshToken(): Promise<void> {
-    const response = await this.client.post<{ csrf_token: string }>('/auth/refresh')
-    const { csrf_token } = response.data
+    const response = await this.client.post<{ access_token: string }>('/auth/refresh')
+    const { access_token } = response.data
     
-    this.setAccessToken(csrf_token)
-    this.setCsrfToken(csrf_token)
+    this.setAccessToken(access_token)
+    this.setCsrfToken(access_token)
   }
 
   async logout(): Promise<void> {

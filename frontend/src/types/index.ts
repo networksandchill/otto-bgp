@@ -21,7 +21,7 @@ export interface LoginRequest {
 export interface LoginResponse {
   user: string
   role: 'admin' | 'read_only'
-  csrf_token: string
+  access_token: string
 }
 
 export interface SessionInfo {
