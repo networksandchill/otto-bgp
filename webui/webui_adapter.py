@@ -53,6 +53,16 @@ WEBUI_ROOT = Path(os.environ.get('OTTO_WEBUI_ROOT', '/usr/local/share/otto-bgp/w
 SUDO_PATH = shutil.which('sudo') or '/usr/bin/sudo'
 SYSTEMCTL_PATH = shutil.which('systemctl') or '/usr/bin/systemctl'
 
+# App logger (journald picks up stdout/stderr via systemd service settings)
+logger = logging.getLogger("otto.webui")
+# Ensure we have at least one handler and DEBUG level for detailed diagnostics
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
+    _handler.setLevel(logging.DEBUG)
+    logger.addHandler(_handler)
+logger.setLevel(logging.DEBUG)
+
 # JWT Configuration
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
@@ -747,10 +757,15 @@ async def control_systemd_service(request: Request, user: dict = Depends(require
                 error_msg = result.stderr or result.stdout or f"Failed with exit code {result.returncode}"
                 
                 # Map common errors to appropriate responses
-                if "a password is required" in error_msg or "not in the sudoers file" in error_msg:
+                if (
+                    "a password is required" in error_msg
+                    or "not in the sudoers file" in error_msg
+                    or "is not allowed to execute" in error_msg
+                    or "Sorry, user" in error_msg and "is not allowed to execute" in error_msg
+                ):
                     return JSONResponse({
                         "success": False,
-                        "message": "Sudo permissions not configured. Please run: sudo /path/to/scripts/setup-service-control.sh"
+                        "message": "Sudo permissions not configured for systemctl. Ensure sudoers entries match the exact systemctl path and are NOPASSWD."
                     }, status_code=403)
                     
                 elif "no tty present and no askpass program specified" in error_msg:
@@ -771,6 +786,11 @@ async def control_systemd_service(request: Request, user: dict = Depends(require
                         "message": f"Service {service} is not loaded"
                     }, status_code=404)
                     
+                elif "operation not permitted" in error_msg.lower():
+                    return JSONResponse({
+                        "success": False,
+                        "message": "Permission denied executing systemctl. Systemd hardening (NoNewPrivileges/RestrictSUIDSGID) may be blocking sudo."
+                    }, status_code=403)
                 else:
                     # Include stderr in response for debugging
                     return JSONResponse({
