@@ -10,6 +10,8 @@ import Login from './pages/Login'
 import CockpitDashboard from './pages/CockpitDashboard'
 import Reports from './pages/Reports'
 import Configuration from './pages/Configuration'
+import RpkiStatus from './pages/RpkiStatus'
+import Logs from './pages/Logs'
 import SetupWizard from './pages/setup/SetupWizard'
 import apiClient from './api/client'
 
@@ -84,6 +86,16 @@ const AppContent: React.FC = () => {
         <Route path="reports" element={
           <RequireRole role="read_only">
             <Reports />
+          </RequireRole>
+        } />
+        <Route path="rpki" element={
+          <RequireRole role="read_only">
+            <RpkiStatus />
+          </RequireRole>
+        } />
+        <Route path="logs" element={
+          <RequireRole role="read_only">
+            <Logs />
           </RequireRole>
         } />
         <Route path="config" element={

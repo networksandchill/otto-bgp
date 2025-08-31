@@ -16,12 +16,10 @@ import {
 } from '@mui/material'
 import {
   Dashboard as DashboardIcon,
-  Assessment,
   Settings as SettingsIcon,
   NetworkCheck as NetworkIcon,
   Security as SecurityIcon,
   Storage as StorageIcon,
-  Terminal as TerminalIcon,
   ExitToApp,
 } from '@mui/icons-material'
 import { useAuth } from '../hooks/useAuth'
@@ -49,10 +47,8 @@ const CockpitLayout: React.FC = () => {
   const menuItems = [
     { path: '/dashboard', label: 'System', icon: <DashboardIcon /> },
     { path: '/reports', label: 'BGP Policies', icon: <NetworkIcon /> },
-    { path: '/routing', label: 'Routing', icon: <Assessment /> },
     { path: '/rpki', label: 'RPKI Status', icon: <SecurityIcon /> },
     { path: '/logs', label: 'Logs', icon: <StorageIcon /> },
-    { path: '/terminal', label: 'Terminal', icon: <TerminalIcon /> },
     { path: '/config', label: 'Configuration', icon: <SettingsIcon /> },
   ]
 
