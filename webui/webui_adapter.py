@@ -990,20 +990,35 @@ async def get_system_logs(
         cmd = ['journalctl', '-n', str(limit), '--no-pager', '-o', 'json']
         
         # Add service filter
-        if service != "all":
-            service_map = {
-                "otto-bgp": "otto-bgp.service",
-                "webui": "otto-bgp-webui-adapter.service",
-                "rpki": "otto-bgp-rpki-update.service"
-            }
-            if service in service_map:
-                cmd.extend(['-u', service_map[service]])
+        service_map = {
+            "otto-bgp": "otto-bgp.service",
+            "webui": "otto-bgp-webui-adapter.service",
+            "rpki": "otto-bgp-rpki-update.service"
+        }
+        
+        if service == "all":
+            # When "all" is selected, include all otto-bgp related services
+            for svc in service_map.values():
+                cmd.extend(['-u', svc])
+        elif service in service_map:
+            # Specific service selected
+            cmd.extend(['-u', service_map[service]])
         
         # Get logs
+        logger.debug(f"Executing journalctl command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode != 0:
+            logger.error(f"journalctl failed: {result.stderr}")
+            # Try without service filter if it failed
+            if service == "all":
+                cmd = ['journalctl', '-n', str(limit), '--no-pager', '-o', 'json', '-t', 'otto-bgp']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         
         if result.returncode == 0 and result.stdout:
             for line in result.stdout.strip().split('\n'):
+                if not line:
+                    continue
                 try:
                     entry = json.loads(line)
                     
