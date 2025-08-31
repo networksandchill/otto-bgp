@@ -208,6 +208,15 @@ create_directories() {
             sudo useradd -r -s /bin/false -d "$DATA_DIR" "$SERVICE_USER" 2>/dev/null || true
         fi
         
+        # Add service user to systemd-journal or adm group for log access
+        if getent group systemd-journal >/dev/null 2>&1; then
+            log_info "Adding $SERVICE_USER to systemd-journal group for log access"
+            sudo usermod -a -G systemd-journal "$SERVICE_USER" 2>/dev/null || true
+        elif getent group adm >/dev/null 2>&1; then
+            log_info "Adding $SERVICE_USER to adm group for log access"
+            sudo usermod -a -G adm "$SERVICE_USER" 2>/dev/null || true
+        fi
+        
         # Set ownership
         sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" 2>/dev/null || true
         sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" \

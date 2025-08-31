@@ -974,6 +974,78 @@ async def get_rpki_status(user: dict = Depends(require_role('read_only'))):
     except Exception as e:
         return JSONResponse({"error": f"Failed to get RPKI status: {str(e)}"}, status_code=500)
 
+# Test journalctl access
+@app.get("/api/logs/test")
+async def test_journalctl_access(user: dict = Depends(require_role('admin'))):
+    """Test journalctl access and permissions"""
+    import pwd
+    import grp
+    
+    tests = {}
+    
+    # Get current user info
+    current_user = pwd.getpwuid(os.getuid()).pw_name
+    current_groups = [grp.getgrgid(g).gr_name for g in os.getgroups()]
+    
+    tests['user_info'] = {
+        'user': current_user,
+        'uid': os.getuid(),
+        'groups': current_groups
+    }
+    
+    # Test basic journalctl
+    cmd1 = ['journalctl', '-n', '1', '--no-pager']
+    result1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=5)
+    tests['basic_journalctl'] = {
+        'command': ' '.join(cmd1),
+        'returncode': result1.returncode,
+        'stderr': result1.stderr[:200] if result1.stderr else None,
+        'stdout_length': len(result1.stdout) if result1.stdout else 0
+    }
+    
+    # Test with JSON output
+    cmd2 = ['journalctl', '-n', '1', '--no-pager', '-o', 'json']
+    result2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=5)
+    tests['json_journalctl'] = {
+        'command': ' '.join(cmd2),
+        'returncode': result2.returncode,
+        'stderr': result2.stderr[:200] if result2.stderr else None,
+        'stdout_sample': result2.stdout[:200] if result2.stdout else None
+    }
+    
+    # Test with service filter
+    cmd3 = ['journalctl', '-n', '1', '--no-pager', '-o', 'json', '-u', 'otto-bgp.service']
+    result3 = subprocess.run(cmd3, capture_output=True, text=True, timeout=5)
+    tests['service_filter'] = {
+        'command': ' '.join(cmd3),
+        'returncode': result3.returncode,
+        'stderr': result3.stderr[:200] if result3.stderr else None,
+        'has_output': bool(result3.stdout and result3.stdout.strip())
+    }
+    
+    # Test with sudo
+    cmd4 = [SUDO_PATH, '-n', 'journalctl', '-n', '1', '--no-pager', '-o', 'json', '-u', 'otto-bgp.service']
+    result4 = subprocess.run(cmd4, capture_output=True, text=True, timeout=5)
+    tests['sudo_journalctl'] = {
+        'command': ' '.join(cmd4),
+        'returncode': result4.returncode,
+        'stderr': result4.stderr[:200] if result4.stderr else None,
+        'has_output': bool(result4.stdout and result4.stdout.strip())
+    }
+    
+    # Check if systemd-journal group exists
+    try:
+        journal_group = grp.getgrnam('systemd-journal')
+        tests['systemd_journal_group'] = {
+            'exists': True,
+            'gid': journal_group.gr_gid,
+            'user_is_member': 'systemd-journal' in current_groups
+        }
+    except KeyError:
+        tests['systemd_journal_group'] = {'exists': False}
+    
+    return JSONResponse(tests)
+
 # Logs endpoint
 @app.get("/api/logs")
 async def get_system_logs(
@@ -1009,11 +1081,13 @@ async def get_system_logs(
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         
         if result.returncode != 0:
-            logger.error(f"journalctl failed: {result.stderr}")
-            # Try without service filter if it failed
-            if service == "all":
-                cmd = ['journalctl', '-n', str(limit), '--no-pager', '-o', 'json', '-t', 'otto-bgp']
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            logger.error(f"journalctl failed with code {result.returncode}: {result.stderr[:500]}")
+            
+            # Return empty logs with error message
+            return JSONResponse({
+                "logs": [],
+                "error": f"Failed to retrieve logs. The otto-bgp user may need to be added to the systemd-journal group. Error: {result.stderr[:200]}"
+            })
         
         if result.returncode == 0 and result.stdout:
             for line in result.stdout.strip().split('\n'):
