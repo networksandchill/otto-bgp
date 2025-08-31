@@ -576,6 +576,184 @@ async def logout(user: dict = Depends(get_current_user)):
     return response
 
 
+# Device Management endpoints
+@app.get("/api/devices")
+async def list_devices(user: dict = Depends(get_current_user)):
+    """List all devices from devices.csv"""
+    try:
+        devices_file = CONFIG_DIR / 'devices.csv'
+        devices = []
+        
+        if devices_file.exists():
+            import csv
+            with open(devices_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    devices.append(row)
+        
+        return {"devices": devices}
+    except Exception as e:
+        logger.error(f"Failed to read devices: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to read devices: {str(e)}")
+
+@app.post("/api/devices")
+async def add_device(request: Request, user: dict = Depends(require_role('admin'))):
+    """Add a new device to devices.csv"""
+    try:
+        device_data = await request.json()
+        
+        # Validate required fields
+        required_fields = ['address', 'hostname', 'username', 'role', 'region']
+        for field in required_fields:
+            if field not in device_data:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+        
+        devices_file = CONFIG_DIR / 'devices.csv'
+        
+        # Read existing devices
+        devices = []
+        fieldnames = required_fields
+        
+        if devices_file.exists():
+            import csv
+            with open(devices_file, 'r') as f:
+                reader = csv.DictReader(f)
+                fieldnames = reader.fieldnames or required_fields
+                for row in reader:
+                    # Check for duplicate address
+                    if row.get('address') == device_data['address']:
+                        raise HTTPException(status_code=400, detail=f"Device with address {device_data['address']} already exists")
+                    devices.append(row)
+        
+        # Add new device
+        new_device = {field: device_data.get(field, '') for field in fieldnames}
+        devices.append(new_device)
+        
+        # Write back atomically
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', dir=str(devices_file.parent), delete=False, newline='') as tmp:
+            writer = csv.DictWriter(tmp, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(devices)
+            tmp_path = tmp.name
+        
+        os.replace(tmp_path, devices_file)
+        os.chmod(devices_file, 0o644)
+        
+        audit_log("device_added", user=user['username'], resource=device_data['hostname'])
+        return {"success": True, "device": new_device}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add device: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to add device: {str(e)}")
+
+@app.put("/api/devices/{address}")
+async def update_device(address: str, request: Request, user: dict = Depends(require_role('admin'))):
+    """Update an existing device in devices.csv"""
+    try:
+        device_data = await request.json()
+        devices_file = CONFIG_DIR / 'devices.csv'
+        
+        if not devices_file.exists():
+            raise HTTPException(status_code=404, detail="No devices file found")
+        
+        # Read existing devices
+        devices = []
+        updated = False
+        
+        import csv
+        with open(devices_file, 'r') as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            
+            for row in reader:
+                if row.get('address') == address:
+                    # Update the device
+                    for key, value in device_data.items():
+                        if key in row:
+                            row[key] = value
+                    updated = True
+                    audit_log("device_updated", user=user['username'], resource=row.get('hostname', address))
+                devices.append(row)
+        
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Device with address {address} not found")
+        
+        # Write back atomically
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', dir=str(devices_file.parent), delete=False, newline='') as tmp:
+            writer = csv.DictWriter(tmp, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(devices)
+            tmp_path = tmp.name
+        
+        os.replace(tmp_path, devices_file)
+        os.chmod(devices_file, 0o644)
+        
+        return {"success": True}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update device: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update device: {str(e)}")
+
+@app.delete("/api/devices/{address}")
+async def delete_device(address: str, user: dict = Depends(require_role('admin'))):
+    """Delete a device from devices.csv"""
+    try:
+        devices_file = CONFIG_DIR / 'devices.csv'
+        
+        if not devices_file.exists():
+            raise HTTPException(status_code=404, detail="No devices file found")
+        
+        # Read existing devices
+        devices = []
+        deleted = False
+        deleted_hostname = None
+        
+        import csv
+        with open(devices_file, 'r') as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            
+            for row in reader:
+                if row.get('address') == address:
+                    deleted = True
+                    deleted_hostname = row.get('hostname', address)
+                else:
+                    devices.append(row)
+        
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Device with address {address} not found")
+        
+        # Write back atomically (or delete if empty)
+        if devices:
+            import tempfile
+            with tempfile.NamedTemporaryFile('w', dir=str(devices_file.parent), delete=False, newline='') as tmp:
+                writer = csv.DictWriter(tmp, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(devices)
+                tmp_path = tmp.name
+            
+            os.replace(tmp_path, devices_file)
+            os.chmod(devices_file, 0o644)
+        else:
+            # Remove file if no devices left
+            devices_file.unlink()
+        
+        audit_log("device_deleted", user=user['username'], resource=deleted_hostname)
+        return {"success": True}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete device: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete device: {str(e)}")
+
+
 # User Management API (Admin only)
 
 @app.get("/api/users")

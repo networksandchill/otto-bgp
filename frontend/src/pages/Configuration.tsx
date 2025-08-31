@@ -1,32 +1,96 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { 
   Container, Typography, Paper, Box, TextField, Button,
   Grid, Alert, Snackbar, FormControlLabel, Switch,
-  Divider, Chip
+  Divider, Chip, Tabs, Tab, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, IconButton, Dialog,
+  DialogTitle, DialogContent, DialogActions
 } from '@mui/material'
-import { Save as SaveIcon, Science as TestIcon } from '@mui/icons-material'
+import { 
+  Save as SaveIcon, Science as TestIcon, Add as AddIcon,
+  Edit as EditIcon, Delete as DeleteIcon, Router as RouterIcon,
+  Email as EmailIcon, Security as SecurityIcon
+} from '@mui/icons-material'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
 import type { AppConfig, SMTPConfig } from '../types'
+
+interface TabPanelProps {
+  children?: React.ReactNode
+  index: number
+  value: number
+}
+
+function TabPanel(props: TabPanelProps) {
+  const { children, value, index, ...other } = props
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      {...other}
+    >
+      {value === index && (
+        <Box sx={{ pt: 3 }}>
+          {children}
+        </Box>
+      )}
+    </div>
+  )
+}
+
+interface Device {
+  address: string
+  hostname: string
+  username: string
+  role: string
+  region: string
+}
 
 const Configuration: React.FC = () => {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [testResult, setTestResult] = useState<string | null>(null)
   const [showSuccess, setShowSuccess] = useState(false)
+  const [tabValue, setTabValue] = useState(0)
+  const [devices, setDevices] = useState<Device[]>([])
+  const [deviceDialog, setDeviceDialog] = useState<{
+    open: boolean
+    mode: 'add' | 'edit'
+    device?: Device
+  }>({ open: false, mode: 'add' })
+  const [deviceForm, setDeviceForm] = useState<Device>({
+    address: '',
+    hostname: '',
+    username: '',
+    role: '',
+    region: ''
+  })
   const queryClient = useQueryClient()
 
   // Query current config
-  const { data: configData, isLoading } = useQuery({
+  const { data: configData, isLoading: configLoading } = useQuery({
     queryKey: ['config'],
     queryFn: () => apiClient.getConfig(),
   })
 
+  // Query devices
+  const { data: devicesData, isLoading: devicesLoading, refetch: refetchDevices } = useQuery({
+    queryKey: ['devices'],
+    queryFn: () => apiClient.getDevices(),
+  })
+
   // Set config when data loads
-  React.useEffect(() => {
+  useEffect(() => {
     if (configData && !config) {
       setConfig(configData)
     }
   }, [configData, config])
+
+  // Set devices when data loads
+  useEffect(() => {
+    if (devicesData?.devices) {
+      setDevices(devicesData.devices)
+    }
+  }, [devicesData])
 
   // Save config mutation
   const saveConfigMutation = useMutation({
@@ -73,6 +137,61 @@ const Configuration: React.FC = () => {
     }
   }
 
+  const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue)
+  }
+
+  const handleOpenDeviceDialog = (mode: 'add' | 'edit', device?: Device) => {
+    setDeviceDialog({ open: true, mode, device })
+    setDeviceForm(device || {
+      address: '',
+      hostname: '',
+      username: '',
+      role: '',
+      region: ''
+    })
+  }
+
+  const handleCloseDeviceDialog = () => {
+    setDeviceDialog({ open: false, mode: 'add' })
+    setDeviceForm({
+      address: '',
+      hostname: '',
+      username: '',
+      role: '',
+      region: ''
+    })
+  }
+
+  const handleSaveDevice = async () => {
+    try {
+      if (deviceDialog.mode === 'add') {
+        await apiClient.addDevice(deviceForm)
+      } else if (deviceDialog.device) {
+        await apiClient.updateDevice(deviceDialog.device.address, deviceForm)
+      }
+      await refetchDevices()
+      handleCloseDeviceDialog()
+      setShowSuccess(true)
+    } catch (error: any) {
+      console.error('Failed to save device:', error)
+    }
+  }
+
+  const handleDeleteDevice = async (address: string) => {
+    if (confirm('Are you sure you want to delete this device?')) {
+      try {
+        await apiClient.deleteDevice(address)
+        await refetchDevices()
+        setShowSuccess(true)
+      } catch (error: any) {
+        console.error('Failed to delete device:', error)
+      }
+    }
+  }
+
+  const isLoading = configLoading || devicesLoading
+
   if (isLoading) {
     return (
       <Container maxWidth="lg" sx={{ mt: 4 }}>
@@ -95,13 +214,88 @@ const Configuration: React.FC = () => {
         System Configuration
       </Typography>
       <Typography variant="subtitle1" color="text.secondary" gutterBottom>
-        Manage SSH credentials, SMTP settings, and system parameters
+        Manage routers, SSH credentials, SMTP settings, and system parameters
       </Typography>
 
-      <Grid container spacing={3} sx={{ mt: 2 }}>
-        {/* SSH Configuration */}
-        <Grid item xs={12}>
-          <Paper sx={{ p: 3 }}>
+      <Paper sx={{ mt: 3 }}>
+        <Tabs value={tabValue} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}>
+          <Tab icon={<RouterIcon />} label="Devices" />
+          <Tab icon={<SecurityIcon />} label="SSH Settings" />
+          <Tab icon={<EmailIcon />} label="SMTP Settings" />
+        </Tabs>
+
+        <Box sx={{ p: 3 }}>
+          <TabPanel value={tabValue} index={0}>
+            {/* Devices Management */}
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+              <Typography variant="h5">
+                Router Devices
+              </Typography>
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                onClick={() => handleOpenDeviceDialog('add')}
+              >
+                Add Device
+              </Button>
+            </Box>
+
+            <TableContainer component={Paper} variant="outlined">
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Address</TableCell>
+                    <TableCell>Hostname</TableCell>
+                    <TableCell>Username</TableCell>
+                    <TableCell>Role</TableCell>
+                    <TableCell>Region</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {devices.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} align="center">
+                        <Typography color="text.secondary" sx={{ py: 2 }}>
+                          No devices configured. Add your first router device.
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    devices.map((device) => (
+                      <TableRow key={device.address}>
+                        <TableCell>{device.address}</TableCell>
+                        <TableCell>{device.hostname}</TableCell>
+                        <TableCell>{device.username}</TableCell>
+                        <TableCell>
+                          <Chip label={device.role} size="small" />
+                        </TableCell>
+                        <TableCell>{device.region}</TableCell>
+                        <TableCell align="right">
+                          <IconButton
+                            size="small"
+                            onClick={() => handleOpenDeviceDialog('edit', device)}
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                          <IconButton
+                            size="small"
+                            onClick={() => handleDeleteDevice(device.address)}
+                            color="error"
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </TabPanel>
+
+          <TabPanel value={tabValue} index={1}>
+            {/* SSH Configuration */}
             <Typography variant="h5" gutterBottom>
               SSH Configuration
             </Typography>
@@ -146,12 +340,10 @@ const Configuration: React.FC = () => {
                 />
               </Grid>
             </Grid>
-          </Paper>
-        </Grid>
+          </TabPanel>
 
-        {/* SMTP Configuration */}
-        <Grid item xs={12}>
-          <Paper sx={{ p: 3 }}>
+          <TabPanel value={tabValue} index={2}>
+            {/* SMTP Configuration */}
             <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
               <Typography variant="h5">
                 SMTP Configuration
@@ -266,24 +458,22 @@ const Configuration: React.FC = () => {
                 </Box>
               </>
             )}
-          </Paper>
-        </Grid>
+          </TabPanel>
+        </Box>
+      </Paper>
 
-        {/* Save Button */}
-        <Grid item xs={12}>
-          <Box display="flex" justifyContent="flex-end" gap={2}>
-            <Button
-              variant="contained"
-              size="large"
-              startIcon={<SaveIcon />}
-              onClick={handleSave}
-              disabled={saveConfigMutation.isPending}
-            >
-              {saveConfigMutation.isPending ? 'Saving...' : 'Save Configuration'}
-            </Button>
-          </Box>
-        </Grid>
-      </Grid>
+      {/* Save Button - Always visible */}
+      <Box display="flex" justifyContent="flex-end" gap={2} sx={{ mt: 3 }}>
+        <Button
+          variant="contained"
+          size="large"
+          startIcon={<SaveIcon />}
+          onClick={handleSave}
+          disabled={saveConfigMutation.isPending}
+        >
+          {saveConfigMutation.isPending ? 'Saving...' : 'Save Configuration'}
+        </Button>
+      </Box>
 
       {/* Error Display */}
       {saveConfigMutation.error && (
@@ -299,6 +489,60 @@ const Configuration: React.FC = () => {
         onClose={() => setShowSuccess(false)}
         message="Configuration saved successfully"
       />
+
+      {/* Device Add/Edit Dialog */}
+      <Dialog open={deviceDialog.open} onClose={handleCloseDeviceDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {deviceDialog.mode === 'add' ? 'Add New Device' : 'Edit Device'}
+        </DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            label="IP Address"
+            value={deviceForm.address}
+            onChange={(e) => setDeviceForm({ ...deviceForm, address: e.target.value })}
+            margin="normal"
+            disabled={deviceDialog.mode === 'edit'}
+            helperText={deviceDialog.mode === 'edit' ? 'IP address cannot be changed' : ''}
+          />
+          <TextField
+            fullWidth
+            label="Hostname"
+            value={deviceForm.hostname}
+            onChange={(e) => setDeviceForm({ ...deviceForm, hostname: e.target.value })}
+            margin="normal"
+          />
+          <TextField
+            fullWidth
+            label="Username"
+            value={deviceForm.username}
+            onChange={(e) => setDeviceForm({ ...deviceForm, username: e.target.value })}
+            margin="normal"
+          />
+          <TextField
+            fullWidth
+            label="Role"
+            value={deviceForm.role}
+            onChange={(e) => setDeviceForm({ ...deviceForm, role: e.target.value })}
+            margin="normal"
+            helperText="e.g., edge, core, transit, lab"
+          />
+          <TextField
+            fullWidth
+            label="Region"
+            value={deviceForm.region}
+            onChange={(e) => setDeviceForm({ ...deviceForm, region: e.target.value })}
+            margin="normal"
+            helperText="e.g., us-east, us-west, eu-central"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseDeviceDialog}>Cancel</Button>
+          <Button onClick={handleSaveDevice} variant="contained">
+            {deviceDialog.mode === 'add' ? 'Add' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Container>
   )
 }

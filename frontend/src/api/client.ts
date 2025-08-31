@@ -218,6 +218,44 @@ class ApiClient {
     return response.data
   }
 
+  // Device Management
+  async getDevices(): Promise<{ devices: Array<{
+    address: string
+    hostname: string
+    username: string
+    role: string
+    region: string
+  }> }> {
+    const response = await this.client.get('/devices')
+    return response.data
+  }
+
+  async addDevice(device: {
+    address: string
+    hostname: string
+    username: string
+    role: string
+    region: string
+  }): Promise<{ success: boolean; device: any }> {
+    const response = await this.client.post('/devices', device)
+    return response.data
+  }
+
+  async updateDevice(address: string, device: Partial<{
+    hostname: string
+    username: string
+    role: string
+    region: string
+  }>): Promise<{ success: boolean }> {
+    const response = await this.client.put(`/devices/${encodeURIComponent(address)}`, device)
+    return response.data
+  }
+
+  async deleteDevice(address: string): Promise<{ success: boolean }> {
+    const response = await this.client.delete(`/devices/${encodeURIComponent(address)}`)
+    return response.data
+  }
+
   // User Management (Admin only)
   async getUsers(): Promise<{ users: Array<{
     username: string
