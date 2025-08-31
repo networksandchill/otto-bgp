@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import {
   Grid,
   Paper,
@@ -10,6 +10,9 @@ import {
   ListItemText,
   Chip,
   IconButton,
+  Snackbar,
+  Alert,
+  CircularProgress,
 } from '@mui/material'
 import {
   Memory as MemoryIcon,
@@ -23,7 +26,7 @@ import {
   Error,
   Warning,
 } from '@mui/icons-material'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
 
 interface MetricCardProps {
@@ -70,9 +73,10 @@ interface ServiceRowProps {
   description: string
   status: 'active' | 'inactive' | 'failed' | 'unknown'
   onAction?: (action: 'start' | 'stop' | 'restart') => void
+  isLoading?: boolean
 }
 
-const ServiceRow: React.FC<ServiceRowProps> = ({ name, description, status, onAction }) => {
+const ServiceRow: React.FC<ServiceRowProps> = ({ name, description, status, onAction, isLoading }) => {
   const getStatusIcon = () => {
     switch (status) {
       case 'active':
@@ -97,18 +101,24 @@ const ServiceRow: React.FC<ServiceRowProps> = ({ name, description, status, onAc
       secondaryAction={
         onAction && (
           <Box>
-            {status === 'active' ? (
-              <IconButton size="small" onClick={() => onAction('stop')} sx={{ color: '#888' }}>
-                <StopIcon fontSize="small" />
-              </IconButton>
+            {isLoading ? (
+              <CircularProgress size={24} sx={{ color: '#888' }} />
             ) : (
-              <IconButton size="small" onClick={() => onAction('start')} sx={{ color: '#888' }}>
-                <PlayIcon fontSize="small" />
-              </IconButton>
+              <>
+                {status === 'active' ? (
+                  <IconButton size="small" onClick={() => onAction('stop')} sx={{ color: '#888' }} disabled={isLoading}>
+                    <StopIcon fontSize="small" />
+                  </IconButton>
+                ) : (
+                  <IconButton size="small" onClick={() => onAction('start')} sx={{ color: '#888' }} disabled={isLoading}>
+                    <PlayIcon fontSize="small" />
+                  </IconButton>
+                )}
+                <IconButton size="small" onClick={() => onAction('restart')} sx={{ color: '#888', ml: 1 }} disabled={isLoading}>
+                  <RefreshIcon fontSize="small" />
+                </IconButton>
+              </>
             )}
-            <IconButton size="small" onClick={() => onAction('restart')} sx={{ color: '#888', ml: 1 }}>
-              <RefreshIcon fontSize="small" />
-            </IconButton>
           </Box>
         )
       }
@@ -133,6 +143,14 @@ const ServiceRow: React.FC<ServiceRowProps> = ({ name, description, status, onAc
 }
 
 const CockpitDashboard: React.FC = () => {
+  const queryClient = useQueryClient()
+  const [loadingService, setLoadingService] = useState<string | null>(null)
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
+    open: false,
+    message: '',
+    severity: 'success',
+  })
+
   // Query deployment matrix for stats
   const { data: matrix } = useQuery({
     queryKey: ['deployment-matrix'],
@@ -167,9 +185,44 @@ const CockpitDashboard: React.FC = () => {
     return 'unknown'
   }
 
-  const handleServiceAction = (serviceName: string, action: string) => {
-    console.log(`${action} service: ${serviceName}`)
-    // TODO: Implement service control
+  const handleServiceAction = async (serviceName: string, action: string) => {
+    setLoadingService(serviceName)
+    try {
+      const response = await apiClient.controlService({
+        service: serviceName,
+        action: action as 'start' | 'stop' | 'restart'
+      })
+      
+      if (response.success) {
+        setSnackbar({
+          open: true,
+          message: `Successfully ${action}ed ${serviceName}`,
+          severity: 'success',
+        })
+        // Refetch systemd status after a short delay
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['systemd-units'] })
+        }, 1000)
+      } else {
+        setSnackbar({
+          open: true,
+          message: response.message || `Failed to ${action} ${serviceName}`,
+          severity: 'error',
+        })
+      }
+    } catch (error) {
+      setSnackbar({
+        open: true,
+        message: `Error controlling service: ${error}`,
+        severity: 'error',
+      })
+    } finally {
+      setLoadingService(null)
+    }
+  }
+
+  const handleCloseSnackbar = () => {
+    setSnackbar({ ...snackbar, open: false })
   }
 
   return (
@@ -231,18 +284,21 @@ const CockpitDashboard: React.FC = () => {
               description="Main BGP policy generation service"
               status={getServiceStatus('otto-bgp.service')}
               onAction={(action) => handleServiceAction('otto-bgp.service', action)}
+              isLoading={loadingService === 'otto-bgp.service'}
             />
             <ServiceRow
               name="otto-bgp-webui-adapter.service"
               description="Web interface service"
               status={getServiceStatus('otto-bgp-webui-adapter.service')}
               onAction={(action) => handleServiceAction('otto-bgp-webui-adapter.service', action)}
+              isLoading={loadingService === 'otto-bgp-webui-adapter.service'}
             />
             <ServiceRow
               name="otto-bgp-rpki-update.service"
               description="RPKI cache update service"
               status={getServiceStatus('otto-bgp-rpki-update.service')}
               onAction={(action) => handleServiceAction('otto-bgp-rpki-update.service', action)}
+              isLoading={loadingService === 'otto-bgp-rpki-update.service'}
             />
           </List>
         </Paper>
@@ -309,6 +365,18 @@ const CockpitDashboard: React.FC = () => {
           </Box>
         </Paper>
       </Grid>
+
+      {/* Snackbar for feedback */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Grid>
   )
 }
