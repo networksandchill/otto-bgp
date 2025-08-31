@@ -217,6 +217,42 @@ class ApiClient {
     const response = await this.client.get(`/logs?${searchParams}`)
     return response.data
   }
+
+  // User Management (Admin only)
+  async getUsers(): Promise<{ users: Array<{
+    username: string
+    email?: string
+    role: 'admin' | 'operator' | 'read_only'
+    created_at?: string
+    last_login?: string
+  }> }> {
+    const response = await this.client.get('/users')
+    return response.data
+  }
+
+  async createUser(data: {
+    username: string
+    email?: string
+    password: string
+    role: 'admin' | 'operator' | 'read_only'
+  }): Promise<any> {
+    const response = await this.client.post('/users', data)
+    return response.data
+  }
+
+  async updateUser(username: string, data: {
+    email?: string
+    password?: string
+    role?: 'admin' | 'operator' | 'read_only'
+  }): Promise<any> {
+    const response = await this.client.put(`/users/${username}`, data)
+    return response.data
+  }
+
+  async deleteUser(username: string): Promise<any> {
+    const response = await this.client.delete(`/users/${username}`)
+    return response.data
+  }
 }
 
 export const apiClient = new ApiClient()

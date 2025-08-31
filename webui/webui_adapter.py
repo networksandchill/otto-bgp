@@ -575,6 +575,213 @@ async def logout(user: dict = Depends(get_current_user)):
     audit_log("logout", user=user.get('sub'))
     return response
 
+
+# User Management API (Admin only)
+
+@app.get("/api/users")
+async def list_users(user: dict = Depends(require_role('admin'))):
+    """List all users (admin only)"""
+    if not USERS_PATH.exists():
+        return JSONResponse({'users': []})
+    
+    with open(USERS_PATH) as f:
+        users_data = json.load(f)
+    
+    # Return users without password hashes
+    users = []
+    for u in users_data.get('users', []):
+        users.append({
+            'username': u.get('username'),
+            'email': u.get('email'),
+            'role': u.get('role', 'read_only'),
+            'created_at': u.get('created_at'),
+            'last_login': u.get('last_login')
+        })
+    
+    return JSONResponse({'users': users})
+
+
+@app.post("/api/users")
+async def create_user(request: Request, current_user: dict = Depends(require_role('admin'))):
+    """Create a new user (admin only)"""
+    try:
+        body = await request.json()
+        username = body.get('username', '').strip()
+        email = body.get('email', '').strip()
+        password = body.get('password', '')
+        role = body.get('role', 'read_only')
+        
+        # Validate inputs
+        if not username or not password:
+            return JSONResponse({'error': 'Username and password are required'}, status_code=400)
+        
+        if role not in ['admin', 'operator', 'read_only']:
+            return JSONResponse({'error': 'Invalid role'}, status_code=400)
+        
+        # Load existing users
+        if USERS_PATH.exists():
+            with open(USERS_PATH) as f:
+                users_data = json.load(f)
+        else:
+            users_data = {'users': []}
+        
+        # Check if username exists
+        for u in users_data.get('users', []):
+            if u.get('username') == username:
+                return JSONResponse({'error': 'Username already exists'}, status_code=400)
+        
+        # Create new user
+        new_user = {
+            'username': username,
+            'email': email,
+            'password_hash': bcrypt.hash(password),
+            'role': role,
+            'created_at': datetime.utcnow().isoformat()
+        }
+        
+        users_data['users'].append(new_user)
+        
+        # Save atomically
+        with tempfile.NamedTemporaryFile('w', dir=str(USERS_PATH.parent), delete=False) as tmp:
+            json.dump(users_data, tmp, indent=2)
+            tmp_path = tmp.name
+        
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, USERS_PATH)
+        
+        audit_log("user_created", user=current_user.get('sub'), target_user=username, role=role)
+        logger.info(f"User created: {username} with role {role} by {current_user.get('sub')}")
+        
+        return JSONResponse({
+            'success': True,
+            'user': {
+                'username': username,
+                'email': email,
+                'role': role,
+                'created_at': new_user['created_at']
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to create user: {e}")
+        return JSONResponse({'error': 'Failed to create user'}, status_code=500)
+
+
+@app.put("/api/users/{username}")
+async def update_user(username: str, request: Request, current_user: dict = Depends(require_role('admin'))):
+    """Update user details (admin only)"""
+    try:
+        body = await request.json()
+        
+        # Load users
+        if not USERS_PATH.exists():
+            return JSONResponse({'error': 'No users configured'}, status_code=404)
+        
+        with open(USERS_PATH) as f:
+            users_data = json.load(f)
+        
+        # Find user to update
+        user_index = -1
+        for i, u in enumerate(users_data.get('users', [])):
+            if u.get('username') == username:
+                user_index = i
+                break
+        
+        if user_index == -1:
+            return JSONResponse({'error': 'User not found'}, status_code=404)
+        
+        # Update fields
+        if 'email' in body:
+            users_data['users'][user_index]['email'] = body['email']
+        
+        if 'role' in body:
+            new_role = body['role']
+            if new_role not in ['admin', 'operator', 'read_only']:
+                return JSONResponse({'error': 'Invalid role'}, status_code=400)
+            
+            # Prevent removing last admin
+            if users_data['users'][user_index].get('role') == 'admin' and new_role != 'admin':
+                admin_count = sum(1 for u in users_data['users'] if u.get('role') == 'admin')
+                if admin_count == 1:
+                    return JSONResponse({'error': 'Cannot remove last admin user'}, status_code=400)
+            
+            users_data['users'][user_index]['role'] = new_role
+        
+        if 'password' in body and body['password']:
+            users_data['users'][user_index]['password_hash'] = bcrypt.hash(body['password'])
+        
+        # Save atomically
+        with tempfile.NamedTemporaryFile('w', dir=str(USERS_PATH.parent), delete=False) as tmp:
+            json.dump(users_data, tmp, indent=2)
+            tmp_path = tmp.name
+        
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, USERS_PATH)
+        
+        audit_log("user_updated", user=current_user.get('sub'), target_user=username)
+        logger.info(f"User updated: {username} by {current_user.get('sub')}")
+        
+        return JSONResponse({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Failed to update user: {e}")
+        return JSONResponse({'error': 'Failed to update user'}, status_code=500)
+
+
+@app.delete("/api/users/{username}")
+async def delete_user(username: str, current_user: dict = Depends(require_role('admin'))):
+    """Delete a user (admin only)"""
+    try:
+        # Prevent self-deletion
+        if username == current_user.get('sub'):
+            return JSONResponse({'error': 'Cannot delete your own account'}, status_code=400)
+        
+        # Load users
+        if not USERS_PATH.exists():
+            return JSONResponse({'error': 'No users configured'}, status_code=404)
+        
+        with open(USERS_PATH) as f:
+            users_data = json.load(f)
+        
+        # Find user to delete
+        user_index = -1
+        user_role = None
+        for i, u in enumerate(users_data.get('users', [])):
+            if u.get('username') == username:
+                user_index = i
+                user_role = u.get('role')
+                break
+        
+        if user_index == -1:
+            return JSONResponse({'error': 'User not found'}, status_code=404)
+        
+        # Prevent removing last admin
+        if user_role == 'admin':
+            admin_count = sum(1 for u in users_data['users'] if u.get('role') == 'admin')
+            if admin_count == 1:
+                return JSONResponse({'error': 'Cannot delete last admin user'}, status_code=400)
+        
+        # Delete user
+        del users_data['users'][user_index]
+        
+        # Save atomically
+        with tempfile.NamedTemporaryFile('w', dir=str(USERS_PATH.parent), delete=False) as tmp:
+            json.dump(users_data, tmp, indent=2)
+            tmp_path = tmp.name
+        
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, USERS_PATH)
+        
+        audit_log("user_deleted", user=current_user.get('sub'), target_user=username)
+        logger.info(f"User deleted: {username} by {current_user.get('sub')}")
+        
+        return JSONResponse({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Failed to delete user: {e}")
+        return JSONResponse({'error': 'Failed to delete user'}, status_code=500)
+
+
 # Reports endpoints
 
 

@@ -21,6 +21,7 @@ import {
   Security as SecurityIcon,
   Storage as StorageIcon,
   ExitToApp,
+  People as PeopleIcon,
 } from '@mui/icons-material'
 import { useAuth } from '../hooks/useAuth'
 
@@ -45,12 +46,21 @@ const CockpitLayout: React.FC = () => {
   }
 
   const menuItems = [
-    { path: '/dashboard', label: 'System', icon: <DashboardIcon /> },
-    { path: '/reports', label: 'BGP Policies', icon: <NetworkIcon /> },
-    { path: '/rpki', label: 'RPKI Status', icon: <SecurityIcon /> },
-    { path: '/logs', label: 'Logs', icon: <StorageIcon /> },
-    { path: '/config', label: 'Configuration', icon: <SettingsIcon /> },
+    { path: '/dashboard', label: 'System', icon: <DashboardIcon />, role: 'read_only' },
+    { path: '/reports', label: 'BGP Policies', icon: <NetworkIcon />, role: 'read_only' },
+    { path: '/rpki', label: 'RPKI Status', icon: <SecurityIcon />, role: 'read_only' },
+    { path: '/logs', label: 'Logs', icon: <StorageIcon />, role: 'read_only' },
+    { path: '/config', label: 'Configuration', icon: <SettingsIcon />, role: 'admin' },
+    { path: '/users', label: 'Users', icon: <PeopleIcon />, role: 'admin' },
   ]
+
+  // Filter menu items based on user role
+  const visibleMenuItems = menuItems.filter(item => {
+    if (item.role === 'admin') {
+      return user?.role === 'admin'
+    }
+    return true
+  })
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', bgcolor: '#151515' }}>
@@ -83,7 +93,7 @@ const CockpitLayout: React.FC = () => {
 
         {/* Navigation */}
         <List sx={{ flexGrow: 1, py: 1 }}>
-          {menuItems.map((item) => (
+          {visibleMenuItems.map((item) => (
             <ListItem
               key={item.path}
               component={NavLink}
