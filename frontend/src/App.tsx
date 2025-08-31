@@ -57,14 +57,30 @@ const cockpitTheme = createTheme({
 })
 
 const AppContent: React.FC = () => {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, isLoading } = useAuth()
 
   // Check setup state
-  const { data: setupState } = useQuery({
+  const { data: setupState, isLoading: setupLoading } = useQuery({
     queryKey: ['setup-state'],
     queryFn: () => apiClient.getSetupState(),
     retry: false,
   })
+
+  // Show loading state while checking authentication and setup
+  if (isLoading || setupLoading) {
+    // Return a minimal loading state to prevent flash of login
+    return (
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh',
+        backgroundColor: '#151515'
+      }}>
+        {/* Empty div or you could add a subtle spinner here */}
+      </div>
+    )
+  }
 
   // Show setup wizard if setup is needed
   if (setupState?.needs_setup) {

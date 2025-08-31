@@ -31,7 +31,11 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [initialCheckDone, setInitialCheckDone] = useState(false)
   const queryClient = useQueryClient()
+
+  // Check if we have a stored token on mount
+  const hasStoredToken = !!sessionStorage.getItem('access_token')
 
   // Query to get current session
   const { data: sessionData, isLoading, error: sessionError } = useQuery({
@@ -44,7 +48,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
       return false
     },
-    enabled: !user && !!sessionStorage.getItem('access_token'),
+    enabled: hasStoredToken && !initialCheckDone,
   })
 
   // Update user from session data
@@ -55,13 +59,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         role: sessionData.role,
       })
       setError(null)
-    } else if (sessionError && sessionError.response?.status !== 401) {
-      // Only clear tokens for non-401 errors
-      // 401s are handled by the axios interceptor's token refresh
+      setInitialCheckDone(true)
+    } else if (sessionError) {
+      // Clear everything on error
       setUser(null)
       apiClient.clearTokens()
+      setInitialCheckDone(true)
+    } else if (!hasStoredToken && !isLoading) {
+      // No token and not loading means not authenticated
+      setInitialCheckDone(true)
     }
-  }, [sessionData, sessionError])
+  }, [sessionData, sessionError, hasStoredToken, isLoading])
 
   // Login mutation
   const loginMutation = useMutation({
@@ -103,7 +111,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const contextValue: AuthContextType = {
     user,
     isAuthenticated: !!user,
-    isLoading: isLoading || loginMutation.isPending,
+    isLoading: !initialCheckDone || isLoading || loginMutation.isPending,
     isAdmin: user?.role === 'admin',
     isReadOnly: user?.role === 'read_only',
     login,
