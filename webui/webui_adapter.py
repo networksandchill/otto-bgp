@@ -688,18 +688,43 @@ async def control_systemd_service(request: Request, user: dict = Depends(require
             return JSONResponse({"error": "Invalid service"}, status_code=400)
         
         # Execute via sudo (requires sudoers configuration)
-        result = subprocess.run(
-            ['sudo', 'systemctl', action, service],
-            capture_output=True, text=True, timeout=30
-        )
-        
-        if result.returncode == 0:
-            audit_log(f"service_{action}", user=user.get('sub'), resource=service)
-            return JSONResponse({"success": True, "message": f"Service {action} completed"})
-        else:
+        try:
+            result = subprocess.run(
+                ['sudo', '-n', 'systemctl', action, service],  # -n for non-interactive
+                capture_output=True, text=True, timeout=30
+            )
+            
+            if result.returncode == 0:
+                audit_log(f"service_{action}", user=user.get('sub'), resource=service)
+                return JSONResponse({"success": True, "message": f"Service {action} completed"})
+            else:
+                error_msg = result.stderr or result.stdout or f"Failed with code {result.returncode}"
+                
+                # Check for common permission issues
+                if "sudo: a password is required" in error_msg:
+                    return JSONResponse({
+                        "success": False,
+                        "message": "Service control not configured. Please run installer with --system flag to configure sudo permissions."
+                    }, status_code=403)
+                elif "Unit" in error_msg and "not found" in error_msg:
+                    return JSONResponse({
+                        "success": False,
+                        "message": f"Service {service} not found on this system"
+                    }, status_code=404)
+                else:
+                    return JSONResponse({
+                        "success": False,
+                        "message": f"Service {action} failed: {error_msg}"
+                    }, status_code=500)
+        except subprocess.TimeoutExpired:
             return JSONResponse({
-                "error": f"Service {action} failed", 
-                "details": result.stderr
+                "success": False,
+                "message": f"Service {action} timed out after 30 seconds"
+            }, status_code=500)
+        except Exception as e:
+            return JSONResponse({
+                "success": False,
+                "message": f"Failed to execute systemctl: {str(e)}"
             }, status_code=500)
             
     except Exception as e:
