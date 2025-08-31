@@ -864,46 +864,25 @@ EOF
 
 create_webui_systemd_service() {
     log_info "Creating WebUI systemd service..."
-    log_info "SERVICE_USER=$SERVICE_USER, LIB_DIR=$LIB_DIR, VENV_DIR=$VENV_DIR, CONFIG_DIR=$CONFIG_DIR"
     
-    cat > /tmp/otto-bgp-webui-adapter.service << EOF
-[Unit]
-Description=Otto BGP WebUI Adapter (Direct TLS)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-Group=$SERVICE_USER
-WorkingDirectory=$LIB_DIR
-Environment=PYTHONPATH=$LIB_DIR
-Environment=OTTO_WEBUI_ROOT=/usr/local/share/otto-bgp/webui
-EnvironmentFile=-$CONFIG_DIR/otto.env
-ExecStart=$VENV_DIR/bin/uvicorn webui_adapter:app --host 0.0.0.0 --port 8443 --ssl-certfile $CONFIG_DIR/tls/cert.pem --ssl-keyfile $CONFIG_DIR/tls/key.pem
-Restart=on-failure
-RestartSec=10
-PrivateTmp=yes
-ProtectSystem=full
-ProtectHome=yes
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=otto-bgp-webui
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    if [[ -f /tmp/otto-bgp-webui-adapter.service ]]; then
-        log_info "Service file created successfully, moving to systemd..."
+    # Copy and customize systemd service template
+    if [[ -f "$LIB_DIR/systemd/otto-bgp-webui-adapter.service" ]]; then
+        cp "$LIB_DIR/systemd/otto-bgp-webui-adapter.service" /tmp/otto-bgp-webui-adapter.service
+        
+        # Replace placeholders
+        sed -i "s|SERVICE_USER_PLACEHOLDER|$SERVICE_USER|g" /tmp/otto-bgp-webui-adapter.service
+        sed -i "s|LIB_DIR_PLACEHOLDER|$LIB_DIR|g" /tmp/otto-bgp-webui-adapter.service
+        sed -i "s|CONFIG_DIR_PLACEHOLDER|$CONFIG_DIR|g" /tmp/otto-bgp-webui-adapter.service
+        sed -i "s|VENV_DIR_PLACEHOLDER|$VENV_DIR|g" /tmp/otto-bgp-webui-adapter.service
+        
         sudo mv /tmp/otto-bgp-webui-adapter.service /etc/systemd/system/ || {
             log_warn "Failed to install WebUI systemd service (optional)"
             return 0
         }
         sudo chmod 644 /etc/systemd/system/otto-bgp-webui-adapter.service
-        log_success "WebUI systemd service created"
+        log_success "WebUI systemd service created from template"
     else
-        log_warn "Failed to create WebUI systemd service file"
+        log_warn "WebUI systemd service template not found - WebUI service will not be available"
         return 0
     fi
 }
