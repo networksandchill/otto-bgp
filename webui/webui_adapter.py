@@ -599,7 +599,7 @@ async def list_devices(user: dict = Depends(get_current_user)):
 @app.post("/api/devices/add")
 async def add_device(request: Request, user: dict = Depends(require_role('admin'))):
     """Add a new device to devices.csv"""
-    logger.info(f"POST /api/devices/add called with user: {user.get('username', 'unknown')}")
+    logger.info(f"POST /api/devices/add called with user: {user.get('sub', 'unknown')} (full user: {user})")
     try:
         device_data = await request.json()
         logger.info(f"Device data received: {device_data}")
@@ -642,7 +642,7 @@ async def add_device(request: Request, user: dict = Depends(require_role('admin'
         os.replace(tmp_path, devices_file)
         os.chmod(devices_file, 0o644)
         
-        audit_log("device_added", user=user['username'], resource=device_data['hostname'])
+        audit_log("device_added", user=user.get('sub', 'admin'), resource=device_data['hostname'])
         return {"success": True, "device": new_device}
         
     except HTTPException:
@@ -677,7 +677,7 @@ async def update_device(address: str, request: Request, user: dict = Depends(req
                         if key in row:
                             row[key] = value
                     updated = True
-                    audit_log("device_updated", user=user['username'], resource=row.get('hostname', address))
+                    audit_log("device_updated", user=user.get('sub', 'admin'), resource=row.get('hostname', address))
                 devices.append(row)
         
         if not updated:
@@ -746,7 +746,7 @@ async def delete_device(address: str, user: dict = Depends(require_role('admin')
             # Remove file if no devices left
             devices_file.unlink()
         
-        audit_log("device_deleted", user=user['username'], resource=deleted_hostname)
+        audit_log("device_deleted", user=user.get('sub', 'admin'), resource=deleted_hostname)
         return {"success": True}
         
     except HTTPException:
