@@ -1120,6 +1120,21 @@ async def get_system_logs(
     except Exception as e:
         return JSONResponse({"error": f"Failed to get logs: {str(e)}"}, status_code=500)
 
+# Catch-all route for client-side routing - MUST be last
+@app.get("/{path:path}")
+async def catch_all(path: str):
+    """Catch-all route for client-side routing in SPA
+    
+    This route MUST be defined last to ensure all specific routes
+    are matched first. It serves index.html for any unmatched routes
+    to support client-side routing in the React SPA.
+    """
+    # Serve index.html for all unmatched routes (client-side routing)
+    index_path = WEBUI_ROOT / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return HTMLResponse("<h1>Otto BGP WebUI</h1><p>Frontend assets not found</p>")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8443)
