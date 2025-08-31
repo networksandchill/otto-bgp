@@ -186,8 +186,21 @@ remove_systemd_services() {
         sudo systemctl disable otto-bgp.service 2>/dev/null || true
         sudo rm -f /etc/systemd/system/otto-bgp.service
         sudo rm -f /etc/systemd/system/otto-bgp.timer
-        sudo systemctl daemon-reload
-        echo -e "${GREEN}✓${NC} Systemd services removed"
+        echo -e "${GREEN}✓${NC} Otto BGP systemd services removed"
+    fi
+    
+    # Remove WebUI systemd service
+    if [[ "$INSTALL_MODE" == "system" ]] && [[ -f /etc/systemd/system/otto-bgp-webui-adapter.service ]]; then
+        echo "Removing WebUI systemd service..."
+        sudo systemctl stop otto-bgp-webui-adapter.service 2>/dev/null || true
+        sudo systemctl disable otto-bgp-webui-adapter.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/otto-bgp-webui-adapter.service
+        echo -e "${GREEN}✓${NC} WebUI systemd service removed"
+    fi
+    
+    # Reload systemd if any services were removed
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        sudo systemctl daemon-reload 2>/dev/null || true
     fi
 }
 
@@ -214,6 +227,21 @@ perform_uninstall() {
             rm -rf "$LIB_DIR"
         fi
         echo -e "${GREEN}✓${NC} Libraries removed"
+    fi
+    
+    # Remove WebUI frontend assets
+    if [[ -d "/usr/local/share/otto-bgp/webui" ]]; then
+        sudo rm -rf "/usr/local/share/otto-bgp/webui"
+        echo -e "${GREEN}✓${NC} WebUI frontend assets removed"
+        
+        # Remove parent directory if empty
+        rmdir "/usr/local/share/otto-bgp" 2>/dev/null || true
+    fi
+    
+    # Remove WebUI sudoers file
+    if [[ -f "/etc/sudoers.d/otto-bgp-webui" ]]; then
+        sudo rm -f "/etc/sudoers.d/otto-bgp-webui"
+        echo -e "${GREEN}✓${NC} WebUI sudoers permissions removed"
     fi
     
     # Remove virtual environment
