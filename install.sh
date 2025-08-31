@@ -17,6 +17,7 @@ NC='\033[0m'
 
 # Configuration
 REPO_URL="https://github.com/networksandchill/otto-bgp"
+REPO_BRANCH="${OTTO_BGP_BRANCH:-main}"  # Allow override with env var
 INSTALL_MODE="user"
 AUTONOMOUS_MODE=false
 SKIP_BGPQ4=false
@@ -254,22 +255,22 @@ download_otto_bgp() {
     cd "$TEMP_DIR"
     
     # Download with timeout
-    if ! timeout 120 curl -fsSL "$REPO_URL/archive/main.tar.gz" | tar xz; then
+    if ! timeout 120 curl -fsSL "$REPO_URL/archive/$REPO_BRANCH.tar.gz" | tar xz; then
         log_error "Download failed or timed out"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
     # Verify download contents
-    if [[ ! -d "otto-bgp-main" ]]; then
-        log_error "Download verification failed - otto-bgp-main directory not found"
+    if [[ ! -d "otto-bgp-$REPO_BRANCH" ]]; then
+        log_error "Download verification failed - otto-bgp-$REPO_BRANCH directory not found"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
     # Move to lib directory (ensure directory exists first)
     mkdir -p "$LIB_DIR"
-    if ! mv otto-bgp-main/* "$LIB_DIR/"; then
+    if ! mv otto-bgp-$REPO_BRANCH/* "$LIB_DIR/"; then
         log_error "Failed to move files to installation directory"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
