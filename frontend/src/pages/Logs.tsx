@@ -21,6 +21,8 @@ import {
   Info,
   CheckCircle,
 } from '@mui/icons-material'
+import { useQuery } from '@tanstack/react-query'
+import apiClient from '../api/client'
 
 interface LogEntry {
   timestamp: string
@@ -34,51 +36,18 @@ const Logs: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('')
   const [logLevel, setLogLevel] = useState('all')
 
-  // Mock log data - replace with actual API calls
-  const logs: LogEntry[] = [
-    {
-      timestamp: '2024-08-30T21:15:32Z',
-      level: 'success',
-      service: 'otto-bgp',
-      message: 'Pipeline completed successfully: 45 policies generated',
-    },
-    {
-      timestamp: '2024-08-30T21:14:28Z',
-      level: 'info',
-      service: 'otto-bgp',
-      message: 'Starting BGP policy generation for 12 routers',
-    },
-    {
-      timestamp: '2024-08-30T21:14:15Z',
-      level: 'warning',
-      service: 'rpki-update',
-      message: 'RPKI cache update delayed: connection timeout to validator',
-    },
-    {
-      timestamp: '2024-08-30T21:12:45Z',
-      level: 'info',
-      service: 'webui-adapter',
-      message: 'User admin logged in from 10.4.0.150',
-    },
-    {
-      timestamp: '2024-08-30T21:10:22Z',
-      level: 'error',
-      service: 'otto-bgp',
-      message: 'Failed to connect to router edge-01: SSH timeout',
-    },
-    {
-      timestamp: '2024-08-30T21:08:15Z',
-      level: 'info',
-      service: 'rpki-update',
-      message: 'RPKI cache updated: 389,479 prefixes validated',
-    },
-    {
-      timestamp: '2024-08-30T21:05:00Z',
-      level: 'success',
-      service: 'otto-bgp',
-      message: 'Systemd timer triggered: starting scheduled policy update',
-    },
-  ]
+  // Fetch real logs from API
+  const { data: logsData, isLoading, refetch } = useQuery({
+    queryKey: ['logs', selectedService, logLevel],
+    queryFn: () => apiClient.getLogs({
+      service: selectedService,
+      level: logLevel,
+      limit: 200,
+    }),
+    refetchInterval: 10000, // Refresh every 10 seconds
+  })
+
+  const logs: LogEntry[] = logsData?.logs || []
 
   const getLevelIcon = (level: string) => {
     switch (level) {
@@ -119,6 +88,14 @@ const Logs: React.FC = () => {
     return matchesService && matchesLevel && matchesSearch
   })
 
+  if (isLoading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
+        <Typography sx={{ color: '#888' }}>Loading logs...</Typography>
+      </Box>
+    )
+  }
+
   return (
     <Box>
       {/* Header and Controls */}
@@ -128,7 +105,7 @@ const Logs: React.FC = () => {
             System Logs
           </Typography>
           <Box sx={{ display: 'flex', gap: 1 }}>
-            <IconButton size="small" sx={{ color: '#888' }}>
+            <IconButton size="small" sx={{ color: '#888' }} onClick={() => refetch()}>
               <Refresh />
             </IconButton>
             <IconButton size="small" sx={{ color: '#888' }}>
@@ -153,8 +130,8 @@ const Logs: React.FC = () => {
             >
               <MenuItem value="all">All Services</MenuItem>
               <MenuItem value="otto-bgp">otto-bgp</MenuItem>
-              <MenuItem value="webui-adapter">webui-adapter</MenuItem>
-              <MenuItem value="rpki-update">rpki-update</MenuItem>
+              <MenuItem value="webui">webui-adapter</MenuItem>
+              <MenuItem value="rpki">rpki-update</MenuItem>
             </Select>
           </FormControl>
 

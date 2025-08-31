@@ -178,6 +178,28 @@ class ApiClient {
     const response = await this.client.get('/healthz')
     return response.data
   }
+
+  // RPKI endpoints
+  async getRpkiStatus(): Promise<any> {
+    const response = await this.client.get('/rpki/status')
+    return response.data
+  }
+
+  // Logs endpoints
+  async getLogs(params?: { service?: string; level?: string; limit?: number }): Promise<any> {
+    const searchParams = new URLSearchParams()
+    if (params?.service && params.service !== 'all') {
+      searchParams.append('service', params.service)
+    }
+    if (params?.level && params.level !== 'all') {
+      searchParams.append('level', params.level)
+    }
+    if (params?.limit) {
+      searchParams.append('limit', params.limit.toString())
+    }
+    const response = await this.client.get(`/logs?${searchParams}`)
+    return response.data
+  }
 }
 
 export const apiClient = new ApiClient()
