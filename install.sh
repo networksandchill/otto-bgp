@@ -886,6 +886,7 @@ RestartSec=10
 PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=yes
+ReadWritePaths=$CONFIG_DIR $DATA_DIR
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=otto-bgp-webui
