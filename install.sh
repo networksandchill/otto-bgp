@@ -880,6 +880,12 @@ create_webui_systemd_service() {
             return 0
         }
         sudo chmod 644 /etc/systemd/system/otto-bgp-webui-adapter.service
+        
+        # Fix SELinux context if SELinux is enabled
+        if command -v restorecon >/dev/null 2>&1; then
+            sudo restorecon /etc/systemd/system/otto-bgp-webui-adapter.service 2>/dev/null || true
+        fi
+        
         log_success "WebUI systemd service created from template"
     else
         log_warn "WebUI systemd service template not found - WebUI service will not be available"
