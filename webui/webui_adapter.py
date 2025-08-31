@@ -49,6 +49,10 @@ SETUP_TOKEN_PATH = Path('/etc/otto-bgp/.setup_token')
 JWT_SECRET_PATH = Path('/etc/otto-bgp/.jwt_secret')
 WEBUI_ROOT = Path(os.environ.get('OTTO_WEBUI_ROOT', '/usr/local/share/otto-bgp/webui'))
 
+# Detect absolute paths for sudo and systemctl at startup
+SUDO_PATH = shutil.which('sudo') or '/usr/bin/sudo'
+SYSTEMCTL_PATH = shutil.which('systemctl') or '/usr/bin/systemctl'
+
 # JWT Configuration
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
@@ -662,14 +666,14 @@ async def get_systemd_units(names: str = "", user: dict = Depends(require_role('
 @app.post("/api/systemd/control")
 async def control_systemd_service(request: Request, user: dict = Depends(require_role('admin'))):
     """Control systemd services (if enabled)"""
-    # Log environment variable status
+    # Check if service control is enabled
     service_control_enabled = os.environ.get('OTTO_WEBUI_ENABLE_SERVICE_CONTROL')
-    print(f"[DEBUG] OTTO_WEBUI_ENABLE_SERVICE_CONTROL = {service_control_enabled}")
+    logger.debug(f"OTTO_WEBUI_ENABLE_SERVICE_CONTROL = {service_control_enabled}")
     
     if service_control_enabled != 'true':
         return JSONResponse({
             "success": False,
-            "message": f"Service control disabled. Environment variable is: {service_control_enabled}"
+            "message": f"Service control disabled. Environment variable OTTO_WEBUI_ENABLE_SERVICE_CONTROL is: '{service_control_enabled}'"
         }, status_code=403)
     
     try:
@@ -677,7 +681,7 @@ async def control_systemd_service(request: Request, user: dict = Depends(require
         action = data.get('action')
         service = data.get('service')
         
-        print(f"[DEBUG] Service control request: action={action}, service={service}")
+        logger.info(f"Service control request: action={action}, service={service}, user={user.get('sub')}")
         
         # Validate inputs
         allowed_actions = ['start', 'stop', 'restart', 'reload']
@@ -691,65 +695,108 @@ async def control_systemd_service(request: Request, user: dict = Depends(require
         ]
         
         if action not in allowed_actions:
-            return JSONResponse({"error": "Invalid action"}, status_code=400)
+            return JSONResponse({
+                "success": False,
+                "message": f"Invalid action: {action}. Allowed: {', '.join(allowed_actions)}"
+            }, status_code=400)
         
         if service not in allowed_services:
-            return JSONResponse({"error": "Invalid service"}, status_code=400)
+            return JSONResponse({
+                "success": False,
+                "message": f"Service not allowed: {service}"
+            }, status_code=400)
         
-        # Execute via sudo (requires sudoers configuration)
+        # Build command with absolute paths
+        cmd = [SUDO_PATH, '-n', SYSTEMCTL_PATH, action]
+        
+        # Add --no-block for self-restart to avoid connection drop
+        if service == 'otto-bgp-webui-adapter.service' and action in ['restart', 'stop']:
+            cmd.append('--no-block')
+            logger.info(f"Adding --no-block flag for self-{action}")
+        
+        cmd.append(service)
+        
+        # Log current user context
+        import pwd
+        current_user = pwd.getpwuid(os.getuid()).pw_name
+        logger.debug(f"Running as user: {current_user}")
+        logger.debug(f"Executing command: {' '.join(cmd)}")
+        
+        # Execute command
         try:
-            # Get current user for debugging
-            import pwd
-            current_user = pwd.getpwuid(os.getuid()).pw_name
-            print(f"[DEBUG] Running as user: {current_user}")
-            
-            cmd = ['sudo', '-n', 'systemctl', action, service]
-            print(f"[DEBUG] Executing command: {' '.join(cmd)}")
-            
             result = subprocess.run(
                 cmd,
-                capture_output=True, text=True, timeout=30
+                capture_output=True, 
+                text=True, 
+                timeout=10 if action == 'status' else 30
             )
             
-            print(f"[DEBUG] Command exit code: {result.returncode}")
-            print(f"[DEBUG] Command stdout: {result.stdout}")
-            print(f"[DEBUG] Command stderr: {result.stderr}")
+            logger.debug(f"Command exit code: {result.returncode}")
+            if result.stdout:
+                logger.debug(f"Command stdout: {result.stdout[:500]}")
+            if result.stderr:
+                logger.debug(f"Command stderr: {result.stderr[:500]}")
             
             if result.returncode == 0:
                 audit_log(f"service_{action}", user=user.get('sub'), resource=service)
-                return JSONResponse({"success": True, "message": f"Service {action} completed"})
+                return JSONResponse({
+                    "success": True, 
+                    "message": f"Service {action} completed successfully"
+                })
             else:
-                error_msg = result.stderr or result.stdout or f"Failed with code {result.returncode}"
+                error_msg = result.stderr or result.stdout or f"Failed with exit code {result.returncode}"
                 
-                # Check for common permission issues
-                if "sudo: a password is required" in error_msg:
+                # Map common errors to appropriate responses
+                if "a password is required" in error_msg or "not in the sudoers file" in error_msg:
                     return JSONResponse({
                         "success": False,
-                        "message": "Service control not configured. Please run installer with --system flag to configure sudo permissions."
+                        "message": "Sudo permissions not configured. Please run: sudo /path/to/scripts/setup-service-control.sh"
                     }, status_code=403)
+                    
+                elif "no tty present and no askpass program specified" in error_msg:
+                    return JSONResponse({
+                        "success": False,
+                        "message": "Sudo requires TTY. Add 'Defaults:otto-bgp !requiretty' to sudoers configuration"
+                    }, status_code=403)
+                    
                 elif "Unit" in error_msg and "not found" in error_msg:
                     return JSONResponse({
                         "success": False,
                         "message": f"Service {service} not found on this system"
                     }, status_code=404)
-                else:
+                    
+                elif "Unit" in error_msg and "not loaded" in error_msg:
                     return JSONResponse({
                         "success": False,
-                        "message": f"Service {action} failed: {error_msg}"
+                        "message": f"Service {service} is not loaded"
+                    }, status_code=404)
+                    
+                else:
+                    # Include stderr in response for debugging
+                    return JSONResponse({
+                        "success": False,
+                        "message": f"Command failed: {error_msg[:200]}"
                     }, status_code=500)
+                    
         except subprocess.TimeoutExpired:
             return JSONResponse({
                 "success": False,
                 "message": f"Service {action} timed out after 30 seconds"
             }, status_code=500)
+            
         except Exception as e:
+            logger.error(f"Failed to execute systemctl: {str(e)}")
             return JSONResponse({
                 "success": False,
-                "message": f"Failed to execute systemctl: {str(e)}"
+                "message": f"Failed to execute command: {str(e)}"
             }, status_code=500)
             
     except Exception as e:
-        return JSONResponse({"error": f"Service control failed: {str(e)}"}, status_code=500)
+        logger.error(f"Service control endpoint error: {str(e)}")
+        return JSONResponse({
+            "success": False,
+            "message": f"Request processing failed: {str(e)}"
+        }, status_code=500)
 
 # Service control test endpoint
 @app.get("/api/systemd/test-permissions")
@@ -757,20 +804,30 @@ async def test_service_permissions(user: dict = Depends(require_role('admin'))):
     """Test service control permissions and environment"""
     import pwd
     import grp
+    import stat
     
     try:
         current_user = pwd.getpwuid(os.getuid()).pw_name
         current_groups = [grp.getgrgid(g).gr_name for g in os.getgroups()]
         
-        # Test sudo access
+        # Test sudo access with absolute paths
+        test_cmd = [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'status', 'otto-bgp.service']
         sudo_test = subprocess.run(
-            ['sudo', '-n', 'systemctl', 'status', 'otto-bgp.service'],
+            test_cmd,
             capture_output=True, text=True, timeout=5
         )
         
         # Check sudoers file
         sudoers_path = Path("/etc/sudoers.d/otto-bgp-webui")
         sudoers_exists = sudoers_path.exists()
+        sudoers_stat = None
+        if sudoers_exists:
+            st = sudoers_path.stat()
+            sudoers_stat = {
+                "mode": oct(st.st_mode)[-3:],
+                "owner": pwd.getpwuid(st.st_uid).pw_name,
+                "group": grp.getgrgid(st.st_gid).gr_name
+            }
         
         return JSONResponse({
             "environment": {
@@ -780,14 +837,23 @@ async def test_service_permissions(user: dict = Depends(require_role('admin'))):
                 "uid": os.getuid(),
                 "gid": os.getgid()
             },
+            "paths": {
+                "sudo": SUDO_PATH,
+                "systemctl": SYSTEMCTL_PATH,
+                "sudo_exists": Path(SUDO_PATH).exists(),
+                "systemctl_exists": Path(SYSTEMCTL_PATH).exists()
+            },
             "sudo_test": {
+                "command": ' '.join(test_cmd),
                 "success": sudo_test.returncode == 0,
                 "exit_code": sudo_test.returncode,
-                "stderr": sudo_test.stderr[:200] if sudo_test.stderr else None
+                "stderr": sudo_test.stderr[:200] if sudo_test.stderr else None,
+                "stdout": sudo_test.stdout[:200] if sudo_test.stdout else None
             },
             "sudoers_file": {
                 "exists": sudoers_exists,
-                "path": str(sudoers_path)
+                "path": str(sudoers_path),
+                "stats": sudoers_stat
             }
         })
     except Exception as e:
