@@ -41,7 +41,6 @@ function TabPanel(props: TabPanelProps) {
 interface Device {
   address: string
   hostname: string
-  username: string
   role: string
   region: string
 }
@@ -60,7 +59,6 @@ const Configuration: React.FC = () => {
   const [deviceForm, setDeviceForm] = useState<Device>({
     address: '',
     hostname: '',
-    username: '',
     role: '',
     region: ''
   })
@@ -146,7 +144,6 @@ const Configuration: React.FC = () => {
     setDeviceForm(device || {
       address: '',
       hostname: '',
-      username: '',
       role: '',
       region: ''
     })
@@ -157,7 +154,6 @@ const Configuration: React.FC = () => {
     setDeviceForm({
       address: '',
       hostname: '',
-      username: '',
       role: '',
       region: ''
     })
@@ -220,7 +216,7 @@ const Configuration: React.FC = () => {
       <Paper sx={{ mt: 3 }}>
         <Tabs value={tabValue} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}>
           <Tab icon={<RouterIcon />} label="Devices" />
-          <Tab icon={<SecurityIcon />} label="SSH Settings" />
+          <Tab icon={<SecurityIcon />} label="Global SSH Credentials" />
           <Tab icon={<EmailIcon />} label="SMTP Settings" />
         </Tabs>
 
@@ -246,7 +242,6 @@ const Configuration: React.FC = () => {
                   <TableRow>
                     <TableCell>Address</TableCell>
                     <TableCell>Hostname</TableCell>
-                    <TableCell>Username</TableCell>
                     <TableCell>Role</TableCell>
                     <TableCell>Region</TableCell>
                     <TableCell align="right">Actions</TableCell>
@@ -266,7 +261,6 @@ const Configuration: React.FC = () => {
                       <TableRow key={device.address}>
                         <TableCell>{device.address}</TableCell>
                         <TableCell>{device.hostname}</TableCell>
-                        <TableCell>{device.username}</TableCell>
                         <TableCell>
                           <Chip label={device.role} size="small" />
                         </TableCell>
@@ -295,9 +289,12 @@ const Configuration: React.FC = () => {
           </TabPanel>
 
           <TabPanel value={tabValue} index={1}>
-            {/* SSH Configuration */}
+            {/* Global SSH Credentials */}
             <Typography variant="h5" gutterBottom>
-              SSH Configuration
+              Global SSH Credentials
+            </Typography>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              These credentials are used to connect to all network devices
             </Typography>
             <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
@@ -510,13 +507,6 @@ const Configuration: React.FC = () => {
             label="Hostname"
             value={deviceForm.hostname}
             onChange={(e) => setDeviceForm({ ...deviceForm, hostname: e.target.value })}
-            margin="normal"
-          />
-          <TextField
-            fullWidth
-            label="Username"
-            value={deviceForm.username}
-            onChange={(e) => setDeviceForm({ ...deviceForm, username: e.target.value })}
             margin="normal"
           />
           <TextField

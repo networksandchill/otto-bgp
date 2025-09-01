@@ -8,7 +8,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../../api/client'
 import type { SetupAdminRequest, AppConfig } from '../../types'
 
-const steps = ['Setup Token', 'Create Admin', 'Configure System', 'Complete']
+const steps = ['Setup Token', 'Create Admin', 'SSH Credentials', 'Complete']
 
 const SetupWizard: React.FC = () => {
   const [activeStep, setActiveStep] = useState(0)
@@ -71,7 +71,7 @@ const SetupWizard: React.FC = () => {
       case 1:
         return adminData.username && adminData.email && adminData.password.length >= 8
       case 2:
-        return config.ssh.hostname && config.ssh.username
+        return config.ssh.username && (config.ssh.password || config.ssh.key_path)
       default:
         return true
     }
@@ -162,24 +162,14 @@ const SetupWizard: React.FC = () => {
         return (
           <Box>
             <Typography variant="h5" gutterBottom>
-              Basic Configuration
+              Global SSH Credentials
             </Typography>
             <Typography variant="body1" color="text.secondary" gutterBottom>
-              Configure SSH access to your network devices.
+              Configure SSH credentials that will be used to connect to all network devices.
             </Typography>
-            
-            <TextField
-              fullWidth
-              label="Device Hostname/IP"
-              value={config.ssh.hostname}
-              onChange={(e) => setConfig(prev => ({
-                ...prev,
-                ssh: { ...prev.ssh, hostname: e.target.value }
-              }))}
-              margin="normal"
-              required
-              helperText="Primary device for BGP data collection"
-            />
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              These credentials will be applied globally. You can manage individual devices after setup.
+            </Typography>
             
             <TextField
               fullWidth
@@ -191,6 +181,7 @@ const SetupWizard: React.FC = () => {
               }))}
               margin="normal"
               required
+              helperText="Common service account used for all routers"
             />
             
             <TextField
@@ -203,7 +194,7 @@ const SetupWizard: React.FC = () => {
                 ssh: { ...prev.ssh, password: e.target.value }
               }))}
               margin="normal"
-              helperText="You can configure SSH keys later"
+              helperText="You can configure SSH keys later in Settings"
             />
           </Box>
         )

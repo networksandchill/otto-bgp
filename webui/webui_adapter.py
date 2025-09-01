@@ -324,67 +324,51 @@ async def setup_config(request: Request):
         os.replace(tmp_path, CONFIG_PATH)
         os.chmod(CONFIG_PATH, 0o600)
 
-        # Create devices.csv from SSH configuration if provided
-        if 'ssh' in config_data and config_data['ssh'].get('hostname'):
-            devices_csv_path = CONFIG_DIR / 'devices.csv'
-            try:
-                # Extract SSH details
-                ssh_config = config_data['ssh']
-                hostname = ssh_config.get('hostname', '').strip()
-                username = ssh_config.get('username', 'admin').strip()
-                password = ssh_config.get('password', '').strip()
-                key_path = ssh_config.get('key_path', '').strip()
+        # Create empty devices.csv if it doesn't exist
+        devices_csv_path = CONFIG_DIR / 'devices.csv'
+        if not devices_csv_path.exists():
+            # Create empty CSV with headers only
+            csv_content = "address,hostname,role,region\n"
+            
+            # Write devices.csv atomically
+            with tempfile.NamedTemporaryFile('w', dir=str(devices_csv_path.parent), delete=False) as tmp:
+                tmp.write(csv_content)
+                tmp_path = tmp.name
 
-                # Determine if hostname is IP or DNS name
-                import socket
-                device_name = hostname
-                try:
-                    # Try to parse as IP address
-                    socket.inet_aton(hostname.split(':')[0])  # Remove port if present
-                    # It's an IP, create a generic hostname
-                    device_name = f"router-{hostname.replace('.', '-').replace(':', '-')}"
-                except socket.error:
-                    # It's already a hostname, use as-is
-                    pass
+            os.replace(tmp_path, devices_csv_path)
+            os.chmod(devices_csv_path, 0o644)
+            logger.info("Created empty devices.csv")
+            audit_log("devices_csv_created", user="setup", resource="empty")
 
-                # Create CSV content
-                csv_content = "address,hostname,username,role,region\n"
-                csv_content += f"{hostname},{device_name},{username},edge,default\n"
+        # Create otto.env file with SSH credentials if provided
+        if 'ssh' in config_data:
+            otto_env_path = CONFIG_DIR / 'otto.env'
+            env_lines = []
 
-                # Write devices.csv atomically
-                with tempfile.NamedTemporaryFile('w', dir=str(devices_csv_path.parent), delete=False) as tmp:
-                    tmp.write(csv_content)
-                    tmp_path = tmp.name
+            # Read existing file if it exists
+            if otto_env_path.exists():
+                with open(otto_env_path, 'r') as f:
+                    env_lines = f.readlines()
 
-                os.replace(tmp_path, devices_csv_path)
-                os.chmod(devices_csv_path, 0o644)
+            # Update or add SSH settings
+            ssh_config = config_data['ssh']
+            username = ssh_config.get('username', 'admin').strip()
+            password = ssh_config.get('password', '').strip()
+            key_path = ssh_config.get('key_path', '').strip()
+            
+            ssh_settings = {}
+            if username:
+                ssh_settings['SSH_USERNAME'] = username
+            if password:
+                ssh_settings['SSH_PASSWORD'] = password
+            elif key_path:
+                ssh_settings['SSH_KEY_PATH'] = key_path
+            else:
+                # Default to common SSH key location
+                ssh_settings['SSH_KEY_PATH'] = '/home/otto-bgp/.ssh/id_rsa'
 
-                logger.info(f"Created devices.csv with device: {hostname}")
-                audit_log("devices_csv_created", user="setup", resource=hostname)
-
-                # Create otto.env file with SSH credentials if not exists
-                otto_env_path = CONFIG_DIR / 'otto.env'
-                env_lines = []
-
-                # Read existing file if it exists
-                if otto_env_path.exists():
-                    with open(otto_env_path, 'r') as f:
-                        env_lines = f.readlines()
-
-                # Update or add SSH settings
-                ssh_settings = {}
-                if username:
-                    ssh_settings['SSH_USERNAME'] = username
-                if password:
-                    ssh_settings['SSH_PASSWORD'] = password
-                elif key_path:
-                    ssh_settings['SSH_KEY_PATH'] = key_path
-                else:
-                    # Default to common SSH key location
-                    ssh_settings['SSH_KEY_PATH'] = '/home/otto-bgp/.ssh/id_rsa'
-
-                # Update env_lines with new settings
-                updated_keys = set()
+            # Update env_lines with new settings
+            updated_keys = set()
                 new_lines = []
                 for line in env_lines:
                     if '=' in line:
@@ -603,7 +587,7 @@ async def add_device(request: Request, user: dict = Depends(require_role('admin'
         device_data = await request.json()
         
         # Validate required fields
-        required_fields = ['address', 'hostname', 'username', 'role', 'region']
+        required_fields = ['address', 'hostname', 'role', 'region']
         for field in required_fields:
             if field not in device_data:
                 raise HTTPException(status_code=400, detail=f"Missing required field: {field}")

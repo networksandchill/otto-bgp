@@ -222,7 +222,6 @@ class ApiClient {
   async getDevices(): Promise<{ devices: Array<{
     address: string
     hostname: string
-    username: string
     role: string
     region: string
   }> }> {
@@ -233,7 +232,6 @@ class ApiClient {
   async addDevice(device: {
     address: string
     hostname: string
-    username: string
     role: string
     region: string
   }): Promise<{ success: boolean; device: any }> {
@@ -243,7 +241,6 @@ class ApiClient {
 
   async updateDevice(address: string, device: Partial<{
     hostname: string
-    username: string
     role: string
     region: string
   }>): Promise<{ success: boolean }> {
