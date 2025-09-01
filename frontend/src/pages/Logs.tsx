@@ -11,6 +11,10 @@ import {
   IconButton,
   TextField,
   InputAdornment,
+  Tabs,
+  Tab,
+  Button,
+  CircularProgress,
 } from '@mui/material'
 import {
   Refresh,
@@ -20,6 +24,9 @@ import {
   Warning,
   Info,
   CheckCircle,
+  Description,
+  Terminal,
+  Security,
 } from '@mui/icons-material'
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../api/client'
@@ -31,23 +38,57 @@ interface LogEntry {
   message: string
 }
 
+interface FileLogEntry {
+  timestamp: string
+  level: string
+  message: string
+  module?: string
+  raw: string
+}
+
 const Logs: React.FC = () => {
+  const [selectedTab, setSelectedTab] = useState(0)
   const [selectedService, setSelectedService] = useState('all')
   const [searchTerm, setSearchTerm] = useState('')
   const [logLevel, setLogLevel] = useState('all')
+  const [fileSearchTerm, setFileSearchTerm] = useState('')
+  const [loadMoreOffset, setLoadMoreOffset] = useState(0)
 
-  // Fetch real logs from API
-  const { data: logsData, isLoading, refetch } = useQuery({
+  // Fetch system logs (journalctl)
+  const { data: logsData, isLoading: isLoadingLogs, refetch: refetchLogs } = useQuery({
     queryKey: ['logs', selectedService, logLevel],
     queryFn: () => apiClient.getLogs({
       service: selectedService,
       level: logLevel,
       limit: 200,
     }),
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: selectedTab === 0 ? 10000 : false, // Auto-refresh only for system logs
+    enabled: selectedTab === 0,
   })
 
-  const logs: LogEntry[] = logsData?.logs || []
+  // Fetch audit log
+  const { data: auditLogData, isLoading: isLoadingAudit, refetch: refetchAudit } = useQuery({
+    queryKey: ['audit-log', fileSearchTerm, loadMoreOffset],
+    queryFn: () => apiClient.getLogFileContent('audit.log', {
+      lines: 100,
+      offset: loadMoreOffset,
+      search: fileSearchTerm || undefined,
+    }),
+    enabled: selectedTab === 1,
+  })
+
+  // Fetch otto-bgp log
+  const { data: ottoLogData, isLoading: isLoadingOtto, refetch: refetchOtto } = useQuery({
+    queryKey: ['otto-log', fileSearchTerm, loadMoreOffset],
+    queryFn: () => apiClient.getLogFileContent('otto-bgp.log', {
+      lines: 100,
+      offset: loadMoreOffset,
+      search: fileSearchTerm || undefined,
+    }),
+    enabled: selectedTab === 2,
+  })
+
+  const systemLogs: LogEntry[] = logsData?.logs || []
 
   const getLevelIcon = (level: string) => {
     switch (level) {
@@ -79,7 +120,7 @@ const Logs: React.FC = () => {
     }
   }
 
-  const filteredLogs = logs.filter(log => {
+  const filteredSystemLogs = systemLogs.filter(log => {
     const matchesService = selectedService === 'all' || log.service === selectedService
     const matchesLevel = logLevel === 'all' || log.level === logLevel
     const matchesSearch = searchTerm === '' || 
@@ -88,34 +129,38 @@ const Logs: React.FC = () => {
     return matchesService && matchesLevel && matchesSearch
   })
 
-  if (isLoading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
-        <Typography sx={{ color: '#888' }}>Loading logs...</Typography>
-      </Box>
-    )
+  const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
+    setSelectedTab(newValue)
+    setLoadMoreOffset(0)
+    setFileSearchTerm('')
   }
 
-  return (
-    <Box>
-      {/* Header and Controls */}
-      <Paper sx={{ p: 2, mb: 2, border: '1px solid #333' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-          <Typography variant="h6" sx={{ color: '#f5f5f5', fontWeight: 600 }}>
-            System Logs
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <IconButton size="small" sx={{ color: '#888' }} onClick={() => refetch()}>
-              <Refresh />
-            </IconButton>
-            <IconButton size="small" sx={{ color: '#888' }}>
-              <Download />
-            </IconButton>
-          </Box>
-        </Box>
+  const handleLoadMore = () => {
+    setLoadMoreOffset(prev => prev + 100)
+  }
 
+  const handleFileSearch = () => {
+    setLoadMoreOffset(0)
+    if (selectedTab === 1) {
+      refetchAudit()
+    } else if (selectedTab === 2) {
+      refetchOtto()
+    }
+  }
+
+  const renderSystemLogs = () => {
+    if (isLoadingLogs) {
+      return (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
+          <CircularProgress size={24} sx={{ color: '#888' }} />
+        </Box>
+      )
+    }
+
+    return (
+      <>
         {/* Filters */}
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
           <FormControl size="small" sx={{ minWidth: 150 }}>
             <InputLabel sx={{ color: '#888' }}>Service</InputLabel>
             <Select
@@ -177,21 +222,25 @@ const Logs: React.FC = () => {
               ),
             }}
           />
-        </Box>
-      </Paper>
 
-      {/* Log Entries */}
-      <Paper sx={{ border: '1px solid #333', overflow: 'hidden' }}>
+          <IconButton size="small" sx={{ color: '#888' }} onClick={() => refetchLogs()}>
+            <Refresh />
+          </IconButton>
+        </Box>
+
+        {/* Log Entries */}
         <Box
           sx={{
-            maxHeight: 'calc(100vh - 280px)',
+            maxHeight: 'calc(100vh - 350px)',
             overflow: 'auto',
             bgcolor: '#0a0a0a',
             fontFamily: 'monospace',
             fontSize: '0.875rem',
+            border: '1px solid #333',
+            borderRadius: 1,
           }}
         >
-          {filteredLogs.map((log, index) => (
+          {filteredSystemLogs.map((log, index) => (
             <Box
               key={index}
               sx={{
@@ -244,14 +293,264 @@ const Logs: React.FC = () => {
               </Typography>
             </Box>
           ))}
+
+          {filteredSystemLogs.length === 0 && (
+            <Box sx={{ p: 4, textAlign: 'center' }}>
+              <Typography variant="body2" sx={{ color: '#666' }}>
+                No logs found matching the current filters
+              </Typography>
+            </Box>
+          )}
+        </Box>
+      </>
+    )
+  }
+
+  const renderFileLog = (
+    data: any,
+    isLoading: boolean,
+    refetch: () => void,
+    icon: React.ReactNode,
+    title: string
+  ) => {
+    if (isLoading && loadMoreOffset === 0) {
+      return (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
+          <CircularProgress size={24} sx={{ color: '#888' }} />
+        </Box>
+      )
+    }
+
+    const entries: FileLogEntry[] = data?.entries || []
+
+    return (
+      <>
+        {/* Search Bar */}
+        <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+          <TextField
+            size="small"
+            placeholder={`Search ${title.toLowerCase()}...`}
+            value={fileSearchTerm}
+            onChange={(e) => setFileSearchTerm(e.target.value)}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleFileSearch()
+              }
+            }}
+            sx={{
+              flexGrow: 1,
+              '& .MuiOutlinedInput-root': {
+                color: '#f5f5f5',
+                '& fieldset': { borderColor: '#333' },
+                '&:hover fieldset': { borderColor: '#666' },
+              },
+            }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search sx={{ color: '#888', fontSize: 20 }} />
+                </InputAdornment>
+              ),
+            }}
+          />
+
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={handleFileSearch}
+            sx={{
+              borderColor: '#333',
+              color: '#888',
+              '&:hover': { borderColor: '#666' },
+            }}
+          >
+            Search
+          </Button>
+
+          <IconButton size="small" sx={{ color: '#888' }} onClick={() => refetch()}>
+            <Refresh />
+          </IconButton>
+
+          <IconButton size="small" sx={{ color: '#888' }}>
+            <Download />
+          </IconButton>
         </Box>
 
-        {filteredLogs.length === 0 && (
-          <Box sx={{ p: 4, textAlign: 'center' }}>
-            <Typography variant="body2" sx={{ color: '#666' }}>
-              No logs found matching the current filters
+        {/* File Info */}
+        {data && (
+          <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
+            {icon}
+            <Typography variant="body2" sx={{ color: '#888' }}>
+              {title} • Total lines: {data.total_lines?.toLocaleString() || 0}
+              {fileSearchTerm && ` • Filtered by: "${fileSearchTerm}"`}
             </Typography>
           </Box>
+        )}
+
+        {/* Log Entries */}
+        <Box
+          sx={{
+            maxHeight: 'calc(100vh - 350px)',
+            overflow: 'auto',
+            bgcolor: '#0a0a0a',
+            fontFamily: 'monospace',
+            fontSize: '0.875rem',
+            border: '1px solid #333',
+            borderRadius: 1,
+          }}
+        >
+          {entries.map((entry, index) => (
+            <Box
+              key={index}
+              sx={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 2,
+                p: 1.5,
+                borderBottom: '1px solid #1a1a1a',
+                '&:hover': { bgcolor: '#1a1a1a' },
+              }}
+            >
+              {entry.timestamp && (
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: '#666',
+                    fontFamily: 'monospace',
+                    minWidth: 150,
+                    flexShrink: 0,
+                  }}
+                >
+                  {entry.timestamp}
+                </Typography>
+              )}
+
+              <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 20 }}>
+                {getLevelIcon(entry.level)}
+              </Box>
+
+              {entry.module && (
+                <Chip
+                  label={entry.module}
+                  size="small"
+                  sx={{
+                    height: 20,
+                    fontSize: '0.7rem',
+                    bgcolor: '#1a1a1a',
+                    color: '#888',
+                    border: '1px solid #333',
+                    minWidth: 80,
+                  }}
+                />
+              )}
+
+              <Typography
+                sx={{
+                  color: getLevelColor(entry.level),
+                  fontFamily: 'monospace',
+                  flexGrow: 1,
+                  wordBreak: 'break-word',
+                }}
+              >
+                {entry.message || entry.raw}
+              </Typography>
+            </Box>
+          ))}
+
+          {entries.length === 0 && !isLoading && (
+            <Box sx={{ p: 4, textAlign: 'center' }}>
+              <Typography variant="body2" sx={{ color: '#666' }}>
+                {fileSearchTerm ? 'No logs found matching your search' : 'No log entries found'}
+              </Typography>
+            </Box>
+          )}
+
+          {/* Load More Button */}
+          {data?.has_more && (
+            <Box sx={{ p: 2, textAlign: 'center' }}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={handleLoadMore}
+                disabled={isLoading}
+                sx={{
+                  borderColor: '#333',
+                  color: '#888',
+                  '&:hover': { borderColor: '#666' },
+                }}
+              >
+                {isLoading ? (
+                  <CircularProgress size={16} sx={{ color: '#888' }} />
+                ) : (
+                  'Load More'
+                )}
+              </Button>
+            </Box>
+          )}
+        </Box>
+      </>
+    )
+  }
+
+  return (
+    <Box>
+      {/* Header */}
+      <Paper sx={{ p: 2, mb: 2, border: '1px solid #333' }}>
+        <Typography variant="h6" sx={{ color: '#f5f5f5', fontWeight: 600, mb: 2 }}>
+          System Logs
+        </Typography>
+
+        {/* Tabs */}
+        <Tabs
+          value={selectedTab}
+          onChange={handleTabChange}
+          sx={{
+            borderBottom: '1px solid #333',
+            '& .MuiTab-root': {
+              color: '#888',
+              '&.Mui-selected': {
+                color: '#f5f5f5',
+              },
+            },
+            '& .MuiTabs-indicator': {
+              backgroundColor: '#00a86b',
+            },
+          }}
+        >
+          <Tab
+            label="System Logs"
+            icon={<Terminal sx={{ fontSize: 20 }} />}
+            iconPosition="start"
+          />
+          <Tab
+            label="Audit Log"
+            icon={<Security sx={{ fontSize: 20 }} />}
+            iconPosition="start"
+          />
+          <Tab
+            label="Application Log"
+            icon={<Description sx={{ fontSize: 20 }} />}
+            iconPosition="start"
+          />
+        </Tabs>
+      </Paper>
+
+      {/* Content */}
+      <Paper sx={{ p: 2, border: '1px solid #333' }}>
+        {selectedTab === 0 && renderSystemLogs()}
+        {selectedTab === 1 && renderFileLog(
+          auditLogData,
+          isLoadingAudit,
+          refetchAudit,
+          <Security sx={{ color: '#888', fontSize: 20 }} />,
+          'Audit Log'
+        )}
+        {selectedTab === 2 && renderFileLog(
+          ottoLogData,
+          isLoadingOtto,
+          refetchOtto,
+          <Description sx={{ color: '#888', fontSize: 20 }} />,
+          'Otto BGP Log'
         )}
       </Paper>
     </Box>

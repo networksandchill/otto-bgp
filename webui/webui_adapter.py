@@ -2030,6 +2030,180 @@ async def get_system_logs(
         logger.error(f"Failed to get logs: {e}")
         return JSONResponse({"error": "Failed to get logs"}, status_code=500)
 
+# File-based logs endpoints
+@app.get("/api/logs/files")
+async def get_available_log_files(user: dict = Depends(require_role('read_only'))):
+    """Get list of available log files"""
+    try:
+        log_files = []
+        log_dir = Path("/var/lib/otto-bgp/logs")
+        
+        # Check for audit.log
+        audit_log = log_dir / "audit.log"
+        if audit_log.exists():
+            log_files.append({
+                "name": "audit.log",
+                "path": str(audit_log),
+                "size": audit_log.stat().st_size,
+                "modified": audit_log.stat().st_mtime,
+                "description": "WebUI audit trail - user actions and security events"
+            })
+        
+        # Check for otto-bgp.log
+        otto_log = log_dir / "otto-bgp.log"
+        if otto_log.exists():
+            log_files.append({
+                "name": "otto-bgp.log", 
+                "path": str(otto_log),
+                "size": otto_log.stat().st_size,
+                "modified": otto_log.stat().st_mtime,
+                "description": "Main application log - BGP operations and pipeline execution"
+            })
+            
+        return JSONResponse({"files": log_files})
+    except Exception as e:
+        logger.error(f"Failed to list log files: {e}")
+        return JSONResponse({"error": "Failed to list log files"}, status_code=500)
+
+@app.get("/api/logs/file/{filename}")
+async def get_log_file_content(
+    filename: str,
+    lines: int = 500,
+    offset: int = 0,
+    search: str = None,
+    user: dict = Depends(require_role('read_only'))
+):
+    """Get contents of a specific log file with pagination and search"""
+    try:
+        # Validate filename to prevent path traversal
+        if filename not in ["audit.log", "otto-bgp.log"]:
+            return JSONResponse({"error": "Invalid log file"}, status_code=400)
+        
+        log_dir = Path("/var/lib/otto-bgp/logs")
+        log_file = log_dir / filename
+        
+        if not log_file.exists():
+            return JSONResponse({"error": f"Log file {filename} not found"}, status_code=404)
+        
+        # Read the log file
+        all_lines = []
+        try:
+            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                all_lines = f.readlines()
+        except Exception as e:
+            logger.error(f"Failed to read {filename}: {e}")
+            return JSONResponse({"error": f"Failed to read {filename}"}, status_code=500)
+        
+        # Apply search filter if provided
+        if search:
+            search_lower = search.lower()
+            filtered_lines = []
+            for line in all_lines:
+                if search_lower in line.lower():
+                    filtered_lines.append(line)
+            all_lines = filtered_lines
+        
+        # Reverse to show most recent first
+        all_lines.reverse()
+        
+        # Apply pagination
+        total_lines = len(all_lines)
+        start = offset
+        end = min(offset + lines, total_lines)
+        page_lines = all_lines[start:end]
+        
+        # Parse log entries based on file type
+        entries = []
+        
+        if filename == "audit.log":
+            # Parse audit log format
+            for line in page_lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    # Audit log format: timestamp - level - message
+                    parts = line.split(' - ', 2)
+                    if len(parts) >= 3:
+                        entries.append({
+                            "timestamp": parts[0],
+                            "level": parts[1].lower(),
+                            "message": parts[2],
+                            "raw": line
+                        })
+                    else:
+                        entries.append({
+                            "timestamp": "",
+                            "level": "info",
+                            "message": line,
+                            "raw": line
+                        })
+                except:
+                    entries.append({
+                        "timestamp": "",
+                        "level": "info", 
+                        "message": line,
+                        "raw": line
+                    })
+                    
+        elif filename == "otto-bgp.log":
+            # Parse otto-bgp log format
+            for line in page_lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    # Otto log format: timestamp - module - level - message
+                    parts = line.split(' - ', 3)
+                    if len(parts) >= 4:
+                        entries.append({
+                            "timestamp": parts[0],
+                            "module": parts[1],
+                            "level": parts[2].lower(),
+                            "message": parts[3],
+                            "raw": line
+                        })
+                    elif len(parts) >= 3:
+                        entries.append({
+                            "timestamp": parts[0],
+                            "module": "",
+                            "level": parts[1].lower(),
+                            "message": parts[2],
+                            "raw": line
+                        })
+                    else:
+                        entries.append({
+                            "timestamp": "",
+                            "module": "",
+                            "level": "info",
+                            "message": line,
+                            "raw": line
+                        })
+                except:
+                    entries.append({
+                        "timestamp": "",
+                        "module": "",
+                        "level": "info",
+                        "message": line,
+                        "raw": line
+                    })
+        
+        # Audit log the file access
+        audit_log(f"log_file_viewed", user=user.get('sub'), resource=filename)
+        
+        return JSONResponse({
+            "filename": filename,
+            "entries": entries,
+            "total_lines": total_lines,
+            "offset": offset,
+            "limit": lines,
+            "has_more": end < total_lines
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get log file content: {e}")
+        return JSONResponse({"error": "Failed to get log file content"}, status_code=500)
+
 # Catch-all route for client-side routing - MUST be last
 
 

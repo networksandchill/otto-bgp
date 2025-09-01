@@ -218,6 +218,44 @@ class ApiClient {
     return response.data
   }
 
+  async getLogFiles(): Promise<{ files: Array<{
+    name: string
+    path: string
+    size: number
+    modified: number
+    description: string
+  }> }> {
+    const response = await this.client.get('/logs/files')
+    return response.data
+  }
+
+  async getLogFileContent(filename: string, params?: {
+    lines?: number
+    offset?: number
+    search?: string
+  }): Promise<{
+    filename: string
+    entries: Array<{
+      timestamp: string
+      level: string
+      message: string
+      module?: string
+      raw: string
+    }>
+    total_lines: number
+    offset: number
+    limit: number
+    has_more: boolean
+  }> {
+    const searchParams = new URLSearchParams()
+    if (params?.lines) searchParams.append('lines', params.lines.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+    if (params?.search) searchParams.append('search', params.search)
+    
+    const response = await this.client.get(`/logs/file/${filename}?${searchParams}`)
+    return response.data
+  }
+
   // Device Management
   async getDevices(): Promise<{ devices: Array<{
     address: string
