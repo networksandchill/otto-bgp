@@ -1162,7 +1162,7 @@ def load_config_from_otto_env() -> dict:
         config['network_security'] = {
             'ssh_known_hosts': env_dict.get('OTTO_BGP_SSH_KNOWN_HOSTS', '/var/lib/otto-bgp/ssh-keys/known_hosts'),
             'ssh_connection_timeout': int(env_dict.get('OTTO_BGP_SSH_CONNECTION_TIMEOUT', '30')),
-            'ssh_max_workers': int(env_dict.get('OTTO_BGP_SSH_MAX_WORKERS', '5')),
+            'ssh_max_workers': int(float(env_dict.get('OTTO_BGP_SSH_MAX_WORKERS', '5'))),
             'strict_host_verification': env_dict.get('OTTO_BGP_STRICT_HOST_VERIFICATION', 'true').lower() == 'true'
         }
         
@@ -1186,7 +1186,7 @@ def load_config_from_otto_env() -> dict:
             config['smtp'] = {
                 'enabled': True,
                 'host': env_dict.get('OTTO_BGP_SMTP_SERVER', ''),
-                'port': int(env_dict.get('OTTO_BGP_SMTP_PORT', '587')),
+                'port': int(float(env_dict.get('OTTO_BGP_SMTP_PORT', '587'))),
                 'use_tls': env_dict.get('OTTO_BGP_SMTP_USE_TLS', 'true').lower() == 'true',
                 'username': env_dict.get('OTTO_BGP_SMTP_USERNAME', ''),
                 'password': env_dict.get('OTTO_BGP_SMTP_PASSWORD', ''),
@@ -2038,32 +2038,60 @@ async def get_available_log_files(user: dict = Depends(require_role('read_only')
         log_files = []
         log_dir = Path("/var/lib/otto-bgp/logs")
         
+        # Ensure log directory exists
+        if not log_dir.exists():
+            logger.warning(f"Log directory does not exist: {log_dir}")
+            return JSONResponse({"files": [], "error": f"Log directory not found: {log_dir}"})
+        
         # Check for audit.log
         audit_log = log_dir / "audit.log"
         if audit_log.exists():
-            log_files.append({
-                "name": "audit.log",
-                "path": str(audit_log),
-                "size": audit_log.stat().st_size,
-                "modified": audit_log.stat().st_mtime,
-                "description": "WebUI audit trail - user actions and security events"
-            })
+            try:
+                stat = audit_log.stat()
+                log_files.append({
+                    "name": "audit.log",
+                    "path": str(audit_log),
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                    "description": "WebUI audit trail - user actions and security events"
+                })
+            except Exception as e:
+                logger.error(f"Failed to stat audit.log: {e}")
         
         # Check for otto-bgp.log
         otto_log = log_dir / "otto-bgp.log"
         if otto_log.exists():
-            log_files.append({
-                "name": "otto-bgp.log", 
-                "path": str(otto_log),
-                "size": otto_log.stat().st_size,
-                "modified": otto_log.stat().st_mtime,
-                "description": "Main application log - BGP operations and pipeline execution"
-            })
+            try:
+                stat = otto_log.stat()
+                log_files.append({
+                    "name": "otto-bgp.log", 
+                    "path": str(otto_log),
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                    "description": "Main application log - BGP operations and pipeline execution"
+                })
+            except Exception as e:
+                logger.error(f"Failed to stat otto-bgp.log: {e}")
+        
+        # Also check for rotated audit logs
+        for rotated_log in log_dir.glob("audit.log.*"):
+            if rotated_log.is_file():
+                try:
+                    stat = rotated_log.stat()
+                    log_files.append({
+                        "name": rotated_log.name,
+                        "path": str(rotated_log),
+                        "size": stat.st_size,
+                        "modified": stat.st_mtime,
+                        "description": "Rotated audit log"
+                    })
+                except Exception as e:
+                    logger.error(f"Failed to stat {rotated_log.name}: {e}")
             
         return JSONResponse({"files": log_files})
     except Exception as e:
-        logger.error(f"Failed to list log files: {e}")
-        return JSONResponse({"error": "Failed to list log files"}, status_code=500)
+        logger.error(f"Failed to list log files: {e}", exc_info=True)
+        return JSONResponse({"error": f"Failed to list log files: {str(e)}"}, status_code=500)
 
 @app.get("/api/logs/file/{filename}")
 async def get_log_file_content(
@@ -2075,24 +2103,34 @@ async def get_log_file_content(
 ):
     """Get contents of a specific log file with pagination and search"""
     try:
-        # Validate filename to prevent path traversal
-        if filename not in ["audit.log", "otto-bgp.log"]:
+        # Validate filename to prevent path traversal - also allow rotated logs
+        if not (filename == "audit.log" or filename == "otto-bgp.log" or filename.startswith("audit.log.")):
             return JSONResponse({"error": "Invalid log file"}, status_code=400)
         
         log_dir = Path("/var/lib/otto-bgp/logs")
         log_file = log_dir / filename
         
         if not log_file.exists():
-            return JSONResponse({"error": f"Log file {filename} not found"}, status_code=404)
+            logger.warning(f"Log file not found: {log_file}")
+            return JSONResponse({"error": f"Log file {filename} not found at {log_file}"}, status_code=404)
+        
+        # Check if file is readable
+        if not os.access(log_file, os.R_OK):
+            logger.error(f"Log file not readable: {log_file}")
+            return JSONResponse({"error": f"Log file {filename} is not readable (permission denied)"}, status_code=403)
         
         # Read the log file
         all_lines = []
         try:
             with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                 all_lines = f.readlines()
+            logger.info(f"Successfully read {len(all_lines)} lines from {filename}")
+        except PermissionError as e:
+            logger.error(f"Permission denied reading {filename}: {e}")
+            return JSONResponse({"error": f"Permission denied reading {filename}"}, status_code=403)
         except Exception as e:
-            logger.error(f"Failed to read {filename}: {e}")
-            return JSONResponse({"error": f"Failed to read {filename}"}, status_code=500)
+            logger.error(f"Failed to read {filename}: {e}", exc_info=True)
+            return JSONResponse({"error": f"Failed to read {filename}: {str(e)}"}, status_code=500)
         
         # Apply search filter if provided
         if search:
