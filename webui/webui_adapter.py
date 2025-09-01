@@ -1007,6 +1007,139 @@ def redact_sensitive_fields(config: Dict[str, Any]) -> Dict[str, Any]:
     return config
 
 
+def sync_config_to_otto_env(config: dict) -> bool:
+    """Sync configuration to otto.env file"""
+    try:
+        otto_env_path = CONFIG_DIR / 'otto.env'
+        env_dict = {}
+        
+        # Read existing otto.env if it exists
+        if otto_env_path.exists():
+            with open(otto_env_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        env_dict[key.strip()] = value.strip()
+        
+        # Update with configuration values
+        # SSH settings
+        if 'ssh' in config:
+            if config['ssh'].get('username'):
+                env_dict['SSH_USERNAME'] = config['ssh']['username']
+            if config['ssh'].get('password'):
+                env_dict['SSH_PASSWORD'] = config['ssh']['password']
+            elif config['ssh'].get('key_path'):
+                env_dict['SSH_KEY_PATH'] = config['ssh']['key_path']
+        
+        # RPKI settings
+        if 'rpki' in config:
+            rpki = config['rpki']
+            if 'enabled' in rpki:
+                env_dict['OTTO_BGP_RPKI_ENABLED'] = str(rpki['enabled']).lower()
+            if rpki.get('cache_dir'):
+                env_dict['OTTO_BGP_RPKI_CACHE_DIR'] = rpki['cache_dir']
+            if rpki.get('validator_url'):
+                env_dict['OTTO_BGP_RPKI_VALIDATOR_URL'] = rpki['validator_url']
+            if 'refresh_interval' in rpki:
+                env_dict['OTTO_BGP_RPKI_REFRESH_INTERVAL'] = str(rpki['refresh_interval'])
+            if 'strict_validation' in rpki:
+                env_dict['OTTO_BGP_RPKI_STRICT'] = str(rpki['strict_validation']).lower()
+        
+        # BGPq4 settings
+        if 'bgpq4' in config:
+            bgpq4 = config['bgpq4']
+            if bgpq4.get('mode'):
+                env_dict['OTTO_BGP_BGPQ4_MODE'] = bgpq4['mode']
+            if 'timeout' in bgpq4:
+                env_dict['OTTO_BGP_BGPQ4_TIMEOUT'] = str(bgpq4['timeout'])
+            if bgpq4.get('irr_source'):
+                env_dict['OTTO_BGP_IRR_SOURCE'] = bgpq4['irr_source']
+            if 'aggregate_prefixes' in bgpq4:
+                env_dict['OTTO_BGP_AGGREGATE_PREFIXES'] = str(bgpq4['aggregate_prefixes']).lower()
+            if 'ipv4_enabled' in bgpq4:
+                env_dict['OTTO_BGP_IPV4_ENABLED'] = str(bgpq4['ipv4_enabled']).lower()
+            if 'ipv6_enabled' in bgpq4:
+                env_dict['OTTO_BGP_IPV6_ENABLED'] = str(bgpq4['ipv6_enabled']).lower()
+        
+        # Guardrail settings
+        if 'guardrails' in config:
+            gr = config['guardrails']
+            if 'enabled' in gr:
+                env_dict['OTTO_BGP_GUARDRAILS_ENABLED'] = str(gr['enabled']).lower()
+            if 'max_prefix_threshold' in gr:
+                env_dict['OTTO_BGP_AUTO_APPLY_THRESHOLD'] = str(gr['max_prefix_threshold'])
+            if 'max_session_loss_percent' in gr:
+                env_dict['OTTO_BGP_MAX_SESSION_LOSS_PERCENT'] = str(gr['max_session_loss_percent'])
+            if 'max_route_loss_percent' in gr:
+                env_dict['OTTO_BGP_MAX_ROUTE_LOSS_PERCENT'] = str(gr['max_route_loss_percent'])
+            if 'bogon_check_enabled' in gr:
+                env_dict['OTTO_BGP_BOGON_CHECK_ENABLED'] = str(gr['bogon_check_enabled']).lower()
+            if 'require_confirmation' in gr:
+                env_dict['OTTO_BGP_REQUIRE_CONFIRMATION'] = str(gr['require_confirmation']).lower()
+            if 'monitoring_duration' in gr:
+                env_dict['OTTO_BGP_MONITORING_DURATION_SECONDS'] = str(gr['monitoring_duration'])
+        
+        # Network Security settings
+        if 'network_security' in config:
+            ns = config['network_security']
+            if ns.get('ssh_known_hosts'):
+                env_dict['OTTO_BGP_SSH_KNOWN_HOSTS'] = ns['ssh_known_hosts']
+            if 'ssh_connection_timeout' in ns:
+                env_dict['OTTO_BGP_SSH_CONNECTION_TIMEOUT'] = str(ns['ssh_connection_timeout'])
+            if 'ssh_max_workers' in ns:
+                env_dict['OTTO_BGP_SSH_MAX_WORKERS'] = str(ns['ssh_max_workers'])
+            if 'strict_host_verification' in ns:
+                env_dict['OTTO_BGP_STRICT_HOST_VERIFICATION'] = str(ns['strict_host_verification']).lower()
+            if ns.get('allowed_networks'):
+                env_dict['OTTO_BGP_ALLOWED_NETWORKS'] = ','.join(ns['allowed_networks'])
+            if ns.get('blocked_networks'):
+                env_dict['OTTO_BGP_BLOCKED_NETWORKS'] = ','.join(ns['blocked_networks'])
+        
+        # SMTP settings
+        if 'smtp' in config and config['smtp'].get('enabled'):
+            smtp = config['smtp']
+            env_dict['OTTO_BGP_EMAIL_ENABLED'] = 'true'
+            if smtp.get('host'):
+                env_dict['OTTO_BGP_SMTP_SERVER'] = smtp['host']
+            if smtp.get('port'):
+                env_dict['OTTO_BGP_SMTP_PORT'] = str(smtp['port'])
+            if smtp.get('use_tls'):
+                env_dict['OTTO_BGP_SMTP_USE_TLS'] = str(smtp['use_tls']).lower()
+            if smtp.get('username'):
+                env_dict['OTTO_BGP_SMTP_USERNAME'] = smtp['username']
+            if smtp.get('password'):
+                env_dict['OTTO_BGP_SMTP_PASSWORD'] = smtp['password']
+            if smtp.get('from_address'):
+                env_dict['OTTO_BGP_EMAIL_FROM'] = smtp['from_address']
+            if smtp.get('to_addresses'):
+                env_dict['OTTO_BGP_EMAIL_TO'] = ','.join(smtp['to_addresses'])
+        else:
+            env_dict['OTTO_BGP_EMAIL_ENABLED'] = 'false'
+        
+        # Write otto.env atomically
+        with tempfile.NamedTemporaryFile('w', dir=str(otto_env_path.parent), delete=False) as tmp:
+            # Write a header
+            tmp.write("# Otto BGP Configuration\n")
+            tmp.write(f"# Generated by WebUI at {datetime.utcnow().isoformat()}\n\n")
+            
+            # Write sorted environment variables
+            for key in sorted(env_dict.keys()):
+                tmp.write(f"{key}={env_dict[key]}\n")
+            
+            tmp_path = tmp.name
+        
+        os.replace(tmp_path, otto_env_path)
+        os.chmod(otto_env_path, 0o600)
+        
+        logger.info("Successfully synced configuration to otto.env")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to sync config to otto.env: {e}")
+        return False
+
+
 def validate_smtp_config(smtp: Dict[str, Any]) -> List[Dict[str, str]]:
     """Validate SMTP configuration"""
     issues = []
@@ -1117,12 +1250,18 @@ async def update_config(request: Request, user: dict = Depends(require_role('adm
 
         # Atomic rename
         os.replace(tmp_path, CONFIG_PATH)
+        
+        # Sync configuration to otto.env
+        env_sync_success = sync_config_to_otto_env(new_config)
+        if not env_sync_success:
+            logger.warning("Failed to sync configuration to otto.env")
 
         audit_log("config_updated", user=user.get('sub'))
         return JSONResponse({
             "success": True,
             "backup": backup_path,
-            "message": "Configuration updated successfully"
+            "message": "Configuration updated successfully",
+            "env_synced": env_sync_success
         })
 
     except Exception as e:

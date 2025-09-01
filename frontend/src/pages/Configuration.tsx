@@ -9,7 +9,9 @@ import {
 import { 
   Save as SaveIcon, Science as TestIcon, Add as AddIcon,
   Edit as EditIcon, Delete as DeleteIcon, Router as RouterIcon,
-  Email as EmailIcon, Security as SecurityIcon
+  Email as EmailIcon, Security as SecurityIcon, Shield as ShieldIcon,
+  VerifiedUser as VerifiedIcon, Build as BuildIcon, 
+  NetworkCheck as NetworkIcon
 } from '@mui/icons-material'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
@@ -214,10 +216,14 @@ const Configuration: React.FC = () => {
       </Typography>
 
       <Paper sx={{ mt: 3 }}>
-        <Tabs value={tabValue} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}>
+        <Tabs value={tabValue} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }} variant="scrollable" scrollButtons="auto">
           <Tab icon={<RouterIcon />} label="Devices" />
-          <Tab icon={<SecurityIcon />} label="Global SSH Credentials" />
-          <Tab icon={<EmailIcon />} label="SMTP Settings" />
+          <Tab icon={<SecurityIcon />} label="Global SSH" />
+          <Tab icon={<EmailIcon />} label="SMTP" />
+          <Tab icon={<VerifiedIcon />} label="RPKI Validation" />
+          <Tab icon={<BuildIcon />} label="BGPq4" />
+          <Tab icon={<ShieldIcon />} label="Guardrails" />
+          <Tab icon={<NetworkIcon />} label="Network Security" />
         </Tabs>
 
         <Box sx={{ p: 3 }}>
@@ -447,6 +453,347 @@ const Configuration: React.FC = () => {
                 </Box>
               </>
             )}
+          </TabPanel>
+
+          {/* RPKI Validation Configuration */}
+          <TabPanel value={tabValue} index={3}>
+            <Typography variant="h5" gutterBottom>
+              RPKI Validation Configuration
+            </Typography>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Configure Route Origin Authorization (ROA) validation settings
+            </Typography>
+            
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.rpki?.enabled || false}
+                      onChange={(e) => handleConfigChange('rpki', 'enabled', e.target.checked)}
+                    />
+                  }
+                  label="Enable RPKI Validation"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Cache Directory"
+                  value={config.rpki?.cache_dir || '/var/lib/otto-bgp/rpki'}
+                  onChange={(e) => handleConfigChange('rpki', 'cache_dir', e.target.value)}
+                  margin="normal"
+                  helperText="Directory for RPKI cache files"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Validator URL"
+                  value={config.rpki?.validator_url || ''}
+                  onChange={(e) => handleConfigChange('rpki', 'validator_url', e.target.value)}
+                  margin="normal"
+                  helperText="RPKI validator service URL"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Refresh Interval (hours)"
+                  type="number"
+                  value={config.rpki?.refresh_interval || 24}
+                  onChange={(e) => handleConfigChange('rpki', 'refresh_interval', parseInt(e.target.value))}
+                  margin="normal"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.rpki?.strict_validation || false}
+                      onChange={(e) => handleConfigChange('rpki', 'strict_validation', e.target.checked)}
+                    />
+                  }
+                  label="Strict Validation (reject invalid ROAs)"
+                />
+              </Grid>
+            </Grid>
+          </TabPanel>
+
+          {/* BGPq4 Configuration */}
+          <TabPanel value={tabValue} index={4}>
+            <Typography variant="h5" gutterBottom>
+              BGPq4 Configuration
+            </Typography>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Configure BGP policy generation settings
+            </Typography>
+            
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Execution Mode"
+                  value={config.bgpq4?.mode || 'auto'}
+                  onChange={(e) => handleConfigChange('bgpq4', 'mode', e.target.value)}
+                  margin="normal"
+                  select
+                  SelectProps={{ native: true }}
+                  helperText="How to run bgpq4"
+                >
+                  <option value="auto">Auto-detect</option>
+                  <option value="native">Native binary</option>
+                  <option value="docker">Docker container</option>
+                  <option value="podman">Podman container</option>
+                </TextField>
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Timeout (seconds)"
+                  type="number"
+                  value={config.bgpq4?.timeout || 45}
+                  onChange={(e) => handleConfigChange('bgpq4', 'timeout', parseInt(e.target.value))}
+                  margin="normal"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="IRR Source"
+                  value={config.bgpq4?.irr_source || 'RADB,RIPE,APNIC'}
+                  onChange={(e) => handleConfigChange('bgpq4', 'irr_source', e.target.value)}
+                  margin="normal"
+                  helperText="Comma-separated list of IRR databases"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.bgpq4?.aggregate_prefixes !== false}
+                      onChange={(e) => handleConfigChange('bgpq4', 'aggregate_prefixes', e.target.checked)}
+                    />
+                  }
+                  label="Aggregate Prefixes"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.bgpq4?.ipv4_enabled !== false}
+                      onChange={(e) => handleConfigChange('bgpq4', 'ipv4_enabled', e.target.checked)}
+                    />
+                  }
+                  label="IPv4 Support"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.bgpq4?.ipv6_enabled || false}
+                      onChange={(e) => handleConfigChange('bgpq4', 'ipv6_enabled', e.target.checked)}
+                    />
+                  }
+                  label="IPv6 Support"
+                />
+              </Grid>
+            </Grid>
+          </TabPanel>
+
+          {/* Guardrail Configuration */}
+          <TabPanel value={tabValue} index={5}>
+            <Typography variant="h5" gutterBottom>
+              Guardrail Configuration
+            </Typography>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Configure safety mechanisms to prevent dangerous policy changes
+            </Typography>
+            
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.guardrails?.enabled !== false}
+                      onChange={(e) => handleConfigChange('guardrails', 'enabled', e.target.checked)}
+                    />
+                  }
+                  label="Enable Guardrails"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Max Prefix Change Threshold"
+                  type="number"
+                  value={config.guardrails?.max_prefix_threshold || 100}
+                  onChange={(e) => handleConfigChange('guardrails', 'max_prefix_threshold', parseInt(e.target.value))}
+                  margin="normal"
+                  helperText="Maximum number of prefix changes allowed"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Max Session Loss (%)"
+                  type="number"
+                  value={config.guardrails?.max_session_loss_percent || 5.0}
+                  onChange={(e) => handleConfigChange('guardrails', 'max_session_loss_percent', parseFloat(e.target.value))}
+                  margin="normal"
+                  helperText="Maximum acceptable BGP session loss percentage"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Max Route Loss (%)"
+                  type="number"
+                  value={config.guardrails?.max_route_loss_percent || 10.0}
+                  onChange={(e) => handleConfigChange('guardrails', 'max_route_loss_percent', parseFloat(e.target.value))}
+                  margin="normal"
+                  helperText="Maximum acceptable route loss percentage"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Monitoring Duration (seconds)"
+                  type="number"
+                  value={config.guardrails?.monitoring_duration || 300}
+                  onChange={(e) => handleConfigChange('guardrails', 'monitoring_duration', parseInt(e.target.value))}
+                  margin="normal"
+                  helperText="Duration to monitor after policy application"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.guardrails?.bogon_check_enabled !== false}
+                      onChange={(e) => handleConfigChange('guardrails', 'bogon_check_enabled', e.target.checked)}
+                    />
+                  }
+                  label="Enable Bogon Prefix Detection"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.guardrails?.require_confirmation || false}
+                      onChange={(e) => handleConfigChange('guardrails', 'require_confirmation', e.target.checked)}
+                    />
+                  }
+                  label="Require Manual Confirmation"
+                />
+              </Grid>
+            </Grid>
+          </TabPanel>
+
+          {/* Network Security Configuration */}
+          <TabPanel value={tabValue} index={6}>
+            <Typography variant="h5" gutterBottom>
+              Network Security Configuration
+            </Typography>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Configure network access and security settings
+            </Typography>
+            
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="SSH Known Hosts File"
+                  value={config.network_security?.ssh_known_hosts || '/var/lib/otto-bgp/ssh-keys/known_hosts'}
+                  onChange={(e) => handleConfigChange('network_security', 'ssh_known_hosts', e.target.value)}
+                  margin="normal"
+                  helperText="Path to SSH known_hosts file"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="SSH Connection Timeout (seconds)"
+                  type="number"
+                  value={config.network_security?.ssh_connection_timeout || 30}
+                  onChange={(e) => handleConfigChange('network_security', 'ssh_connection_timeout', parseInt(e.target.value))}
+                  margin="normal"
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Max Parallel SSH Workers"
+                  type="number"
+                  value={config.network_security?.ssh_max_workers || 5}
+                  onChange={(e) => handleConfigChange('network_security', 'ssh_max_workers', parseInt(e.target.value))}
+                  margin="normal"
+                  helperText="Maximum concurrent SSH connections"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.network_security?.strict_host_verification !== false}
+                      onChange={(e) => handleConfigChange('network_security', 'strict_host_verification', e.target.checked)}
+                    />
+                  }
+                  label="Strict SSH Host Key Verification"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Allowed Networks"
+                  value={config.network_security?.allowed_networks?.join(', ') || ''}
+                  onChange={(e) => handleConfigChange('network_security', 'allowed_networks', 
+                    e.target.value.split(',').map(s => s.trim()).filter(s => s)
+                  )}
+                  margin="normal"
+                  helperText="Comma-separated list of allowed network CIDRs"
+                  multiline
+                  rows={2}
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Blocked Networks"
+                  value={config.network_security?.blocked_networks?.join(', ') || ''}
+                  onChange={(e) => handleConfigChange('network_security', 'blocked_networks',
+                    e.target.value.split(',').map(s => s.trim()).filter(s => s)
+                  )}
+                  margin="normal"
+                  helperText="Comma-separated list of blocked network CIDRs"
+                  multiline
+                  rows={2}
+                />
+              </Grid>
+            </Grid>
           </TabPanel>
         </Box>
       </Paper>
