@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, useLocation, Link as RouterLink } from 'react-router-dom'
 import {
   Box,
   Drawer,
@@ -22,6 +22,7 @@ import {
   Storage as StorageIcon,
   ExitToApp,
   People as PeopleIcon,
+  Person,
 } from '@mui/icons-material'
 import { useAuth } from '../hooks/useAuth'
 
@@ -176,6 +177,10 @@ const CockpitLayout: React.FC = () => {
               horizontal: 'right',
             }}
           >
+            <MenuItem component={RouterLink} to="/profile" onClick={handleClose}>
+              <Person sx={{ mr: 1, fontSize: 20 }} />
+              Profile
+            </MenuItem>
             <MenuItem onClick={handleLogout}>
               <ExitToApp sx={{ mr: 1, fontSize: 20 }} />
               Logout

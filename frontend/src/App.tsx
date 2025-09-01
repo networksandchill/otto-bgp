@@ -13,6 +13,7 @@ import Configuration from './pages/Configuration'
 import RpkiStatus from './pages/RpkiStatus'
 import Logs from './pages/Logs'
 import Users from './pages/Users'
+import Profile from './pages/Profile'
 import SetupWizard from './pages/setup/SetupWizard'
 import apiClient from './api/client'
 
@@ -123,6 +124,11 @@ const AppContent: React.FC = () => {
         <Route path="users" element={
           <RequireRole role="admin">
             <Users />
+          </RequireRole>
+        } />
+        <Route path="profile" element={
+          <RequireRole role="read_only">
+            <Profile />
           </RequireRole>
         } />
       </Route>

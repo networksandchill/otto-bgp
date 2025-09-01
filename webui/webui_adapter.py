@@ -560,6 +560,98 @@ async def logout(user: dict = Depends(get_current_user)):
     return response
 
 
+# Profile Management endpoints
+@app.get("/api/profile")
+async def get_profile(user: dict = Depends(get_current_user)):
+    """Get current user's profile"""
+    try:
+        username = user.get('sub')
+        
+        # Load users file
+        if not USERS_PATH.exists():
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        with open(USERS_PATH) as f:
+            users_data = json.load(f)
+        
+        # Find user
+        for u in users_data.get('users', []):
+            if u.get('username') == username:
+                return JSONResponse({
+                    'username': u.get('username'),
+                    'email': u.get('email', ''),
+                    'role': u.get('role'),
+                    'created_at': u.get('created_at')
+                })
+        
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get profile")
+
+
+@app.put("/api/profile")
+async def update_profile(request: Request, user: dict = Depends(get_current_user)):
+    """Update current user's profile (email and/or password)"""
+    try:
+        data = await request.json()
+        username = user.get('sub')
+        
+        # Load users file
+        if not USERS_PATH.exists():
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        with open(USERS_PATH) as f:
+            users_data = json.load(f)
+        
+        # Find and update user
+        user_found = False
+        for u in users_data.get('users', []):
+            if u.get('username') == username:
+                user_found = True
+                
+                # Verify current password if changing password
+                if 'new_password' in data:
+                    if not data.get('current_password'):
+                        raise HTTPException(status_code=400, detail="Current password required")
+                    
+                    if not bcrypt.verify(data['current_password'], u['password_hash']):
+                        raise HTTPException(status_code=400, detail="Current password is incorrect")
+                    
+                    # Update password
+                    u['password_hash'] = bcrypt.hash(data['new_password'])
+                    audit_log("password_changed", user=username)
+                
+                # Update email if provided
+                if 'email' in data:
+                    u['email'] = data['email']
+                    audit_log("email_updated", user=username, resource=data['email'])
+                
+                break
+        
+        if not user_found:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Write back atomically
+        with tempfile.NamedTemporaryFile('w', dir=str(USERS_PATH.parent), delete=False) as tmp:
+            json.dump(users_data, tmp, indent=2)
+            tmp_path = tmp.name
+        
+        os.replace(tmp_path, USERS_PATH)
+        os.chmod(USERS_PATH, 0o600)
+        
+        return JSONResponse({'success': True, 'message': 'Profile updated successfully'})
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update profile")
+
+
 # Device Management endpoints
 @app.get("/api/devices")
 async def list_devices(user: dict = Depends(get_current_user)):

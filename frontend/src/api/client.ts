@@ -253,6 +253,26 @@ class ApiClient {
     return response.data
   }
 
+  // Profile Management
+  async getUserProfile(): Promise<{
+    username: string
+    email?: string
+    role: string
+    created_at?: string
+  }> {
+    const response = await this.client.get('/profile')
+    return response.data
+  }
+
+  async updateProfile(data: {
+    email?: string
+    current_password?: string
+    new_password?: string
+  }): Promise<{ success: boolean; message?: string }> {
+    const response = await this.client.put('/profile', data)
+    return response.data
+  }
+
   // User Management (Admin only)
   async getUsers(): Promise<{ users: Array<{
     username: string
