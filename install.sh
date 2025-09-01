@@ -26,19 +26,24 @@ TIMEOUT=30
 OTTO_WEBUI_ENABLE_SERVICE_CONTROL="${OTTO_WEBUI_ENABLE_SERVICE_CONTROL:-true}"  # Default to true for WebUI functionality
 
 # Parse arguments
+echo "[DEBUG] Arguments received: $@"
+echo "[DEBUG] Initial INSTALL_MODE: $INSTALL_MODE"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --system)
             INSTALL_MODE="system"
+            echo "[DEBUG] Setting INSTALL_MODE to system"
             shift
             ;;
         --user)
             INSTALL_MODE="user"
+            echo "[DEBUG] Setting INSTALL_MODE to user"
             shift
             ;;
         --autonomous)
             INSTALL_MODE="system"
             AUTONOMOUS_MODE=true
+            echo "[DEBUG] Setting INSTALL_MODE to system (autonomous)"
             shift
             ;;
         --skip-bgpq4)
@@ -68,6 +73,8 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+echo "[DEBUG] Final INSTALL_MODE after parsing: $INSTALL_MODE"
 
 # Set paths
 if [[ "$INSTALL_MODE" == "system" ]]; then
@@ -990,7 +997,9 @@ main() {
     create_systemd_services  # New in v0.3.2
     
     # Deploy WebUI components (system mode only)
+    log_info "Current install mode: $INSTALL_MODE"
     if [[ "$INSTALL_MODE" == "system" ]]; then
+        log_info "Installing WebUI components for system mode..."
         generate_self_signed_cert_if_missing
         generate_jwt_secret_if_missing
         generate_setup_token_if_missing
@@ -999,6 +1008,8 @@ main() {
         create_webui_systemd_service
         configure_webui_sudo_permissions  # Optional: for service control
         enable_webui_service
+    else
+        log_info "Skipping WebUI components (install mode: $INSTALL_MODE)"
     fi
     
     echo ""
