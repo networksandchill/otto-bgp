@@ -26,24 +26,19 @@ TIMEOUT=30
 OTTO_WEBUI_ENABLE_SERVICE_CONTROL="${OTTO_WEBUI_ENABLE_SERVICE_CONTROL:-true}"  # Default to true for WebUI functionality
 
 # Parse arguments
-echo "[DEBUG] Arguments received: $@"
-echo "[DEBUG] Initial INSTALL_MODE: $INSTALL_MODE"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --system)
             INSTALL_MODE="system"
-            echo "[DEBUG] Setting INSTALL_MODE to system"
             shift
             ;;
         --user)
             INSTALL_MODE="user"
-            echo "[DEBUG] Setting INSTALL_MODE to user"
             shift
             ;;
         --autonomous)
             INSTALL_MODE="system"
             AUTONOMOUS_MODE=true
-            echo "[DEBUG] Setting INSTALL_MODE to system (autonomous)"
             shift
             ;;
         --skip-bgpq4)
@@ -73,8 +68,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-echo "[DEBUG] Final INSTALL_MODE after parsing: $INSTALL_MODE"
 
 # Set paths
 if [[ "$INSTALL_MODE" == "system" ]]; then
@@ -809,9 +802,12 @@ generate_setup_token_if_missing() {
 deploy_webui_frontend() {
     log_info "Deploying WebUI frontend assets..."
     
-    if [[ -d "$LIB_DIR/webui/static" ]]; then
+    # Source is the cloned repo in /tmp, destination is /usr/local/share
+    local SOURCE_STATIC="/tmp/otto-bgp-install/webui/static"
+    
+    if [[ -d "$SOURCE_STATIC" ]]; then
         mkdir -p /usr/local/share/otto-bgp/webui
-        cp -r "$LIB_DIR/webui/static"/* /usr/local/share/otto-bgp/webui/
+        cp -r "$SOURCE_STATIC"/* /usr/local/share/otto-bgp/webui/
         chmod -R 755 /usr/local/share/otto-bgp/webui
         
         if [[ "$INSTALL_MODE" == "system" ]]; then
@@ -828,20 +824,23 @@ deploy_webui_adapter() {
     log_info "Deploying WebUI backend modules..."
     
     # Deploy entire webui directory structure (modular architecture)
-    if [[ -d "$LIB_DIR/webui" ]]; then
+    # Source is the cloned repo in /tmp, destination is $LIB_DIR
+    local SOURCE_WEBUI="/tmp/otto-bgp-install/webui"
+    
+    if [[ -d "$SOURCE_WEBUI" ]]; then
         # Create webui directory in lib
         mkdir -p "$LIB_DIR/webui"
         
-        # Copy all Python modules and subdirectories
-        cp -r "$LIB_DIR/webui/"*.py "$LIB_DIR/webui/" 2>/dev/null || true
+        # Copy all Python modules
+        cp "$SOURCE_WEBUI/"*.py "$LIB_DIR/webui/" 2>/dev/null || true
         
         # Copy api and core module directories
-        if [[ -d "$LIB_DIR/webui/api" ]]; then
-            cp -r "$LIB_DIR/webui/api" "$LIB_DIR/webui/"
+        if [[ -d "$SOURCE_WEBUI/api" ]]; then
+            cp -r "$SOURCE_WEBUI/api" "$LIB_DIR/webui/"
         fi
         
-        if [[ -d "$LIB_DIR/webui/core" ]]; then
-            cp -r "$LIB_DIR/webui/core" "$LIB_DIR/webui/"
+        if [[ -d "$SOURCE_WEBUI/core" ]]; then
+            cp -r "$SOURCE_WEBUI/core" "$LIB_DIR/webui/"
         fi
         
         # Set permissions
@@ -856,7 +855,7 @@ deploy_webui_adapter() {
         
         log_success "WebUI backend modules deployed"
     else
-        log_warn "WebUI modules not found - WebUI will not function"
+        log_warn "WebUI modules not found at $SOURCE_WEBUI - WebUI will not function"
         return 1
     fi
     
@@ -997,7 +996,6 @@ main() {
     create_systemd_services  # New in v0.3.2
     
     # Deploy WebUI components (system mode only)
-    log_info "Current install mode: $INSTALL_MODE"
     if [[ "$INSTALL_MODE" == "system" ]]; then
         log_info "Installing WebUI components for system mode..."
         generate_self_signed_cert_if_missing
@@ -1008,8 +1006,6 @@ main() {
         create_webui_systemd_service
         configure_webui_sudo_permissions  # Optional: for service control
         enable_webui_service
-    else
-        log_info "Skipping WebUI components (install mode: $INSTALL_MODE)"
     fi
     
     echo ""
