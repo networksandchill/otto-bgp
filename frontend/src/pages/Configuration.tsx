@@ -300,19 +300,11 @@ const Configuration: React.FC = () => {
               <Grid item xs={12} md={6}>
                 <TextField
                   fullWidth
-                  label="Hostname/IP"
-                  value={config.ssh?.hostname || ''}
-                  onChange={(e) => handleConfigChange('ssh', 'hostname', e.target.value)}
-                  margin="normal"
-                />
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
                   label="Username"
                   value={config.ssh?.username || ''}
                   onChange={(e) => handleConfigChange('ssh', 'username', e.target.value)}
                   margin="normal"
+                  helperText="Service account used for all routers"
                 />
               </Grid>
               <Grid item xs={12} md={6}>
