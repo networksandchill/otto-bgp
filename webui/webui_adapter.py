@@ -1099,6 +1099,107 @@ def redact_sensitive_fields(config: Dict[str, Any]) -> Dict[str, Any]:
     return config
 
 
+def load_config_from_otto_env() -> dict:
+    """Load system configuration from otto.env file"""
+    config = {}
+    otto_env_path = CONFIG_DIR / 'otto.env'
+    
+    if not otto_env_path.exists():
+        return config
+    
+    try:
+        env_dict = {}
+        with open(otto_env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    env_dict[key.strip()] = value.strip()
+        
+        # Map environment variables to config structure
+        # SSH settings
+        if 'SSH_USERNAME' in env_dict or 'SSH_PASSWORD' in env_dict or 'SSH_KEY_PATH' in env_dict:
+            config['ssh'] = {}
+            if 'SSH_USERNAME' in env_dict:
+                config['ssh']['username'] = env_dict['SSH_USERNAME']
+            if 'SSH_PASSWORD' in env_dict:
+                config['ssh']['password'] = env_dict['SSH_PASSWORD']
+            if 'SSH_KEY_PATH' in env_dict:
+                config['ssh']['key_path'] = env_dict['SSH_KEY_PATH']
+        
+        # RPKI settings
+        config['rpki'] = {
+            'enabled': env_dict.get('OTTO_BGP_RPKI_ENABLED', 'false').lower() == 'true',
+            'cache_dir': env_dict.get('OTTO_BGP_RPKI_CACHE_DIR', '/var/lib/otto-bgp/rpki'),
+            'validator_url': env_dict.get('OTTO_BGP_RPKI_VALIDATOR_URL', ''),
+            'refresh_interval': int(env_dict.get('OTTO_BGP_RPKI_REFRESH_INTERVAL', '24')),
+            'strict_validation': env_dict.get('OTTO_BGP_RPKI_STRICT', 'false').lower() == 'true'
+        }
+        
+        # BGPq4 settings
+        config['bgpq4'] = {
+            'mode': env_dict.get('OTTO_BGP_BGPQ4_MODE', 'auto'),
+            'timeout': int(env_dict.get('OTTO_BGP_BGPQ4_TIMEOUT', '45')),
+            'irr_source': env_dict.get('OTTO_BGP_IRR_SOURCE', 'RADB,RIPE,APNIC'),
+            'aggregate_prefixes': env_dict.get('OTTO_BGP_AGGREGATE_PREFIXES', 'true').lower() == 'true',
+            'ipv4_enabled': env_dict.get('OTTO_BGP_IPV4_ENABLED', 'true').lower() == 'true',
+            'ipv6_enabled': env_dict.get('OTTO_BGP_IPV6_ENABLED', 'false').lower() == 'true'
+        }
+        
+        # Guardrails settings
+        config['guardrails'] = {
+            'enabled': env_dict.get('OTTO_BGP_GUARDRAILS_ENABLED', 'true').lower() == 'true',
+            'max_prefix_threshold': int(env_dict.get('OTTO_BGP_AUTO_APPLY_THRESHOLD', '100')),
+            'max_session_loss_percent': int(env_dict.get('OTTO_BGP_MAX_SESSION_LOSS_PERCENT', '10')),
+            'max_route_loss_percent': int(env_dict.get('OTTO_BGP_MAX_ROUTE_LOSS_PERCENT', '20')),
+            'monitoring_duration': int(env_dict.get('OTTO_BGP_MONITORING_DURATION_SECONDS', '300')),
+            'bogon_check_enabled': env_dict.get('OTTO_BGP_BOGON_CHECK_ENABLED', 'true').lower() == 'true',
+            'require_confirmation': env_dict.get('OTTO_BGP_REQUIRE_CONFIRMATION', 'false').lower() == 'true'
+        }
+        
+        # Network Security settings
+        config['network_security'] = {
+            'ssh_known_hosts': env_dict.get('OTTO_BGP_SSH_KNOWN_HOSTS', '/var/lib/otto-bgp/ssh-keys/known_hosts'),
+            'ssh_connection_timeout': int(env_dict.get('OTTO_BGP_SSH_CONNECTION_TIMEOUT', '30')),
+            'ssh_max_workers': int(env_dict.get('OTTO_BGP_SSH_MAX_WORKERS', '5')),
+            'strict_host_verification': env_dict.get('OTTO_BGP_STRICT_HOST_VERIFICATION', 'true').lower() == 'true'
+        }
+        
+        # Parse network lists
+        if 'OTTO_BGP_ALLOWED_NETWORKS' in env_dict and env_dict['OTTO_BGP_ALLOWED_NETWORKS']:
+            config['network_security']['allowed_networks'] = [
+                n.strip() for n in env_dict['OTTO_BGP_ALLOWED_NETWORKS'].split(',') if n.strip()
+            ]
+        else:
+            config['network_security']['allowed_networks'] = []
+            
+        if 'OTTO_BGP_BLOCKED_NETWORKS' in env_dict and env_dict['OTTO_BGP_BLOCKED_NETWORKS']:
+            config['network_security']['blocked_networks'] = [
+                n.strip() for n in env_dict['OTTO_BGP_BLOCKED_NETWORKS'].split(',') if n.strip()
+            ]
+        else:
+            config['network_security']['blocked_networks'] = []
+        
+        # SMTP settings
+        if env_dict.get('OTTO_BGP_EMAIL_ENABLED', 'false').lower() == 'true':
+            config['smtp'] = {
+                'enabled': True,
+                'host': env_dict.get('OTTO_BGP_SMTP_SERVER', ''),
+                'port': int(env_dict.get('OTTO_BGP_SMTP_PORT', '587')),
+                'use_tls': env_dict.get('OTTO_BGP_SMTP_TLS', 'true').lower() == 'true',
+                'username': env_dict.get('OTTO_BGP_SMTP_USERNAME', ''),
+                'password': env_dict.get('OTTO_BGP_SMTP_PASSWORD', ''),
+                'from_address': env_dict.get('OTTO_BGP_EMAIL_FROM', ''),
+                'to_addresses': env_dict.get('OTTO_BGP_EMAIL_TO', '').split(',') if env_dict.get('OTTO_BGP_EMAIL_TO') else []
+            }
+        
+        return config
+        
+    except Exception as e:
+        logger.error(f"Failed to load otto.env: {e}")
+        return {}
+
+
 def sync_config_to_otto_env(config: dict) -> bool:
     """Sync configuration to otto.env file"""
     try:
@@ -1264,21 +1365,30 @@ def validate_smtp_config(smtp: Dict[str, Any]) -> List[Dict[str, str]]:
 @app.get("/api/config")
 async def get_config(user: dict = Depends(require_role('read_only'))):
     """Get current configuration (with sensitive fields redacted)"""
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH) as f:
-                config = json.load(f)
+    try:
+        # Start with config.json for WebUI-specific settings
+        config = {}
+        if CONFIG_PATH.exists():
+            try:
+                with open(CONFIG_PATH) as f:
+                    config = json.load(f)
+            except Exception:
+                pass
+        
+        # Load system settings from otto.env (these take precedence)
+        otto_config = load_config_from_otto_env()
+        
+        # Merge otto.env settings into config (otto.env takes precedence)
+        config.update(otto_config)
+        
+        # Redact sensitive fields for display
+        config = redact_sensitive_fields(config)
+        audit_log("config_viewed", user=user.get('sub'))
+        return JSONResponse(config)
 
-            # Redact sensitive fields for display
-            config = redact_sensitive_fields(config)
-            audit_log("config_viewed", user=user.get('sub'))
-            return JSONResponse(config)
-
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
-            return JSONResponse({'error': 'Failed to load config'}, status_code=500)
-
-    return JSONResponse({'error': 'Config not found'}, status_code=404)
+    except Exception as e:
+        logger.error(f"Failed to load config: {e}")
+        return JSONResponse({'error': 'Failed to load config'}, status_code=500)
 
 
 @app.put("/api/config")
@@ -1289,7 +1399,10 @@ async def update_config(request: Request, user: dict = Depends(require_role('adm
     except Exception as e:
         return JSONResponse({"error": f"Invalid JSON: {e}"}, status_code=400)
 
-    # Load existing config to preserve passwords if not changed
+    # Load existing otto.env config to preserve passwords if not changed
+    existing_otto_config = load_config_from_otto_env()
+    
+    # Load existing config.json for WebUI-specific settings
     existing_config = {}
     if CONFIG_PATH.exists():
         try:
@@ -1300,12 +1413,12 @@ async def update_config(request: Request, user: dict = Depends(require_role('adm
 
     # Preserve existing passwords if new ones are "*****"
     if 'ssh' in new_config and new_config['ssh'].get('password') == "*****":
-        if 'ssh' in existing_config and 'password' in existing_config['ssh']:
-            new_config['ssh']['password'] = existing_config['ssh']['password']
+        if 'ssh' in existing_otto_config and 'password' in existing_otto_config['ssh']:
+            new_config['ssh']['password'] = existing_otto_config['ssh']['password']
 
     if 'smtp' in new_config and new_config['smtp'].get('password') == "*****":
-        if 'smtp' in existing_config and 'password' in existing_config['smtp']:
-            new_config['smtp']['password'] = existing_config['smtp']['password']
+        if 'smtp' in existing_otto_config and 'password' in existing_otto_config['smtp']:
+            new_config['smtp']['password'] = existing_otto_config['smtp']['password']
 
     # Validate configuration
     issues = []
@@ -1324,46 +1437,51 @@ async def update_config(request: Request, user: dict = Depends(require_role('adm
     if issues:
         return JSONResponse({"error": "Validation failed", "issues": issues}, status_code=400)
 
-    # Create backup
-    backup_path = None
-    if CONFIG_PATH.exists():
-        backup_path = f"{CONFIG_PATH}.bak-{int(time.time())}"
-        shutil.copy2(CONFIG_PATH, backup_path)
-
-    # Write atomically
-    try:
-        with tempfile.NamedTemporaryFile(mode='w', dir=CONFIG_PATH.parent, delete=False) as tmp:
-            json.dump(new_config, tmp, indent=2)
-            tmp_path = tmp.name
-
-        # Preserve permissions
+    # Separate system settings from WebUI settings
+    system_settings = ['ssh', 'rpki', 'bgpq4', 'guardrails', 'network_security', 'smtp']
+    webui_config = {k: v for k, v in new_config.items() if k not in system_settings}
+    
+    # Only save WebUI-specific settings to config.json if any exist
+    if webui_config:
+        # Create backup of config.json
+        backup_path = None
         if CONFIG_PATH.exists():
-            shutil.copystat(CONFIG_PATH, tmp_path)
+            backup_path = f"{CONFIG_PATH}.bak-{int(time.time())}"
+            shutil.copy2(CONFIG_PATH, backup_path)
 
-        # Atomic rename
-        os.replace(tmp_path, CONFIG_PATH)
-        
-        # Sync configuration to otto.env
-        env_sync_success = sync_config_to_otto_env(new_config)
-        if not env_sync_success:
-            logger.warning("Failed to sync configuration to otto.env")
-
-        audit_log("config_updated", user=user.get('sub'))
-        return JSONResponse({
-            "success": True,
-            "backup": backup_path,
-            "message": "Configuration updated successfully",
-            "env_synced": env_sync_success
-        })
-
-    except Exception as e:
-        # Clean up temp file on error
+        # Write WebUI config atomically
         try:
-            os.unlink(tmp_path)
-        except:
-            pass
-        logger.error(f"Failed to save config: {e}")
-        return JSONResponse({"error": "Failed to save config"}, status_code=500)
+            with tempfile.NamedTemporaryFile(mode='w', dir=CONFIG_PATH.parent, delete=False) as tmp:
+                json.dump(webui_config, tmp, indent=2)
+                tmp_path = tmp.name
+
+            # Preserve permissions
+            if CONFIG_PATH.exists():
+                shutil.copystat(CONFIG_PATH, tmp_path)
+
+            # Atomic rename
+            os.replace(tmp_path, CONFIG_PATH)
+        except Exception as e:
+            # Clean up temp file on error
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+            return JSONResponse({"error": f"Failed to save WebUI config: {e}"}, status_code=500)
+    
+    # Sync system configuration to otto.env
+    env_sync_success = sync_config_to_otto_env(new_config)
+    if not env_sync_success:
+        logger.warning("Failed to sync configuration to otto.env")
+        return JSONResponse({"error": "Failed to save system configuration"}, status_code=500)
+
+    audit_log("config_updated", user=user.get('sub'))
+    return JSONResponse({
+        "success": True,
+        "backup": backup_path if 'backup_path' in locals() else None,
+        "message": "Configuration updated successfully",
+        "env_synced": env_sync_success
+    })
 
 
 @app.post("/api/config/test-smtp")
