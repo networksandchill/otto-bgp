@@ -1187,7 +1187,7 @@ def load_config_from_otto_env() -> dict:
                 'enabled': True,
                 'host': env_dict.get('OTTO_BGP_SMTP_SERVER', ''),
                 'port': int(env_dict.get('OTTO_BGP_SMTP_PORT', '587')),
-                'use_tls': env_dict.get('OTTO_BGP_SMTP_TLS', 'true').lower() == 'true',
+                'use_tls': env_dict.get('OTTO_BGP_SMTP_USE_TLS', 'true').lower() == 'true',
                 'username': env_dict.get('OTTO_BGP_SMTP_USERNAME', ''),
                 'password': env_dict.get('OTTO_BGP_SMTP_PASSWORD', ''),
                 'from_address': env_dict.get('OTTO_BGP_EMAIL_FROM', ''),
@@ -1483,6 +1483,67 @@ async def update_config(request: Request, user: dict = Depends(require_role('adm
         "message": "Configuration updated successfully",
         "env_synced": env_sync_success
     })
+
+
+@app.post("/api/config/validate")
+async def validate_config(request: Request, user: dict = Depends(require_role('admin'))):
+    """Validate configuration JSON"""
+    try:
+        data = await request.json()
+        config_json = data.get('config_json', '')
+        
+        issues = []
+        
+        if not config_json:
+            issues.append({"path": "config", "msg": "No configuration provided"})
+            return JSONResponse({"valid": False, "issues": issues})
+        
+        # Try to parse the JSON
+        try:
+            config_obj = json.loads(config_json)
+        except json.JSONDecodeError as e:
+            issues.append({"path": "config", "msg": f"Invalid JSON: {str(e)}"})
+            return JSONResponse({"valid": False, "issues": issues})
+        
+        # Validate required fields
+        required_fields = ['devices', 'ssh', 'notifications']
+        for field in required_fields:
+            if field not in config_obj:
+                issues.append({"path": field, "msg": f"Required field '{field}' is missing"})
+        
+        # Validate device format
+        if 'devices' in config_obj:
+            if not isinstance(config_obj['devices'], list):
+                issues.append({"path": "devices", "msg": "Devices must be a list"})
+            else:
+                for idx, device in enumerate(config_obj['devices']):
+                    if not isinstance(device, dict):
+                        issues.append({"path": f"devices[{idx}]", "msg": "Device must be an object"})
+                    elif 'address' not in device:
+                        issues.append({"path": f"devices[{idx}].address", "msg": "Device missing address"})
+        
+        # Validate SSH settings
+        if 'ssh' in config_obj:
+            ssh = config_obj['ssh']
+            if not isinstance(ssh, dict):
+                issues.append({"path": "ssh", "msg": "SSH settings must be an object"})
+        
+        # Validate notifications
+        if 'notifications' in config_obj:
+            notif = config_obj['notifications']
+            if not isinstance(notif, dict):
+                issues.append({"path": "notifications", "msg": "Notifications must be an object"})
+            elif 'smtp' in notif:
+                smtp = notif['smtp']
+                if not isinstance(smtp, dict):
+                    issues.append({"path": "notifications.smtp", "msg": "SMTP settings must be an object"})
+        
+        # Return validation result
+        return JSONResponse({"valid": len(issues) == 0, "issues": issues})
+        
+    except Exception as e:
+        logger.error(f"Config validation error: {e}")
+        return JSONResponse({"valid": False, "issues": [{"path": "config", "msg": "Internal validation error"}]})
 
 
 @app.post("/api/config/test-smtp")
