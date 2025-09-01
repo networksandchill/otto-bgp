@@ -818,20 +818,44 @@ deploy_webui_frontend() {
 }
 
 deploy_webui_adapter() {
-    log_info "Deploying WebUI adapter..."
+    log_info "Deploying WebUI backend modules..."
     
-    # Deploy production adapter
-    if [[ -f "$LIB_DIR/webui/webui_adapter.py" ]]; then
-        cp "$LIB_DIR/webui/webui_adapter.py" "$LIB_DIR/webui_adapter.py"
-        chmod 644 "$LIB_DIR/webui_adapter.py"
-        log_success "WebUI adapter deployed"
+    # Deploy entire webui directory structure (modular architecture)
+    if [[ -d "$LIB_DIR/webui" ]]; then
+        # Create webui directory in lib
+        mkdir -p "$LIB_DIR/webui"
+        
+        # Copy all Python modules and subdirectories
+        cp -r "$LIB_DIR/webui/"*.py "$LIB_DIR/webui/" 2>/dev/null || true
+        
+        # Copy api and core module directories
+        if [[ -d "$LIB_DIR/webui/api" ]]; then
+            cp -r "$LIB_DIR/webui/api" "$LIB_DIR/webui/"
+        fi
+        
+        if [[ -d "$LIB_DIR/webui/core" ]]; then
+            cp -r "$LIB_DIR/webui/core" "$LIB_DIR/webui/"
+        fi
+        
+        # Set permissions
+        find "$LIB_DIR/webui" -type f -name "*.py" -exec chmod 644 {} \;
+        find "$LIB_DIR/webui" -type d -exec chmod 755 {} \;
+        
+        # Legacy: Also copy webui_adapter.py to lib root for backward compatibility
+        if [[ -f "$LIB_DIR/webui/webui_adapter.py" ]]; then
+            cp "$LIB_DIR/webui/webui_adapter.py" "$LIB_DIR/webui_adapter.py"
+            chmod 644 "$LIB_DIR/webui_adapter.py"
+        fi
+        
+        log_success "WebUI backend modules deployed"
     else
-        log_warn "WebUI adapter not found - WebUI will not function"
+        log_warn "WebUI modules not found - WebUI will not function"
         return 1
     fi
     
     if [[ "$INSTALL_MODE" == "system" ]]; then
-        sudo chown "$SERVICE_USER:$SERVICE_USER" "$LIB_DIR/webui_adapter.py" 2>/dev/null || true
+        sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$LIB_DIR/webui" 2>/dev/null || true
+        [[ -f "$LIB_DIR/webui_adapter.py" ]] && sudo chown "$SERVICE_USER:$SERVICE_USER" "$LIB_DIR/webui_adapter.py" 2>/dev/null || true
     fi
 }
 
