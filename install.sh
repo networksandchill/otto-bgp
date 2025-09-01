@@ -256,8 +256,10 @@ check_existing_installation() {
 download_otto_bgp() {
     log_info "Downloading Otto BGP..."
     
-    # Create temp directory
-    TEMP_DIR=$(mktemp -d)
+    # Create temp directory with known name for WebUI deployment
+    TEMP_DIR="/tmp/otto-bgp-install"
+    rm -rf "$TEMP_DIR" 2>/dev/null || true
+    mkdir -p "$TEMP_DIR"
     
     # Ensure cleanup happens even if script exits unexpectedly
     trap 'cd / 2>/dev/null; rm -rf "$TEMP_DIR" 2>/dev/null' EXIT
@@ -278,17 +280,28 @@ download_otto_bgp() {
         exit 1
     fi
     
-    # Move to lib directory (ensure directory exists first)
+    # Move extracted contents up one level so WebUI deployment can find them
+    # The WebUI deployment expects /tmp/otto-bgp-install/webui not /tmp/otto-bgp-install/otto-bgp-$REPO_BRANCH/webui
+    mv otto-bgp-$REPO_BRANCH/* . 2>/dev/null || true
+    mv otto-bgp-$REPO_BRANCH/.* . 2>/dev/null || true
+    rmdir otto-bgp-$REPO_BRANCH 2>/dev/null || true
+    
+    # Copy to lib directory (preserve temp for WebUI deployment)
     mkdir -p "$LIB_DIR"
-    if ! mv otto-bgp-$REPO_BRANCH/* "$LIB_DIR/"; then
-        log_error "Failed to move files to installation directory"
+    if ! cp -r otto_bgp scripts systemd requirements.txt *.py *.sh "$LIB_DIR/" 2>/dev/null; then
+        log_error "Failed to copy core files to installation directory"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
-    # Cleanup
-    cd / && rm -rf "$TEMP_DIR"
-    trap - EXIT  # Remove the trap since we're cleaning up manually
+    # Copy webui if it exists (for WebUI deployment later)
+    if [[ -d "webui" ]]; then
+        cp -r webui "$LIB_DIR/" 2>/dev/null || true
+    fi
+    
+    # Don't cleanup TEMP_DIR yet - WebUI deployment needs it
+    cd /
+    trap - EXIT  # Remove the trap, we'll clean up after WebUI deployment
     
     log_success "Otto BGP downloaded"
 }
@@ -1036,6 +1049,12 @@ main() {
         echo "  5. Environment config: $CONFIG_DIR/otto.env"
     fi
     echo ""
+    
+    # Clean up temp installation directory after successful WebUI deployment
+    if [[ -d "/tmp/otto-bgp-install" ]]; then
+        rm -rf "/tmp/otto-bgp-install"
+        log_info "Cleaned up temporary installation files"
+    fi
 }
 
 # Cleanup function for error handling
