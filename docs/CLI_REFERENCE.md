@@ -537,13 +537,11 @@ Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CL
 ## Known Gaps and Limitations
 
 ### Command Limitations
-- **No `config` subcommands**: The CLI does not include `config show/validate`. Edit `/etc/otto-bgp/otto.env` or use `/etc/otto-bgp/config.json`.
 - **Pipeline command limitations**: No `--separate`, `--input-file`, or `--dry-run` options. Pipeline operates on device CSV files only.
 - **list command**: Only supports `routers|as|groups` and plain-text output. No `--format` or `--filter` options.
 
 ### Configuration and Environment
 - **BGPQ4 env vars**: `OTTO_BGP_BGPQ4_*` variables are not read by the code. Selection is automatic or via `--dev` (Podman) for development.
-- **Email recipients**: `to_addresses` are not read from environment variables. Set them in config.json under `autonomous_mode.notifications.email.to_addresses`.
 
 ### Feature Gaps
 - **test-proxy**: Has `--test-bgpq4` and `--timeout`. There is no `--test-as` flag; test uses a built-in AS.
