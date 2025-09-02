@@ -146,12 +146,12 @@ class ApiClient {
 
   // Configuration endpoints
   async getConfig(): Promise<AppConfig> {
-    const response = await this.client.get<AppConfig>('/config')
+    const response = await this.client.get<AppConfig>('/config/')
     return response.data
   }
 
   async updateConfig(config: AppConfig): Promise<{ success: boolean; backup?: string; message?: string }> {
-    const response = await this.client.put('/config', config)
+    const response = await this.client.put('/config/', config)
     return response.data
   }
 
@@ -263,7 +263,7 @@ class ApiClient {
     role: string
     region: string
   }> }> {
-    const response = await this.client.get('/devices')
+    const response = await this.client.get('/devices/')
     return response.data
   }
 
@@ -273,7 +273,7 @@ class ApiClient {
     role: string
     region: string
   }): Promise<{ success: boolean; device: any }> {
-    const response = await this.client.post('/devices', device)
+    const response = await this.client.post('/devices/', device)
     return response.data
   }
 
@@ -298,7 +298,7 @@ class ApiClient {
     role: string
     created_at?: string
   }> {
-    const response = await this.client.get('/profile')
+    const response = await this.client.get('/profile/')
     return response.data
   }
 
@@ -307,7 +307,7 @@ class ApiClient {
     current_password?: string
     new_password?: string
   }): Promise<{ success: boolean; message?: string }> {
-    const response = await this.client.put('/profile', data)
+    const response = await this.client.put('/profile/', data)
     return response.data
   }
 
