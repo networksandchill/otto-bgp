@@ -59,7 +59,8 @@ def read_log_file(filename: str, lines: int = 100, offset: int = 0) -> Dict:
     end = total - offset
 
     entries = []
-    for line in all_lines[start:end]:
+    # Reverse to show newest first
+    for line in reversed(all_lines[start:end]):
         if filename == "audit.log":
             entries.append(parse_json_log_line(line.strip()))
         else:
@@ -76,8 +77,8 @@ def read_log_file(filename: str, lines: int = 100, offset: int = 0) -> Dict:
 
 
 def get_journalctl_logs(unit: str = None, lines: int = 100) -> List[str]:
-    """Get systemd journal logs"""
-    cmd = ["journalctl", "--no-pager", "-o", "json", f"-n{lines}"]
+    """Get systemd journal logs (newest first)"""
+    cmd = ["journalctl", "--no-pager", "-r", "-o", "json", f"-n{lines}"]
     if unit:
         cmd.extend(["-u", unit])
 
