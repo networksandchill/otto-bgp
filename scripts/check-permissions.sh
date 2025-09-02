@@ -93,7 +93,7 @@ if systemctl is-active --quiet otto-bgp-webui-adapter.service; then
     echo -e "${GREEN}✓${NC} WebUI service is running"
     
     # Get the actual user the service is running as
-    ACTUAL_USER=$(ps aux | grep -E "uvicorn.*webui_adapter" | grep -v grep | awk '{print $1}' | head -1)
+    ACTUAL_USER=$(ps aux | grep -E "uvicorn.*webui\\.app" | grep -v grep | awk '{print $1}' | head -1)
     if [ -n "$ACTUAL_USER" ]; then
         echo "  Running as user: $ACTUAL_USER"
         if [ "$ACTUAL_USER" != "$SERVICE_USER" ]; then

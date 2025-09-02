@@ -11,7 +11,7 @@ WorkingDirectory=LIB_DIR_PLACEHOLDER
 Environment=PYTHONPATH=LIB_DIR_PLACEHOLDER
 Environment=OTTO_WEBUI_ROOT=/usr/local/share/otto-bgp/webui
 EnvironmentFile=-CONFIG_DIR_PLACEHOLDER/otto.env
-ExecStart=VENV_DIR_PLACEHOLDER/bin/uvicorn webui_adapter:app --host 0.0.0.0 --port 8443 --ssl-certfile CONFIG_DIR_PLACEHOLDER/tls/cert.pem --ssl-keyfile CONFIG_DIR_PLACEHOLDER/tls/key.pem
+ExecStart=VENV_DIR_PLACEHOLDER/bin/uvicorn webui.app:app --host 0.0.0.0 --port 8443 --ssl-certfile CONFIG_DIR_PLACEHOLDER/tls/cert.pem --ssl-keyfile CONFIG_DIR_PLACEHOLDER/tls/key.pem
 Restart=on-failure
 RestartSec=10
 PrivateTmp=yes

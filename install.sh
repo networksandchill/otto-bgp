@@ -882,12 +882,6 @@ deploy_webui_adapter() {
         find "$LIB_DIR/webui" -type f -name "*.py" -exec chmod 644 {} \;
         find "$LIB_DIR/webui" -type d -exec chmod 755 {} \;
         
-        # Legacy: Also copy webui_adapter.py to lib root for backward compatibility
-        if [[ -f "$LIB_DIR/webui/webui_adapter.py" ]]; then
-            cp "$LIB_DIR/webui/webui_adapter.py" "$LIB_DIR/webui_adapter.py"
-            chmod 644 "$LIB_DIR/webui_adapter.py"
-        fi
-        
         log_success "WebUI backend modules deployed"
     else
         log_warn "WebUI modules not found at $SOURCE_WEBUI - WebUI will not function"
@@ -896,7 +890,6 @@ deploy_webui_adapter() {
     
     if [[ "$INSTALL_MODE" == "system" ]]; then
         sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$LIB_DIR/webui" 2>/dev/null || true
-        [[ -f "$LIB_DIR/webui_adapter.py" ]] && sudo chown "$SERVICE_USER:$SERVICE_USER" "$LIB_DIR/webui_adapter.py" 2>/dev/null || true
     fi
 }
 
@@ -966,7 +959,7 @@ Environment=PYTHONPATH=$LIB_DIR
 Environment=OTTO_WEBUI_ROOT=/usr/local/share/otto-bgp/webui
 Environment=OTTO_WEBUI_ENABLE_SERVICE_CONTROL=true
 EnvironmentFile=-$CONFIG_DIR/otto.env
-ExecStart=$VENV_DIR/bin/uvicorn webui_adapter:app --host 0.0.0.0 --port 8443 --ssl-certfile $CONFIG_DIR/tls/cert.pem --ssl-keyfile $CONFIG_DIR/tls/key.pem
+ExecStart=$VENV_DIR/bin/uvicorn webui.app:app --host 0.0.0.0 --port 8443 --ssl-certfile $CONFIG_DIR/tls/cert.pem --ssl-keyfile $CONFIG_DIR/tls/key.pem
 Restart=on-failure
 RestartSec=10
 PrivateTmp=yes

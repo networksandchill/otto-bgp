@@ -35,6 +35,12 @@ async def get_system_logs(
             entry = json.loads(line)
             # Map systemd priority to log level
             priority = entry.get("PRIORITY", 6)
+            # Convert to int if it's a string
+            if isinstance(priority, str):
+                try:
+                    priority = int(priority)
+                except (ValueError, TypeError):
+                    priority = 6
             if priority <= 3:
                 level_str = "error"
             elif priority == 4:
