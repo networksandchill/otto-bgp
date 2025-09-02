@@ -31,7 +31,14 @@ const Reports: React.FC = () => {
   // Query deployment matrix
   const { data: matrix, isLoading, error } = useQuery({
     queryKey: ['deployment-matrix'],
-    queryFn: () => apiClient.getDeploymentMatrix(),
+    queryFn: async () => {
+      const result = await apiClient.getDeploymentMatrix()
+      // Check if backend returned an error object instead of matrix data
+      if ('error' in result && !('routers' in result)) {
+        throw new Error((result as any).error)
+      }
+      return result
+    },
     retry: false,
   })
 
@@ -57,8 +64,8 @@ const Reports: React.FC = () => {
     )
   }
 
-  const routers = matrix ? Object.entries(matrix.routers) : []
-  const asDistribution = matrix ? Object.entries(matrix.as_distribution) : []
+  const routers = matrix && 'routers' in matrix ? Object.entries(matrix.routers as Record<string, any>) : []
+  const asDistribution = matrix && 'as_distribution' in matrix ? Object.entries(matrix.as_distribution as Record<string, any>) : []
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
@@ -83,7 +90,7 @@ const Reports: React.FC = () => {
             Deployment Matrix Overview
           </Typography>
           
-          {matrix && (
+          {matrix && 'statistics' in matrix && (
             <Grid container spacing={2} sx={{ mb: 3 }}>
               <Grid item xs={12} md={4}>
                 <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'primary.main', color: 'white' }}>
@@ -107,7 +114,7 @@ const Reports: React.FC = () => {
           )}
 
           <Typography variant="body2" color="text.secondary">
-            Generated: {matrix ? new Date(matrix.generated_at).toLocaleString() : 'N/A'}
+            Generated: {matrix && 'generated_at' in matrix ? new Date(matrix.generated_at).toLocaleString() : 'N/A'}
           </Typography>
         </TabPanel>
 
@@ -128,7 +135,7 @@ const Reports: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {routers.map(([hostname, router]) => (
+                {routers.map(([hostname, router]: [string, any]) => (
                   <TableRow key={hostname}>
                     <TableCell>
                       <Typography variant="body2" fontFamily="monospace">
@@ -143,7 +150,7 @@ const Reports: React.FC = () => {
                     <TableCell>{router.site || 'N/A'}</TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                        {router.bgp_groups.map((group) => (
+                        {router.bgp_groups.map((group: string) => (
                           <Chip 
                             key={group} 
                             label={group} 
@@ -155,7 +162,7 @@ const Reports: React.FC = () => {
                     </TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                        {router.as_numbers.map((asn) => (
+                        {router.as_numbers.map((asn: number) => (
                           <Chip 
                             key={asn} 
                             label={`AS${asn}`} 
@@ -187,7 +194,7 @@ const Reports: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {asDistribution.map(([asn, routerList]) => (
+                {asDistribution.map(([asn, routerList]: [string, any]) => (
                   <TableRow key={asn}>
                     <TableCell>
                       <Chip 
@@ -198,7 +205,7 @@ const Reports: React.FC = () => {
                     </TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                        {routerList.map((router) => (
+                        {routerList.map((router: string) => (
                           <Chip 
                             key={router} 
                             label={router} 

@@ -33,7 +33,7 @@ const Dashboard: React.FC = () => {
     refetchInterval: 30000, // Refresh every 30s
   })
 
-  const stats = matrix?.statistics || {
+  const stats = (matrix && 'statistics' in matrix) ? matrix.statistics : {
     total_routers: 0,
     total_as_numbers: 0,
     total_bgp_groups: 0,
@@ -178,7 +178,7 @@ const Dashboard: React.FC = () => {
           <Grid item xs={12}>
             <Paper sx={{ p: 2, bgcolor: 'background.default' }}>
               <Typography variant="body2" color="text.secondary">
-                Last data update: {new Date(matrix.generated_at).toLocaleString()}
+                Last data update: {(matrix && 'generated_at' in matrix) ? new Date(matrix.generated_at).toLocaleString() : 'No data available'}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 Run 'otto-bgp pipeline' to refresh deployment data

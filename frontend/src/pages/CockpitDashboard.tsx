@@ -171,7 +171,7 @@ const CockpitDashboard: React.FC = () => {
     refetchInterval: 30000,
   })
 
-  const stats = matrix?.statistics || {
+  const stats = (matrix && 'statistics' in matrix) ? matrix.statistics : {
     total_routers: 0,
     total_as_numbers: 0,
     total_bgp_groups: 0,
@@ -362,7 +362,7 @@ const CockpitDashboard: React.FC = () => {
                   Last Policy Generation
                 </Typography>
                 <Typography variant="body2" sx={{ color: '#f5f5f5', mt: 0.5 }}>
-                  {matrix?.generated_at ? new Date(matrix.generated_at).toLocaleString() : 'No data available'}
+                  {(matrix && 'generated_at' in matrix) ? new Date(matrix.generated_at).toLocaleString() : 'No data available'}
                 </Typography>
               </Grid>
               <Grid item xs={12} md={4}>

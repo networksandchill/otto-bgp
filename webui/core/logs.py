@@ -70,7 +70,8 @@ def read_log_file(filename: str, lines: int = 100, offset: int = 0) -> Dict:
         "total_lines": total,
         "offset": offset,
         "lines": lines,
-        "entries": entries
+        "entries": entries,
+        "has_more": offset + lines < total
     }
 
 

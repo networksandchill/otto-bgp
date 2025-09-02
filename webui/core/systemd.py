@@ -70,6 +70,11 @@ def systemd_units_status(units: List[str]) -> List[Dict]:
 
 
 def control_service(action: str, service: str) -> Dict:
+    # Check if service control is enabled
+    from webui.settings import OTTO_WEBUI_ENABLE_SERVICE_CONTROL
+    if not OTTO_WEBUI_ENABLE_SERVICE_CONTROL:
+        return {"success": False, "message": "Service control is disabled. Set OTTO_WEBUI_ENABLE_SERVICE_CONTROL=true in otto.env to enable."}
+    
     if action not in ALLOWED_ACTIONS or service not in ALLOWED_SERVICES:
         return {"success": False, "message": "Invalid action or service"}
     cmd = BASE_COMMANDS.get((action, service))
@@ -79,6 +84,10 @@ def control_service(action: str, service: str) -> Dict:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             return {"success": True}
-        return {"success": False, "message": (result.stderr or result.stdout)[:200]}
+        # Check if it's a sudo permission issue
+        error_msg = (result.stderr or result.stdout)[:500]
+        if "sudo:" in error_msg.lower() or "password" in error_msg.lower() or result.returncode == 1:
+            return {"success": False, "message": "Service control requires sudo permissions. Please configure sudoers for the otto-bgp user or set OTTO_WEBUI_ENABLE_SERVICE_CONTROL=false in otto.env"}
+        return {"success": False, "message": error_msg[:200]}
     except subprocess.TimeoutExpired:
         return {"success": False, "message": "Command timed out"}

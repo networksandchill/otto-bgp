@@ -168,8 +168,8 @@ class ApiClient {
   }
 
   // Reports endpoints
-  async getDeploymentMatrix(): Promise<DeploymentMatrix> {
-    const response = await this.client.get<DeploymentMatrix>('/reports/matrix')
+  async getDeploymentMatrix(): Promise<DeploymentMatrix | { error: string }> {
+    const response = await this.client.get<DeploymentMatrix | { error: string }>('/reports/matrix')
     return response.data
   }
 
@@ -252,7 +252,7 @@ class ApiClient {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
     if (params?.search) searchParams.append('search', params.search)
     
-    const response = await this.client.get(`/logs/file/${filename}?${searchParams}`)
+    const response = await this.client.get(`/logs/files/${filename}?${searchParams}`)
     return response.data
   }
 
