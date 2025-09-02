@@ -9,10 +9,29 @@ LOG_DIR = DATA_DIR / "logs"
 
 
 def parse_json_log_line(line: str) -> Dict:
-    """Parse JSON format log line"""
+    """Parse JSON format log line (for backward compatibility with old audit logs)"""
     try:
-        return json.loads(line)
+        data = json.loads(line)
+        # Format old JSON audit log entries to have a message field
+        if 'action' in data:
+            # This is an old JSON audit log entry
+            message_parts = [f"Action: {data.get('action', 'unknown')}"]
+            if data.get('user'):
+                message_parts.insert(0, f"User: {data.get('user')}")
+            if data.get('resource'):
+                message_parts.append(f"Resource: {data.get('resource')}")
+            if data.get('result'):
+                message_parts.append(f"Result: {data.get('result')}")
+            
+            return {
+                "timestamp": data.get("timestamp", ""),
+                "level": "AUDIT",
+                "message": " | ".join(message_parts),
+                "raw_data": data
+            }
+        return data
     except json.JSONDecodeError:
+        # Not JSON, return as raw
         return {"raw": line}
 
 
@@ -61,10 +80,13 @@ def read_log_file(filename: str, lines: int = 100, offset: int = 0) -> Dict:
     entries = []
     # Reverse to show newest first
     for line in reversed(all_lines[start:end]):
-        if filename == "audit.log":
-            entries.append(parse_json_log_line(line.strip()))
+        # Try to parse as JSON first (for old audit.log entries)
+        stripped_line = line.strip()
+        if stripped_line.startswith('{'):
+            entries.append(parse_json_log_line(stripped_line))
         else:
-            entries.append(parse_delimited_log_line(line.strip()))
+            # Parse as delimited format (both new audit.log and otto-bgp.log)
+            entries.append(parse_delimited_log_line(stripped_line))
 
     return {
         "filename": filename,

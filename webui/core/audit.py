@@ -6,7 +6,7 @@ from webui.settings import DATA_DIR
 
 
 def setup_audit_logging():
-    """Initialize audit logger with JSON formatter"""
+    """Initialize audit logger with plain text formatter"""
     audit_logger = logging.getLogger("otto.audit")
     audit_logger.setLevel(logging.INFO)
     
@@ -27,17 +27,23 @@ def setup_audit_logging():
             log_dir / "audit.log", when="midnight", interval=1, backupCount=90
         )
         
-        class JSONFormatter(logging.Formatter):
+        class AuditFormatter(logging.Formatter):
             def format(self, record):
-                return json.dumps({
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "user": getattr(record, 'user', 'system'),
-                    "action": record.msg,
-                    "resource": getattr(record, 'resource', None),
-                    "result": getattr(record, 'result', 'success')
-                })
+                timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                user = getattr(record, 'user', 'system')
+                action = record.msg
+                resource = getattr(record, 'resource', None)
+                result = getattr(record, 'result', 'success')
+                
+                # Build message parts
+                parts = [f"User: {user}", f"Action: {action}"]
+                if resource:
+                    parts.append(f"Resource: {resource}")
+                parts.append(f"Result: {result}")
+                
+                return f"{timestamp} - AUDIT - {' | '.join(parts)}"
         
-        handler.setFormatter(JSONFormatter())
+        handler.setFormatter(AuditFormatter())
         audit_logger.addHandler(handler)
     return audit_logger
 
