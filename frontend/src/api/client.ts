@@ -319,7 +319,7 @@ class ApiClient {
     created_at?: string
     last_login?: string
   }> }> {
-    const response = await this.client.get('/users')
+    const response = await this.client.get('/users/')
     return response.data
   }
 
@@ -329,7 +329,7 @@ class ApiClient {
     password: string
     role: 'admin' | 'operator' | 'read_only'
   }): Promise<any> {
-    const response = await this.client.post('/users', data)
+    const response = await this.client.post('/users/', data)
     return response.data
   }
 
