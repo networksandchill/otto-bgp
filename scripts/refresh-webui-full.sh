@@ -81,14 +81,9 @@ main() {
         exit 1
     fi
     
-    # Backup current backend
+    # Backup current installation
     BACKUP_SUFFIX=".backup.$(date +%Y%m%d-%H%M%S)"
     log_info "Backing up current installation..."
-    
-    # Backup backend
-    if [[ -f "$WEBUI_BACKEND_DIR/webui_adapter.py" ]]; then
-        cp "$WEBUI_BACKEND_DIR/webui_adapter.py" "$WEBUI_BACKEND_DIR/webui_adapter.py${BACKUP_SUFFIX}"
-    fi
     
     # Backup frontend assets
     if [[ -d "$WEBUI_ASSETS_DIR" ]]; then
