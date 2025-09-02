@@ -153,6 +153,7 @@ show_removal_plan() {
     
     if [[ "$INSTALL_MODE" == "system" ]] && systemctl list-units --full -all | grep -Fq "otto-bgp"; then
         echo "  • Systemd services"
+        echo "  • Systemd journal logs for otto-bgp services"
     fi
     
     echo ""
@@ -296,6 +297,23 @@ perform_uninstall() {
             sudo userdel otto-bgp 2>/dev/null || true
             echo -e "${GREEN}✓${NC} Service user removed"
         fi
+    fi
+    
+    # Clean up systemd journal logs for otto-bgp services
+    if [[ "$INSTALL_MODE" == "system" ]] || [[ "$FORCE_CLEANUP" == true ]]; then
+        echo "Cleaning systemd journal logs..."
+        # Remove logs for all otto-bgp related services
+        for service in otto-bgp otto-bgp-webui-adapter otto-bgp-autonomous otto-bgp-rpki-update; do
+            sudo journalctl --rotate 2>/dev/null || true
+            sudo journalctl --vacuum-time=1s -u "${service}.service" 2>/dev/null || true
+            sudo journalctl --vacuum-time=1s -u "${service}.timer" 2>/dev/null || true
+        done
+        
+        # Also clean up any otto-bgp-webui syslog identifier logs
+        sudo journalctl --rotate 2>/dev/null || true
+        sudo journalctl --vacuum-time=1s -t otto-bgp-webui 2>/dev/null || true
+        
+        echo -e "${GREEN}✓${NC} Systemd journal logs cleaned"
     fi
     
     # Force cleanup mode - remove any remaining files
