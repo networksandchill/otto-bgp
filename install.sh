@@ -288,16 +288,38 @@ download_otto_bgp() {
     
     # Copy to lib directory (preserve temp for WebUI deployment)
     mkdir -p "$LIB_DIR"
-    if ! cp -r otto_bgp scripts systemd requirements.txt *.py *.sh "$LIB_DIR/" 2>/dev/null; then
-        log_error "Failed to copy core files to installation directory"
+    
+    # Copy core directories and files that must exist
+    if [[ ! -d "otto_bgp" ]] || [[ ! -f "requirements.txt" ]]; then
+        log_error "Core files missing in download - otto_bgp directory or requirements.txt not found"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
-    # Copy webui if it exists (for WebUI deployment later)
-    if [[ -d "webui" ]]; then
-        cp -r webui "$LIB_DIR/" 2>/dev/null || true
-    fi
+    # Copy core components
+    cp -r otto_bgp "$LIB_DIR/" || {
+        log_error "Failed to copy otto_bgp module"
+        cd / && rm -rf "$TEMP_DIR"
+        exit 1
+    }
+    
+    cp requirements.txt "$LIB_DIR/" || {
+        log_error "Failed to copy requirements.txt"
+        cd / && rm -rf "$TEMP_DIR"
+        exit 1
+    }
+    
+    # Copy optional directories if they exist
+    [[ -d "scripts" ]] && cp -r scripts "$LIB_DIR/" 2>/dev/null
+    [[ -d "systemd" ]] && cp -r systemd "$LIB_DIR/" 2>/dev/null
+    [[ -d "webui" ]] && cp -r webui "$LIB_DIR/" 2>/dev/null
+    [[ -d "docs" ]] && cp -r docs "$LIB_DIR/" 2>/dev/null
+    [[ -d "example-configs" ]] && cp -r example-configs "$LIB_DIR/" 2>/dev/null
+    
+    # Copy individual files if they exist (using find to avoid wildcard issues)
+    find . -maxdepth 1 -name "*.py" -exec cp {} "$LIB_DIR/" \; 2>/dev/null
+    find . -maxdepth 1 -name "*.sh" -exec cp {} "$LIB_DIR/" \; 2>/dev/null
+    find . -maxdepth 1 -name "*.md" -exec cp {} "$LIB_DIR/" \; 2>/dev/null
     
     # Don't cleanup TEMP_DIR yet - WebUI deployment needs it
     cd /
