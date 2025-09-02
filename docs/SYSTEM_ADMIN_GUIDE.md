@@ -925,9 +925,6 @@ This guide provides system administrators with procedures for maintaining Otto B
 
 - Installer scope: `install.sh` creates only `otto-bgp.service` and (when not in autonomous mode) a daily `otto-bgp.timer`. The autonomous and RPKI preflight units shown here are optional manual deployments and are not created by the installer.
 - Path conventions: System installations use `/usr/local/bin` (wrapper), `/usr/local/lib/otto-bgp` (code), and `/usr/local/venv` (venv). The sample units under `systemd/` use `/opt/otto-bgp` and are intended for manual deployments.
-- Devices inventory: The service expects `/etc/otto-bgp/devices.csv` to exist. The installer does not create this file; administrators must provide it.
-- Email recipients: Notification recipients (`to_addresses`) are not read from environment variables. Configure them in `/etc/otto-bgp/config.json` under `autonomous_mode.notifications.email.to_addresses`.
-- No config CLI: There is no `otto-bgp config` command. Edit `/etc/otto-bgp/otto.env` and/or `/etc/otto-bgp/config.json`.
 - Logging: By default logs go to the journal. A single rotating file log is supported via `OTTO_BGP_LOG_FILE`. Separate `security.log`/`netconf.log` files are not created by the application.
 - IRR proxy lifecycle: With `irr_proxy.enabled`, both `policy` and `pipeline` automatically create tunnels and clean them up on exit. There is no load balancing between tunnels; the first CONNECTED tunnel is used.
 - Proxy + parallel generation: When proxy is active, workers are capped to 4 and receive a snapshot of tunnel endpoints. You can limit workers with `OTTO_BGP_BGPQ4_MAX_WORKERS` as needed.

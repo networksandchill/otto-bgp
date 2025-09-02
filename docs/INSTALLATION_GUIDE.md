@@ -1092,10 +1092,7 @@ sudo userdel otto-bgp
 
 - Systemd service: install.sh generates a oneshot service that runs the unified pipeline and, when not in autonomous mode, a daily timer. Earlier examples with Type=notify, ExecReload, and different paths are outdated and have been replaced with the exact service shape created by install.sh.
 - Directory locations: install.sh installs into `/usr/local/bin`, `/usr/local/lib/otto-bgp`, and `/usr/local/venv` for system mode; and into `~/.local/bin`, `~/.local/lib/otto-bgp`, and `~/.local/venv` for user mode. Any references to `/opt/otto-bgp` are for manual deployment and are not used by the installer.
-- Config CLI: There is no `otto-bgp config ...` CLI at this time. Prior references to `otto-bgp config show/validate` were removed. Edit `/etc/otto-bgp/otto.env` directly or create `/etc/otto-bgp/config.json` for advanced settings (see Configuration Management section above for complete documentation).
-- Email recipients in autonomous mode: Must be configured in `/etc/otto-bgp/config.json` under `autonomous_mode.notifications.email.to_addresses` as they cannot be set via environment variables. Without a JSON config, recipients default to `["network-engineers@company.com"]`. Use the provided `example-configs/config.json.example` template.
 - bgpq4 configuration via env: Runtime selection of bgpq4 is done via CLI and auto‑detection (native, docker, podman). The code does not read `OTTO_BGP_BGPQ4_*` environment variables. Ensure native `bgpq4` or Docker/Podman is available; use `otto-bgp policy --test` to verify.
-- Devices file: The systemd service expects `/etc/otto-bgp/devices.csv` to exist. The installer does not create this file; you must supply it.
 - Configuration management: Some documentation refers to configuration validation CLI commands that don't exist. Configuration validation is done at runtime, not via CLI.
 - Dependencies: Code uses bgpq4 (not bgpq3) and actual requirements.txt contains only 4 packages: junos-eznc, paramiko, PyYAML, pandas.
 - Autonomous mode: Not a separate installation mode but a configuration flag (`AUTONOMOUS_MODE=true`) applied to system installations.

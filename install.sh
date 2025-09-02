@@ -17,11 +17,13 @@ NC='\033[0m'
 
 # Configuration
 REPO_URL="https://github.com/networksandchill/otto-bgp"
+REPO_BRANCH="${OTTO_BGP_BRANCH:-main}"  # Allow override with env var
 INSTALL_MODE="user"
 AUTONOMOUS_MODE=false
 SKIP_BGPQ4=false
 FORCE_INSTALL=false
 TIMEOUT=30
+OTTO_WEBUI_ENABLE_SERVICE_CONTROL="${OTTO_WEBUI_ENABLE_SERVICE_CONTROL:-true}"  # Default to true for WebUI functionality
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -140,6 +142,12 @@ check_requirements() {
         fi
     done
     
+    # Check for OpenSSL (required for TLS certificates)
+    if ! timeout "$TIMEOUT" command -v openssl >/dev/null 2>&1; then
+        missing+=("openssl")
+        log_warn "OpenSSL not found - required for WebUI TLS certificates"
+    fi
+    
     # Check bgpq4 or containers if not skipped
     if [[ "$SKIP_BGPQ4" == false ]]; then
         if timeout "$TIMEOUT" command -v bgpq4 >/dev/null 2>&1; then
@@ -187,6 +195,12 @@ create_directories() {
     mkdir -p "$BIN_DIR" "$LIB_DIR" "$CONFIG_DIR"
     mkdir -p "$DATA_DIR"/{ssh-keys,logs,cache,policies,rpki}
     
+    # Create WebUI and policy directories
+    mkdir -p /usr/local/share/otto-bgp/webui
+    mkdir -p "$CONFIG_DIR/tls"
+    mkdir -p "$DATA_DIR"/policies/{reports,routers}
+    chmod 755 "$CONFIG_DIR/tls"
+    
     if [[ "$INSTALL_MODE" == "system" ]]; then
         # Create service user if needed
         if ! id "$SERVICE_USER" &>/dev/null; then
@@ -194,8 +208,19 @@ create_directories() {
             sudo useradd -r -s /bin/false -d "$DATA_DIR" "$SERVICE_USER" 2>/dev/null || true
         fi
         
+        # Add service user to systemd-journal or adm group for log access
+        if getent group systemd-journal >/dev/null 2>&1; then
+            log_info "Adding $SERVICE_USER to systemd-journal group for log access"
+            sudo usermod -a -G systemd-journal "$SERVICE_USER" 2>/dev/null || true
+        elif getent group adm >/dev/null 2>&1; then
+            log_info "Adding $SERVICE_USER to adm group for log access"
+            sudo usermod -a -G adm "$SERVICE_USER" 2>/dev/null || true
+        fi
+        
         # Set ownership
         sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" 2>/dev/null || true
+        sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" \
+                      /usr/local/share/otto-bgp/webui 2>/dev/null || true
         sudo chmod 700 "$DATA_DIR/ssh-keys" 2>/dev/null || true
     else
         chmod 700 "$DATA_DIR/ssh-keys" 2>/dev/null || true
@@ -231,8 +256,10 @@ check_existing_installation() {
 download_otto_bgp() {
     log_info "Downloading Otto BGP..."
     
-    # Create temp directory
-    TEMP_DIR=$(mktemp -d)
+    # Create temp directory with known name for WebUI deployment
+    TEMP_DIR="/tmp/otto-bgp-install"
+    rm -rf "$TEMP_DIR" 2>/dev/null || true
+    mkdir -p "$TEMP_DIR"
     
     # Ensure cleanup happens even if script exits unexpectedly
     trap 'cd / 2>/dev/null; rm -rf "$TEMP_DIR" 2>/dev/null' EXIT
@@ -240,30 +267,63 @@ download_otto_bgp() {
     cd "$TEMP_DIR"
     
     # Download with timeout
-    if ! timeout 120 curl -fsSL "$REPO_URL/archive/main.tar.gz" | tar xz; then
+    if ! timeout 120 curl -fsSL "$REPO_URL/archive/$REPO_BRANCH.tar.gz" | tar xz; then
         log_error "Download failed or timed out"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
     # Verify download contents
-    if [[ ! -d "otto-bgp-main" ]]; then
-        log_error "Download verification failed - otto-bgp-main directory not found"
+    if [[ ! -d "otto-bgp-$REPO_BRANCH" ]]; then
+        log_error "Download verification failed - otto-bgp-$REPO_BRANCH directory not found"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
-    # Move to lib directory (ensure directory exists first)
+    # Move extracted contents up one level so WebUI deployment can find them
+    # The WebUI deployment expects /tmp/otto-bgp-install/webui not /tmp/otto-bgp-install/otto-bgp-$REPO_BRANCH/webui
+    mv otto-bgp-$REPO_BRANCH/* . 2>/dev/null || true
+    mv otto-bgp-$REPO_BRANCH/.* . 2>/dev/null || true
+    rmdir otto-bgp-$REPO_BRANCH 2>/dev/null || true
+    
+    # Copy to lib directory (preserve temp for WebUI deployment)
     mkdir -p "$LIB_DIR"
-    if ! mv otto-bgp-main/* "$LIB_DIR/"; then
-        log_error "Failed to move files to installation directory"
+    
+    # Copy core directories and files that must exist
+    if [[ ! -d "otto_bgp" ]] || [[ ! -f "requirements.txt" ]]; then
+        log_error "Core files missing in download - otto_bgp directory or requirements.txt not found"
         cd / && rm -rf "$TEMP_DIR"
         exit 1
     fi
     
-    # Cleanup
-    cd / && rm -rf "$TEMP_DIR"
-    trap - EXIT  # Remove the trap since we're cleaning up manually
+    # Copy core components
+    cp -r otto_bgp "$LIB_DIR/" || {
+        log_error "Failed to copy otto_bgp module"
+        cd / && rm -rf "$TEMP_DIR"
+        exit 1
+    }
+    
+    cp requirements.txt "$LIB_DIR/" || {
+        log_error "Failed to copy requirements.txt"
+        cd / && rm -rf "$TEMP_DIR"
+        exit 1
+    }
+    
+    # Copy optional directories if they exist
+    [[ -d "scripts" ]] && cp -r scripts "$LIB_DIR/" 2>/dev/null
+    [[ -d "systemd" ]] && cp -r systemd "$LIB_DIR/" 2>/dev/null
+    [[ -d "webui" ]] && cp -r webui "$LIB_DIR/" 2>/dev/null
+    [[ -d "docs" ]] && cp -r docs "$LIB_DIR/" 2>/dev/null
+    [[ -d "example-configs" ]] && cp -r example-configs "$LIB_DIR/" 2>/dev/null
+    
+    # Copy individual files if they exist (using find to avoid wildcard issues)
+    find . -maxdepth 1 -name "*.py" -exec cp {} "$LIB_DIR/" \; 2>/dev/null
+    find . -maxdepth 1 -name "*.sh" -exec cp {} "$LIB_DIR/" \; 2>/dev/null
+    find . -maxdepth 1 -name "*.md" -exec cp {} "$LIB_DIR/" \; 2>/dev/null
+    
+    # Don't cleanup TEMP_DIR yet - WebUI deployment needs it
+    cd /
+    trap - EXIT  # Remove the trap, we'll clean up after WebUI deployment
     
     log_success "Otto BGP downloaded"
 }
@@ -301,6 +361,14 @@ install_python_deps() {
         log_error "requirements.txt not found"
         deactivate
         exit 1
+    fi
+    
+    # Install WebUI dependencies (optional, only in system mode)
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        log_info "Installing WebUI adapter dependencies..."
+        "$VENV_DIR/bin/pip" install --quiet fastapi 'uvicorn[standard]' PyJWT 'passlib[bcrypt]' python-multipart || {
+            log_warn "WebUI dependencies installation failed (optional)"
+        }
     fi
     
     deactivate
@@ -660,6 +728,282 @@ EOF
     fi
 }
 
+# TLS generation with OpenSSL compatibility for older versions
+generate_self_signed_cert_if_missing() {
+    log_info "Checking for TLS certificates..."
+    
+    CERT_PATH="$CONFIG_DIR/tls/cert.pem"
+    KEY_PATH="$CONFIG_DIR/tls/key.pem"
+    
+    # Skip if both exist
+    if [[ -f "$CERT_PATH" && -f "$KEY_PATH" ]]; then
+        log_info "TLS certificates already exist - skipping generation"
+        return 0
+    fi
+    
+    log_info "Generating self-signed TLS certificate..."
+    
+    # Get hostname and IP for SAN
+    HOST=$(hostname -f 2>/dev/null || hostname)
+    IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    
+    # Build SAN string
+    SAN="DNS:${HOST},DNS:otto-bgp.local,DNS:localhost"
+    [[ -n "$IP" ]] && SAN="${SAN},IP:${IP}"
+    
+    # Create OpenSSL config for compatibility with older versions
+    cat > /tmp/otto-openssl.cnf << EOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = ${HOST}
+
+[v3_req]
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = ${HOST}
+DNS.2 = localhost
+DNS.3 = otto-bgp.local
+IP.1 = 127.0.0.1
+IP.2 = ${IP:-127.0.0.1}
+EOF
+    
+    # Generate certificate using config file (works with OpenSSL 1.0.2+)
+    openssl req -x509 -nodes -days 825 \
+        -newkey rsa:4096 \
+        -keyout "$KEY_PATH" \
+        -out "$CERT_PATH" \
+        -config /tmp/otto-openssl.cnf || {
+        log_error "Failed to generate TLS certificate - WebUI will not start"
+        rm -f /tmp/otto-openssl.cnf
+        return 1
+    }
+    
+    rm -f /tmp/otto-openssl.cnf
+    
+    # Set permissions
+    chmod 600 "$KEY_PATH"
+    chmod 644 "$CERT_PATH"
+    
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        sudo chown "$SERVICE_USER:$SERVICE_USER" "$KEY_PATH" "$CERT_PATH" 2>/dev/null || true
+    fi
+    
+    log_success "TLS certificates generated"
+}
+
+generate_jwt_secret_if_missing() {
+    SECRET_PATH="$CONFIG_DIR/.jwt_secret"
+    if [[ -f "$SECRET_PATH" ]]; then
+        return 0
+    fi
+    log_info "Generating JWT secret..."
+    umask 177
+    head -c 32 /dev/urandom | base64 > "$SECRET_PATH" || {
+        log_warn "Failed to generate JWT secret (optional)"
+        return 0
+    }
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        sudo chown "$SERVICE_USER:$SERVICE_USER" "$SECRET_PATH" 2>/dev/null || true
+    fi
+    chmod 600 "$SECRET_PATH" 2>/dev/null || true
+    log_success "JWT secret created"
+}
+
+generate_setup_token_if_missing() {
+    TOKEN_PATH="$CONFIG_DIR/.setup_token"
+    if [[ -f "$TOKEN_PATH" ]]; then
+        return 0
+    fi
+    log_info "Generating one-time Setup token..."
+    umask 177
+    head -c 32 /dev/urandom | base64 > "$TOKEN_PATH" || {
+        log_warn "Failed to generate Setup token (optional)"
+        return 0
+    }
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        sudo chown "$SERVICE_USER:$SERVICE_USER" "$TOKEN_PATH" 2>/dev/null || true
+    fi
+    chmod 600 "$TOKEN_PATH" 2>/dev/null || true
+    log_success "Setup token generated"
+}
+
+deploy_webui_frontend() {
+    log_info "Deploying WebUI frontend assets..."
+    
+    # Source is the cloned repo in /tmp, destination is /usr/local/share
+    local SOURCE_STATIC="/tmp/otto-bgp-install/webui/static"
+    
+    if [[ -d "$SOURCE_STATIC" ]]; then
+        mkdir -p /usr/local/share/otto-bgp/webui
+        cp -r "$SOURCE_STATIC"/* /usr/local/share/otto-bgp/webui/
+        chmod -R 755 /usr/local/share/otto-bgp/webui
+        
+        if [[ "$INSTALL_MODE" == "system" ]]; then
+            sudo chown -R "$SERVICE_USER:$SERVICE_USER" /usr/local/share/otto-bgp/webui 2>/dev/null || true
+        fi
+        
+        log_success "WebUI frontend deployed successfully"
+    else
+        log_warn "WebUI frontend assets not found - UI will not be available"
+    fi
+}
+
+deploy_webui_adapter() {
+    log_info "Deploying WebUI backend modules..."
+    
+    # Deploy entire webui directory structure (modular architecture)
+    # Source is the cloned repo in /tmp, destination is $LIB_DIR
+    local SOURCE_WEBUI="/tmp/otto-bgp-install/webui"
+    
+    if [[ -d "$SOURCE_WEBUI" ]]; then
+        # Create webui directory in lib
+        mkdir -p "$LIB_DIR/webui"
+        
+        # Copy all Python modules
+        cp "$SOURCE_WEBUI/"*.py "$LIB_DIR/webui/" 2>/dev/null || true
+        
+        # Copy api and core module directories
+        if [[ -d "$SOURCE_WEBUI/api" ]]; then
+            cp -r "$SOURCE_WEBUI/api" "$LIB_DIR/webui/"
+        fi
+        
+        if [[ -d "$SOURCE_WEBUI/core" ]]; then
+            cp -r "$SOURCE_WEBUI/core" "$LIB_DIR/webui/"
+        fi
+        
+        # Set permissions
+        find "$LIB_DIR/webui" -type f -name "*.py" -exec chmod 644 {} \;
+        find "$LIB_DIR/webui" -type d -exec chmod 755 {} \;
+        
+        log_success "WebUI backend modules deployed"
+    else
+        log_warn "WebUI modules not found at $SOURCE_WEBUI - WebUI will not function"
+        return 1
+    fi
+    
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$LIB_DIR/webui" 2>/dev/null || true
+    fi
+}
+
+configure_webui_sudo_permissions() {
+    log_info "Configuring sudo permissions for service control..."
+    
+    # Only configure if user wants service control
+    if [[ "$OTTO_WEBUI_ENABLE_SERVICE_CONTROL" != "true" ]]; then
+        log_info "Service control disabled - skipping sudo configuration"
+        return 0
+    fi
+    
+    cat > /tmp/otto-bgp-webui-sudoers << 'EOF'
+# Otto BGP WebUI service control permissions
+# Allows WebUI to restart services after config changes
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl reload otto-bgp.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-autonomous.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-autonomous.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-autonomous.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-webui-adapter.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-webui-adapter.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-webui-adapter.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl reload otto-bgp-webui-adapter.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-rpki-update.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-rpki-update.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-update.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-rpki-update.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-rpki-update.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-update.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
+EOF
+    
+    # Validate sudoers syntax before installing
+    if visudo -c -f /tmp/otto-bgp-webui-sudoers >/dev/null 2>&1; then
+        sudo mv /tmp/otto-bgp-webui-sudoers /etc/sudoers.d/otto-bgp-webui
+        sudo chmod 440 /etc/sudoers.d/otto-bgp-webui
+        log_success "Service control permissions configured"
+        log_info "To enable: Set OTTO_WEBUI_ENABLE_SERVICE_CONTROL=true in otto.env"
+    else
+        log_warn "Sudoers validation failed - service restart will require manual intervention"
+        rm -f /tmp/otto-bgp-webui-sudoers
+    fi
+}
+
+create_webui_systemd_service() {
+    log_info "Creating WebUI systemd service..."
+    
+    # Create service file directly using tee (same pattern as other services)
+    sudo tee /etc/systemd/system/otto-bgp-webui-adapter.service > /dev/null << EOF
+[Unit]
+Description=Otto BGP WebUI Adapter (Direct TLS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$LIB_DIR
+Environment=PYTHONPATH=$LIB_DIR
+Environment=OTTO_WEBUI_ROOT=/usr/local/share/otto-bgp/webui
+Environment=OTTO_WEBUI_ENABLE_SERVICE_CONTROL=true
+EnvironmentFile=-$CONFIG_DIR/otto.env
+ExecStart=$VENV_DIR/bin/uvicorn webui.app:app --host 0.0.0.0 --port 8443 --ssl-certfile $CONFIG_DIR/tls/cert.pem --ssl-keyfile $CONFIG_DIR/tls/key.pem
+Restart=on-failure
+RestartSec=10
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=$CONFIG_DIR $DATA_DIR
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otto-bgp-webui
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    log_success "WebUI systemd service created"
+}
+
+enable_webui_service() {
+    log_info "Enabling and starting WebUI service..."
+    
+    sudo systemctl daemon-reload || {
+        log_warn "Failed to reload systemd (optional)"
+        return 0
+    }
+    
+    sudo systemctl enable otto-bgp-webui-adapter || {
+        log_warn "Failed to enable WebUI service (optional)"
+    }
+    
+    # Start immediately so Setup Wizard is reachable after install
+    sudo systemctl start otto-bgp-webui-adapter || {
+        log_warn "Failed to start WebUI service (optional)"
+    }
+
+    # Onboarding info: URL and setup token hint
+    HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+    log_info "WebUI running on: https://$HOSTNAME:8443"
+    if [[ -f "$CONFIG_DIR/.setup_token" ]]; then
+        PREVIEW=$(head -c 8 "$CONFIG_DIR/.setup_token" 2>/dev/null || true)
+        log_info "Setup token created at $CONFIG_DIR/.setup_token (preview: ${PREVIEW}...)"
+        log_info "Retrieve full token: sudo cat $CONFIG_DIR/.setup_token"
+    fi
+}
+
 # Main installation
 main() {
     echo -e "${BLUE}Otto BGP v0.3.2 Installation - Unified Pipeline Architecture${NC}"
@@ -678,6 +1022,19 @@ main() {
     create_wrapper
     create_config
     create_systemd_services  # New in v0.3.2
+    
+    # Deploy WebUI components (system mode only)
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        log_info "Installing WebUI components for system mode..."
+        generate_self_signed_cert_if_missing
+        generate_jwt_secret_if_missing
+        generate_setup_token_if_missing
+        deploy_webui_adapter
+        deploy_webui_frontend        # Deploy pre-built assets from webui/static
+        create_webui_systemd_service
+        configure_webui_sudo_permissions  # Optional: for service control
+        enable_webui_service
+    fi
     
     echo ""
     echo -e "${GREEN}✓ Otto BGP v0.3.2 Installation completed successfully!${NC}"
@@ -707,6 +1064,12 @@ main() {
         echo "  5. Environment config: $CONFIG_DIR/otto.env"
     fi
     echo ""
+    
+    # Clean up temp installation directory after successful WebUI deployment
+    if [[ -d "/tmp/otto-bgp-install" ]]; then
+        rm -rf "/tmp/otto-bgp-install"
+        log_info "Cleaned up temporary installation files"
+    fi
 }
 
 # Cleanup function for error handling

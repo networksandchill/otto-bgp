@@ -2,3 +2,9 @@ junos-eznc
 paramiko
 PyYAML
 pandas
+fastapi
+uvicorn[standard]
+PyJWT
+passlib[bcrypt]
+python-multipart
+pydantic

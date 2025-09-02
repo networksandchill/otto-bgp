@@ -153,6 +153,7 @@ show_removal_plan() {
     
     if [[ "$INSTALL_MODE" == "system" ]] && systemctl list-units --full -all | grep -Fq "otto-bgp"; then
         echo "  • Systemd services"
+        echo "  • Systemd journal logs for otto-bgp services"
     fi
     
     echo ""
@@ -186,8 +187,21 @@ remove_systemd_services() {
         sudo systemctl disable otto-bgp.service 2>/dev/null || true
         sudo rm -f /etc/systemd/system/otto-bgp.service
         sudo rm -f /etc/systemd/system/otto-bgp.timer
-        sudo systemctl daemon-reload
-        echo -e "${GREEN}✓${NC} Systemd services removed"
+        echo -e "${GREEN}✓${NC} Otto BGP systemd services removed"
+    fi
+    
+    # Remove WebUI systemd service
+    if [[ "$INSTALL_MODE" == "system" ]] && [[ -f /etc/systemd/system/otto-bgp-webui-adapter.service ]]; then
+        echo "Removing WebUI systemd service..."
+        sudo systemctl stop otto-bgp-webui-adapter.service 2>/dev/null || true
+        sudo systemctl disable otto-bgp-webui-adapter.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/otto-bgp-webui-adapter.service
+        echo -e "${GREEN}✓${NC} WebUI systemd service removed"
+    fi
+    
+    # Reload systemd if any services were removed
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        sudo systemctl daemon-reload 2>/dev/null || true
     fi
 }
 
@@ -214,6 +228,21 @@ perform_uninstall() {
             rm -rf "$LIB_DIR"
         fi
         echo -e "${GREEN}✓${NC} Libraries removed"
+    fi
+    
+    # Remove WebUI frontend assets
+    if [[ -d "/usr/local/share/otto-bgp/webui" ]]; then
+        sudo rm -rf "/usr/local/share/otto-bgp/webui"
+        echo -e "${GREEN}✓${NC} WebUI frontend assets removed"
+        
+        # Remove parent directory if empty
+        rmdir "/usr/local/share/otto-bgp" 2>/dev/null || true
+    fi
+    
+    # Remove WebUI sudoers file
+    if [[ -f "/etc/sudoers.d/otto-bgp-webui" ]]; then
+        sudo rm -f "/etc/sudoers.d/otto-bgp-webui"
+        echo -e "${GREEN}✓${NC} WebUI sudoers permissions removed"
     fi
     
     # Remove virtual environment
@@ -268,6 +297,23 @@ perform_uninstall() {
             sudo userdel otto-bgp 2>/dev/null || true
             echo -e "${GREEN}✓${NC} Service user removed"
         fi
+    fi
+    
+    # Clean up systemd journal logs for otto-bgp services
+    if [[ "$INSTALL_MODE" == "system" ]] || [[ "$FORCE_CLEANUP" == true ]]; then
+        echo "Cleaning systemd journal logs..."
+        # Remove logs for all otto-bgp related services
+        for service in otto-bgp otto-bgp-webui-adapter otto-bgp-autonomous otto-bgp-rpki-update; do
+            sudo journalctl --rotate 2>/dev/null || true
+            sudo journalctl --vacuum-time=1s -u "${service}.service" 2>/dev/null || true
+            sudo journalctl --vacuum-time=1s -u "${service}.timer" 2>/dev/null || true
+        done
+        
+        # Also clean up any otto-bgp-webui syslog identifier logs
+        sudo journalctl --rotate 2>/dev/null || true
+        sudo journalctl --vacuum-time=1s -t otto-bgp-webui 2>/dev/null || true
+        
+        echo -e "${GREEN}✓${NC} Systemd journal logs cleaned"
     fi
     
     # Force cleanup mode - remove any remaining files
