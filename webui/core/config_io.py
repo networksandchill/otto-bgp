@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 from datetime import datetime
 from typing import Dict, Any, List
@@ -15,6 +16,107 @@ def redact_sensitive_fields(config: Dict[str, Any]) -> Dict[str, Any]:
     if 'smtp' in cfg and 'password' in cfg['smtp']:
         cfg['smtp']['password'] = "*****"
     return cfg
+
+
+def load_config_json_only() -> Dict[str, Any]:
+    """Load configuration from config.json without env fallback"""
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def deep_merge(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge src dict into dst dict"""
+    for key, value in src.items():
+        if key in dst and isinstance(dst[key], dict) and isinstance(value, dict):
+            deep_merge(dst[key], value)
+        else:
+            dst[key] = value
+    return dst
+
+
+def normalize_email_addresses(addresses: Any) -> List[str]:
+    """Normalize and validate email addresses from CSV or list"""
+    if not addresses:
+        return []
+    
+    # Handle CSV string or list
+    if isinstance(addresses, str):
+        addr_list = [a.strip() for a in addresses.split(',')]
+    elif isinstance(addresses, list):
+        addr_list = [str(a).strip() for a in addresses]
+    else:
+        return []
+    
+    # Filter empty and validate format
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    valid_addresses = []
+    seen_domains = set()
+    
+    for addr in addr_list:
+        if not addr or len(addr) > 254:
+            continue
+        if not re.match(email_pattern, addr):
+            continue
+        
+        # Deduplicate by lowercase domain
+        parts = addr.split('@')
+        if len(parts) == 2:
+            domain_key = parts[0].lower() + '@' + parts[1].lower()
+            if domain_key not in seen_domains:
+                seen_domains.add(domain_key)
+                valid_addresses.append(addr)
+    
+    # Cap at 50 recipients
+    return valid_addresses[:50]
+
+
+def update_core_email_config(ui_smtp: Dict[str, Any]) -> Dict[str, Any]:
+    """Map UI SMTP config to core nested structure and update config.json"""
+    # Load current config without env fallback
+    config = load_config_json_only()
+    
+    # Ensure nested structure exists
+    if 'autonomous_mode' not in config:
+        config['autonomous_mode'] = {}
+    if 'notifications' not in config['autonomous_mode']:
+        config['autonomous_mode']['notifications'] = {}
+    if 'email' not in config['autonomous_mode']['notifications']:
+        config['autonomous_mode']['notifications']['email'] = {}
+    
+    # Map UI fields to core structure
+    email_config = config['autonomous_mode']['notifications']['email']
+    
+    # Map each field with proper naming
+    if 'host' in ui_smtp:
+        email_config['smtp_server'] = ui_smtp['host']
+    if 'port' in ui_smtp:
+        email_config['smtp_port'] = int(ui_smtp['port'])
+    if 'use_tls' in ui_smtp:
+        email_config['smtp_use_tls'] = bool(ui_smtp['use_tls'])
+    if 'username' in ui_smtp:
+        email_config['smtp_username'] = ui_smtp['username']
+    if 'password' in ui_smtp:
+        email_config['smtp_password'] = ui_smtp['password']
+    if 'from_address' in ui_smtp:
+        email_config['from_address'] = ui_smtp['from_address']
+    if 'to_addresses' in ui_smtp:
+        email_config['to_addresses'] = normalize_email_addresses(ui_smtp['to_addresses'])
+    if 'enabled' in ui_smtp:
+        email_config['enabled'] = bool(ui_smtp['enabled'])
+    
+    # Set default subject prefix if not present
+    if 'subject_prefix' not in email_config:
+        email_config['subject_prefix'] = '[Otto BGP Autonomous]'
+    
+    # Save updated config with atomic write
+    atomic_write_json(CONFIG_PATH, config, mode=0o600)
+    
+    return email_config
 
 
 def validate_smtp_config(smtp_dict: Dict) -> List[str]:
@@ -96,7 +198,7 @@ def load_config_from_otto_env() -> Dict[str, Any]:
             ],
         }
 
-        # SMTP settings
+        # SMTP settings - read from env for backward compatibility
         if env_dict.get('OTTO_BGP_EMAIL_ENABLED', 'false').lower() == 'true':
             config['smtp'] = {
                 'enabled': True,
@@ -106,7 +208,7 @@ def load_config_from_otto_env() -> Dict[str, Any]:
                 'username': env_dict.get('OTTO_BGP_SMTP_USERNAME', ''),
                 'password': env_dict.get('OTTO_BGP_SMTP_PASSWORD', ''),
                 'from_address': env_dict.get('OTTO_BGP_EMAIL_FROM', ''),
-                'to_addresses': env_dict.get('OTTO_BGP_EMAIL_TO', '').split(',') if env_dict.get('OTTO_BGP_EMAIL_TO') else []
+                'to_addresses': normalize_email_addresses(env_dict.get('OTTO_BGP_EMAIL_TO', ''))
             }
 
         return config
@@ -194,26 +296,8 @@ def sync_config_to_otto_env(config: Dict[str, Any]) -> bool:
                 env_dict['OTTO_BGP_ALLOWED_NETWORKS'] = ','.join(ns['allowed_networks'])
             if ns.get('blocked_networks'):
                 env_dict['OTTO_BGP_BLOCKED_NETWORKS'] = ','.join(ns['blocked_networks'])
-        # SMTP
-        if 'smtp' in config and config['smtp'].get('enabled'):
-            smtp = config['smtp']
-            env_dict['OTTO_BGP_EMAIL_ENABLED'] = 'true'
-            if smtp.get('host'):
-                env_dict['OTTO_BGP_SMTP_SERVER'] = smtp['host']
-            if smtp.get('port'):
-                env_dict['OTTO_BGP_SMTP_PORT'] = str(smtp['port'])
-            if 'use_tls' in smtp:
-                env_dict['OTTO_BGP_SMTP_USE_TLS'] = str(smtp['use_tls']).lower()
-            if smtp.get('username'):
-                env_dict['OTTO_BGP_SMTP_USERNAME'] = smtp['username']
-            if smtp.get('password'):
-                env_dict['OTTO_BGP_SMTP_PASSWORD'] = smtp['password']
-            if smtp.get('from_address'):
-                env_dict['OTTO_BGP_EMAIL_FROM'] = smtp['from_address']
-            if smtp.get('to_addresses'):
-                env_dict['OTTO_BGP_EMAIL_TO'] = ','.join(smtp['to_addresses'])
-        else:
-            env_dict['OTTO_BGP_EMAIL_ENABLED'] = 'false'
+        # SMTP - DO NOT write to otto.env anymore
+        # SMTP configuration is now persisted only in config.json
 
         # Atomic write
         with tempfile.NamedTemporaryFile('w', dir=str(otto_env_path.parent), delete=False) as tmp:
@@ -231,16 +315,39 @@ def sync_config_to_otto_env(config: Dict[str, Any]) -> bool:
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from config.json with otto.env fallback"""
+    config = {}
+    
+    # First try config.json
     if CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH) as f:
-                return json.load(f)
+                config = json.load(f)
         except Exception:
             pass
-    return load_config_from_otto_env()
+    
+    # If no config.json, fall back to otto.env
+    if not config:
+        config = load_config_from_otto_env()
+    
+    # Map nested core email config to flat SMTP for UI
+    if 'autonomous_mode' in config and 'notifications' in config['autonomous_mode']:
+        if 'email' in config['autonomous_mode']['notifications']:
+            email_cfg = config['autonomous_mode']['notifications']['email']
+            config['smtp'] = {
+                'enabled': email_cfg.get('enabled', False),
+                'host': email_cfg.get('smtp_server', ''),
+                'port': email_cfg.get('smtp_port', 587),
+                'use_tls': email_cfg.get('smtp_use_tls', True),
+                'username': email_cfg.get('smtp_username', ''),
+                'password': email_cfg.get('smtp_password', ''),
+                'from_address': email_cfg.get('from_address', ''),
+                'to_addresses': email_cfg.get('to_addresses', [])
+            }
+    
+    return config
 
 
 def save_config(config: Dict[str, Any]):
-    """Save configuration to both config.json and otto.env"""
+    """Save configuration to config.json and sync non-SMTP settings to otto.env"""
     atomic_write_json(CONFIG_PATH, config, mode=0o600)
     sync_config_to_otto_env(config)
