@@ -98,7 +98,7 @@ main() {
     # Update backend Python files
     log_info "Updating backend Python code..."
     
-    # Copy Python files
+    # Copy root Python files
     for py_file in webui/*.py; do
         if [[ -f "$py_file" ]]; then
             filename=$(basename "$py_file")
@@ -106,6 +106,22 @@ main() {
             log_info "  Updated: $filename"
         fi
     done
+    
+    # Copy API module directory
+    if [[ -d "webui/api" ]]; then
+        log_info "  Updating API module..."
+        rm -rf "$WEBUI_BACKEND_DIR/api" 2>/dev/null || true
+        cp -r "webui/api" "$WEBUI_BACKEND_DIR/"
+        log_info "  Updated: api/"
+    fi
+    
+    # Copy Core module directory
+    if [[ -d "webui/core" ]]; then
+        log_info "  Updating Core module..."
+        rm -rf "$WEBUI_BACKEND_DIR/core" 2>/dev/null || true
+        cp -r "webui/core" "$WEBUI_BACKEND_DIR/"
+        log_info "  Updated: core/"
+    fi
     
     # Copy any additional backend files (schemas, settings, etc.)
     for file in webui/*.json webui/*.yaml webui/*.yml; do
