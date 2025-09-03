@@ -10,8 +10,8 @@ const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000
 const THROTTLE_MS = 1000
 
 export function shouldRefreshToken(): boolean {
-  // Only refresh if user active within last 30 seconds
-  return Date.now() - lastActivity < 30_000
+  // Only refresh if user active within last 18 minutes (before warning appears)
+  return Date.now() - lastActivity < 18 * 60 * 1000
 }
 
 export function markActivity(): void {
