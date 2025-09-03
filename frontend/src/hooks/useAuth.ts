@@ -34,15 +34,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [initialCheckDone, setInitialCheckDone] = useState(false)
   const queryClient = useQueryClient()
 
-  React.useEffect(() => {
-    const boot = async () => {
-      if (!sessionStorage.getItem('access_token')) {
-        try { await apiClient.refreshToken() } catch { /* ignore */ }
-      }
-    }
-    boot()
-  }, [])
-
   // Check if we have a stored token on mount
   const hasStoredToken = !!sessionStorage.getItem('access_token')
 
@@ -79,6 +70,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setInitialCheckDone(true)
     }
   }, [sessionData, sessionError, hasStoredToken, isLoading])
+
+  // Bootstrap refresh effect - attempt silent refresh on mount if no token
+  React.useEffect(() => {
+    const boot = async () => {
+      if (!sessionStorage.getItem('access_token')) {
+        try { await apiClient.refreshToken() } catch { /* ignore */ }
+      }
+    }
+    boot()
+  }, [])
 
   // Login mutation
   const loginMutation = useMutation({
