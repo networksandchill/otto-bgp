@@ -4,6 +4,7 @@ import type {
   AppConfig, ConfigValidationResponse, DeploymentMatrix, SystemDResponse,
   ServiceControlRequest, SMTPConfig
 } from '../types'
+import { shouldRefreshToken } from '../utils/activityTracker'
 
 class ApiClient {
   private client: AxiosInstance
@@ -41,6 +42,13 @@ class ApiClient {
 
         if (error.response?.status === 401 && !originalRequest._retry && !reqUrl.includes('/auth/refresh')) {
           originalRequest._retry = true
+          
+          // Only attempt refresh if recently active; otherwise logout
+          if (!shouldRefreshToken()) {
+            this.clearTokens()
+            window.location.href = '/login'
+            return Promise.reject(error)
+          }
           
           // Use singleton refresh promise to prevent concurrent refreshes
           if (!this.refreshPromise) {

@@ -16,6 +16,8 @@ import Users from './pages/Users'
 import Profile from './pages/Profile'
 import SetupWizard from './pages/setup/SetupWizard'
 import apiClient from './api/client'
+import { initActivityTracking } from './utils/activityTracker'
+import { IdleWarningModal } from './components/IdleWarningModal'
 
 // Cockpit-inspired theme
 const cockpitTheme = createTheme({
@@ -59,6 +61,7 @@ const cockpitTheme = createTheme({
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth()
+  const [showIdleWarning, setShowIdleWarning] = React.useState(false)
 
   // Check setup state
   const { data: setupState, isLoading: setupLoading } = useQuery({
@@ -88,11 +91,28 @@ const AppContent: React.FC = () => {
     return <SetupWizard />
   }
 
+  React.useEffect(() => {
+    if (!isAuthenticated) return
+    const cleanup = initActivityTracking({
+      onWarning: () => setShowIdleWarning(true),
+      onTimeout: async () => {
+        try { await apiClient.logout() } finally { window.location.href = '/login' }
+      },
+    })
+    return cleanup
+  }, [isAuthenticated])
+
+  const handleStaySignedIn = async () => {
+    setShowIdleWarning(false)
+    try { await apiClient.refreshToken() } catch (e) { /* no-op */ }
+  }
+
   if (!isAuthenticated) {
     return <Login />
   }
 
   return (
+    <>
     <Routes>
       <Route path="/" element={<CockpitLayout />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
@@ -134,7 +154,12 @@ const AppContent: React.FC = () => {
       </Route>
       <Route path="/login" element={<Login />} />
     </Routes>
-  )
+    <IdleWarningModal
+      open={showIdleWarning}
+      onStaySignedIn={handleStaySignedIn}
+      onLogout={async () => { try { await apiClient.logout() } finally { window.location.href = '/login' } }}
+    />
+    </>)
 }
 
 const App: React.FC = () => {
