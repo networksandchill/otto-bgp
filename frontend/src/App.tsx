@@ -70,6 +70,23 @@ const AppContent: React.FC = () => {
     retry: false,
   })
 
+  // Activity tracking effect - MUST be before any conditional returns
+  React.useEffect(() => {
+    if (!isAuthenticated) return
+    const cleanup = initActivityTracking({
+      onWarning: () => setShowIdleWarning(true),
+      onTimeout: async () => {
+        try { await apiClient.logout() } finally { window.location.href = '/login' }
+      },
+    })
+    return cleanup
+  }, [isAuthenticated])
+
+  const handleStaySignedIn = async () => {
+    setShowIdleWarning(false)
+    try { await apiClient.refreshToken() } catch (e) { /* no-op */ }
+  }
+
   // Show loading state while checking authentication and setup
   if (isLoading || setupLoading) {
     // Return a minimal loading state to prevent flash of login
@@ -89,22 +106,6 @@ const AppContent: React.FC = () => {
   // Show setup wizard if setup is needed
   if (setupState?.needs_setup) {
     return <SetupWizard />
-  }
-
-  React.useEffect(() => {
-    if (!isAuthenticated) return
-    const cleanup = initActivityTracking({
-      onWarning: () => setShowIdleWarning(true),
-      onTimeout: async () => {
-        try { await apiClient.logout() } finally { window.location.href = '/login' }
-      },
-    })
-    return cleanup
-  }, [isAuthenticated])
-
-  const handleStaySignedIn = async () => {
-    setShowIdleWarning(false)
-    try { await apiClient.refreshToken() } catch (e) { /* no-op */ }
   }
 
   if (!isAuthenticated) {
