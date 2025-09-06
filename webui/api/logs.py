@@ -20,7 +20,8 @@ async def get_system_logs(
         unit_map = {
             "otto-bgp": "otto-bgp.service",
             "webui": "otto-bgp-webui-adapter.service",
-            "rpki": "otto-bgp-rpki-update.service"
+            "rpki": "otto-bgp-rpki-update.service",
+            "rpki-client": "rpki-client.service"
         }
         unit = unit_map.get(service)
     

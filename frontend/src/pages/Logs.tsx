@@ -177,6 +177,7 @@ const Logs: React.FC = () => {
               <MenuItem value="otto-bgp">otto-bgp</MenuItem>
               <MenuItem value="webui">webui-adapter</MenuItem>
               <MenuItem value="rpki">rpki-update</MenuItem>
+              <MenuItem value="rpki-client">rpki-client</MenuItem>
             </Select>
           </FormControl>
 
