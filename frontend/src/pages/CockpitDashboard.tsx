@@ -167,6 +167,8 @@ const CockpitDashboard: React.FC = () => {
       'otto-bgp-rpki-update.service',
       'otto-bgp.timer',
       'otto-bgp-rpki-update.timer',
+      'rpki-client.service',
+      'rpki-client.timer',
     ]),
     refetchInterval: 30000,
   })
@@ -320,6 +322,11 @@ const CockpitDashboard: React.FC = () => {
               onAction={(action) => handleServiceAction('otto-bgp-rpki-update.service', action)}
               isLoading={loadingService === 'otto-bgp-rpki-update.service'}
             />
+            <ServiceRow
+              name="rpki-client.service"
+              description="System RPKI validation client"
+              status={getServiceStatus('rpki-client.service')}
+            />
           </List>
         </Paper>
       </Grid>
@@ -342,6 +349,11 @@ const CockpitDashboard: React.FC = () => {
               name="otto-bgp-rpki-update.timer"
               description="Hourly RPKI cache refresh"
               status={getServiceStatus('otto-bgp-rpki-update.timer')}
+            />
+            <ServiceRow
+              name="rpki-client.timer"
+              description="System RPKI data fetch"
+              status={getServiceStatus('rpki-client.timer')}
             />
           </List>
         </Paper>
