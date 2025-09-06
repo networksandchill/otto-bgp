@@ -190,6 +190,18 @@ remove_systemd_services() {
         echo -e "${GREEN}✓${NC} Otto BGP systemd services removed"
     fi
     
+    # Remove RPKI systemd services
+    if [[ "$INSTALL_MODE" == "system" ]] && [[ -f /etc/systemd/system/otto-bgp-rpki-update.service ]]; then
+        echo "Removing RPKI systemd services..."
+        sudo systemctl stop otto-bgp-rpki-update.timer 2>/dev/null || true
+        sudo systemctl stop otto-bgp-rpki-update.service 2>/dev/null || true
+        sudo systemctl disable otto-bgp-rpki-update.timer 2>/dev/null || true
+        sudo systemctl disable otto-bgp-rpki-update.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/otto-bgp-rpki-update.service
+        sudo rm -f /etc/systemd/system/otto-bgp-rpki-update.timer
+        echo -e "${GREEN}✓${NC} RPKI systemd services removed"
+    fi
+    
     # Remove WebUI systemd service
     if [[ "$INSTALL_MODE" == "system" ]] && [[ -f /etc/systemd/system/otto-bgp-webui-adapter.service ]]; then
         echo "Removing WebUI systemd service..."

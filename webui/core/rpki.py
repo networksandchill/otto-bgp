@@ -20,6 +20,12 @@ def get_rpki_status() -> Dict:
             "totalPrefixes": 0,
         },
         "timerActive": False,
+        "systemRpkiClient": {
+            "serviceActive": False,
+            "timerActive": False,
+            "lastRun": None,
+            "nextRun": None,
+        }
     }
     if RPKI_CACHE_PATH.exists():
         stats["status"] = "active"
@@ -35,11 +41,53 @@ def get_rpki_status() -> Dict:
                 )
         except Exception:
             pass
-    # Timer status
+    # Otto RPKI timer status
     try:
         result = subprocess.run(['/usr/bin/systemctl', 'is-active', 'otto-bgp-rpki-update.timer'], capture_output=True, text=True)
         if result.stdout.strip() == 'active':
             stats['timerActive'] = True
     except Exception:
         pass
+    
+    # System rpki-client status
+    try:
+        # Check if rpki-client.service is active
+        result = subprocess.run(['/usr/bin/systemctl', 'is-active', 'rpki-client.service'], capture_output=True, text=True)
+        if result.stdout.strip() == 'active':
+            stats['systemRpkiClient']['serviceActive'] = True
+        
+        # Check if rpki-client.timer is active
+        result = subprocess.run(['/usr/bin/systemctl', 'is-active', 'rpki-client.timer'], capture_output=True, text=True)
+        if result.stdout.strip() == 'active':
+            stats['systemRpkiClient']['timerActive'] = True
+        
+        # Get timer details for last/next run times
+        result = subprocess.run(['/usr/bin/systemctl', 'show', 'rpki-client.timer', '--property=LastTriggerUSec,NextElapseUSec'], 
+                                capture_output=True, text=True)
+        for line in result.stdout.strip().split('\n'):
+            if 'LastTriggerUSec=' in line:
+                timestamp = line.split('=', 1)[1]
+                if timestamp and timestamp != 'n/a' and timestamp != '0':
+                    try:
+                        # Parse systemd timestamp format
+                        result2 = subprocess.run(['/usr/bin/date', '-d', timestamp, '+%Y-%m-%dT%H:%M:%S'], 
+                                                capture_output=True, text=True)
+                        if result2.returncode == 0:
+                            stats['systemRpkiClient']['lastRun'] = result2.stdout.strip()
+                    except Exception:
+                        pass
+            elif 'NextElapseUSec=' in line:
+                timestamp = line.split('=', 1)[1]
+                if timestamp and timestamp != 'n/a' and timestamp != '0':
+                    try:
+                        result2 = subprocess.run(['/usr/bin/date', '-d', timestamp, '+%Y-%m-%dT%H:%M:%S'], 
+                                                capture_output=True, text=True)
+                        if result2.returncode == 0:
+                            stats['systemRpkiClient']['nextRun'] = result2.stdout.strip()
+                    except Exception:
+                        pass
+    except Exception:
+        # rpki-client services might not be installed
+        pass
+    
     return stats

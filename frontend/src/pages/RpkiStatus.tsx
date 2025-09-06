@@ -132,7 +132,7 @@ const RpkiStatus: React.FC = () => {
       <Grid item xs={12} md={6}>
         <Paper sx={{ p: 2, border: '1px solid #333' }}>
           <Typography variant="body1" sx={{ color: '#f5f5f5', fontWeight: 600, mb: 2 }}>
-            RPKI Cache Status
+            Otto RPKI Cache Status
           </Typography>
           <Box sx={{ display: 'grid', gap: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -162,11 +162,62 @@ const RpkiStatus: React.FC = () => {
         </Paper>
       </Grid>
 
-      {/* Timer Status */}
+      {/* System rpki-client Status */}
       <Grid item xs={12} md={6}>
         <Paper sx={{ p: 2, border: '1px solid #333' }}>
           <Typography variant="body1" sx={{ color: '#f5f5f5', fontWeight: 600, mb: 2 }}>
-            RPKI Service Status
+            System RPKI Client Status
+          </Typography>
+          <Box sx={{ display: 'grid', gap: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Typography variant="caption" sx={{ color: '#888' }}>rpki-client.service</Typography>
+              <Chip
+                label={rpkiData?.systemRpkiClient?.serviceActive ? 'Active' : 'Inactive'}
+                size="small"
+                sx={{
+                  bgcolor: rpkiData?.systemRpkiClient?.serviceActive ? '#00a86b' : '#666',
+                  color: '#fff',
+                  height: 20,
+                }}
+              />
+            </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Typography variant="caption" sx={{ color: '#888' }}>rpki-client.timer</Typography>
+              <Chip
+                label={rpkiData?.systemRpkiClient?.timerActive ? 'Active' : 'Inactive'}
+                size="small"
+                sx={{
+                  bgcolor: rpkiData?.systemRpkiClient?.timerActive ? '#00a86b' : '#666',
+                  color: '#fff',
+                  height: 20,
+                }}
+              />
+            </Box>
+            {rpkiData?.systemRpkiClient?.lastRun && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="caption" sx={{ color: '#888' }}>Last Run</Typography>
+                <Typography variant="body2" sx={{ color: '#f5f5f5' }}>
+                  {new Date(rpkiData.systemRpkiClient.lastRun).toLocaleString()}
+                </Typography>
+              </Box>
+            )}
+            {rpkiData?.systemRpkiClient?.nextRun && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="caption" sx={{ color: '#888' }}>Next Run</Typography>
+                <Typography variant="body2" sx={{ color: '#f5f5f5' }}>
+                  {new Date(rpkiData.systemRpkiClient.nextRun).toLocaleString()}
+                </Typography>
+              </Box>
+            )}
+          </Box>
+        </Paper>
+      </Grid>
+
+      {/* Otto RPKI Service Status */}
+      <Grid item xs={12} md={6}>
+        <Paper sx={{ p: 2, border: '1px solid #333' }}>
+          <Typography variant="body1" sx={{ color: '#f5f5f5', fontWeight: 600, mb: 2 }}>
+            Otto RPKI Service Status
           </Typography>
           <Box sx={{ display: 'grid', gap: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
