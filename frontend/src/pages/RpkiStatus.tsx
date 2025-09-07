@@ -154,7 +154,18 @@ const RpkiStatus: React.FC = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <Schedule sx={{ fontSize: 14, color: '#888' }} />
                 <Typography variant="body2" sx={{ color: '#f5f5f5' }}>
-                  in 42 minutes
+                  {(() => {
+                    if (!rpkiData?.lastUpdate) return 'Unknown';
+                    const lastUpdate = new Date(rpkiData.lastUpdate);
+                    const nextUpdate = new Date(lastUpdate.getTime() + 60 * 60 * 1000); // Add 1 hour
+                    const now = new Date();
+                    const minutesUntilUpdate = Math.max(0, Math.round((nextUpdate.getTime() - now.getTime()) / 60000));
+                    if (minutesUntilUpdate === 0) return 'Now';
+                    if (minutesUntilUpdate < 60) return `in ${minutesUntilUpdate} minute${minutesUntilUpdate !== 1 ? 's' : ''}`;
+                    const hoursUntilUpdate = Math.floor(minutesUntilUpdate / 60);
+                    const remainingMinutes = minutesUntilUpdate % 60;
+                    return `in ${hoursUntilUpdate} hour${hoursUntilUpdate !== 1 ? 's' : ''}${remainingMinutes > 0 ? ` ${remainingMinutes} min` : ''}`;
+                  })()}
                 </Typography>
               </Box>
             </Box>
