@@ -71,15 +71,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, [sessionData, sessionError, hasStoredToken, isLoading])
 
-  // Bootstrap refresh effect - attempt silent refresh on mount if no token
-  React.useEffect(() => {
-    const boot = async () => {
-      if (!sessionStorage.getItem('access_token')) {
-        try { await apiClient.refreshToken() } catch { /* ignore */ }
-      }
-    }
-    boot()
-  }, [])
 
   // Login mutation
   const loginMutation = useMutation({
