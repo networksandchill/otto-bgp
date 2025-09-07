@@ -841,8 +841,9 @@ deploy_webui_frontend() {
     local SOURCE_STATIC="/tmp/otto-bgp-install/webui/static"
     
     if [[ -d "$SOURCE_STATIC" ]]; then
-        mkdir -p /usr/local/share/otto-bgp/webui
-        cp -r "$SOURCE_STATIC"/* /usr/local/share/otto-bgp/webui/
+        # Create webui directory and preserve static subdirectory structure
+        mkdir -p /usr/local/share/otto-bgp/webui/static
+        cp -r "$SOURCE_STATIC"/* /usr/local/share/otto-bgp/webui/static/
         chmod -R 755 /usr/local/share/otto-bgp/webui
         
         if [[ "$INSTALL_MODE" == "system" ]]; then

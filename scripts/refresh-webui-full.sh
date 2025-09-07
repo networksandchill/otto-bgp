@@ -131,8 +131,9 @@ main() {
     log_info "Updating frontend assets..."
     
     if [[ -d "webui/static" ]]; then
-        rm -rf "${WEBUI_ASSETS_DIR:?}"/*
-        cp -r webui/static/* "$WEBUI_ASSETS_DIR/"
+        rm -rf "${WEBUI_ASSETS_DIR:?}"/static
+        mkdir -p "$WEBUI_ASSETS_DIR/static"
+        cp -r webui/static/* "$WEBUI_ASSETS_DIR/static/"
         log_info "  Frontend assets updated"
     else
         log_warn "No static assets found in repository"

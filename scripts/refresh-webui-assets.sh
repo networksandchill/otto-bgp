@@ -102,19 +102,21 @@ main() {
         fi
     fi
     
-    # Copy new assets
+    # Copy new assets (preserve static subdirectory structure)
     log_info "Installing new assets..."
     
     if [[ $EUID -eq 0 ]]; then
-        rm -rf "${WEBUI_DIR:?}"/*
-        cp -r webui/static/* "$WEBUI_DIR/"
+        rm -rf "${WEBUI_DIR:?}"/static
+        mkdir -p "$WEBUI_DIR/static"
+        cp -r webui/static/* "$WEBUI_DIR/static/"
         
         # Set proper permissions
         chown -R otto-bgp:otto-bgp "$WEBUI_DIR" 2>/dev/null || true
         chmod -R 755 "$WEBUI_DIR"
     else
-        sudo rm -rf "${WEBUI_DIR:?}"/*
-        sudo cp -r webui/static/* "$WEBUI_DIR/"
+        sudo rm -rf "${WEBUI_DIR:?}"/static
+        sudo mkdir -p "$WEBUI_DIR/static"
+        sudo cp -r webui/static/* "$WEBUI_DIR/static/"
         
         # Set proper permissions
         sudo chown -R otto-bgp:otto-bgp "$WEBUI_DIR" 2>/dev/null || true
