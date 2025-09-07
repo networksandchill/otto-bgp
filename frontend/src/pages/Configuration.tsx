@@ -4,14 +4,16 @@ import {
   Grid, Alert, Snackbar, FormControlLabel, Switch,
   Divider, Chip, Tabs, Tab, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, IconButton, Dialog,
-  DialogTitle, DialogContent, DialogActions
+  DialogTitle, DialogContent, DialogActions, Accordion,
+  AccordionSummary, AccordionDetails
 } from '@mui/material'
 import { 
   Save as SaveIcon, Science as TestIcon, Add as AddIcon,
   Edit as EditIcon, Delete as DeleteIcon, Router as RouterIcon,
   Email as EmailIcon, Security as SecurityIcon, Shield as ShieldIcon,
   VerifiedUser as VerifiedIcon, Build as BuildIcon, 
-  NetworkCheck as NetworkIcon
+  NetworkCheck as NetworkIcon, ExpandMore as ExpandMoreIcon,
+  CheckCircle as CheckCircleIcon, PlayCircleOutline as AutoIcon
 } from '@mui/icons-material'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
@@ -64,6 +66,41 @@ const Configuration: React.FC = () => {
     role: '',
     region: ''
   })
+  
+  // SSH Key Management state
+  const [sshKeyInfo, setSshKeyInfo] = useState<{
+    public_key?: string
+    fingerprints?: { sha256: string; md5: string }
+    path?: string
+  } | null>(null)
+  const [knownHosts, setKnownHosts] = useState<Array<{
+    line: number
+    host: string
+    key_type: string
+    fingerprint: string
+    raw: string
+  }>>([])
+  const [sshKeyLoading, setSshKeyLoading] = useState(false)
+  const [knownHostsLoading, setKnownHostsLoading] = useState(false)
+  const [fetchHostDialog, setFetchHostDialog] = useState<{
+    open: boolean
+    host: string
+    port: number
+  }>({ open: false, host: '', port: 22 })
+  const [addHostDialog, setAddHostDialog] = useState<{
+    open: boolean
+    entry: string
+  }>({ open: false, entry: '' })
+  const [backupDialog, setBackupDialog] = useState<{
+    open: boolean
+  }>({ open: false })
+  const [backups, setBackups] = useState<Array<{
+    id: string
+    timestamp: string
+    files: Array<{ name: string; size: number }>
+  }>>([])
+  const [backupsLoading, setBackupsLoading] = useState(false)
+  
   const queryClient = useQueryClient()
 
   // Query current config
@@ -91,6 +128,45 @@ const Configuration: React.FC = () => {
       setDevices(devicesData.devices)
     }
   }, [devicesData])
+
+  // Load SSH key info when Global SSH tab is selected
+  useEffect(() => {
+    if (tabValue === 1) {
+      loadSSHKeyInfo()
+      loadKnownHosts()
+    }
+  }, [tabValue])
+
+  useEffect(() => {
+    if (backupDialog.open) {
+      loadBackups()
+    }
+  }, [backupDialog.open])
+
+  const loadSSHKeyInfo = async () => {
+    try {
+      setSshKeyLoading(true)
+      const data = await apiClient.getSSHPublicKey()
+      setSshKeyInfo(data)
+    } catch (error) {
+      // Key might not exist yet, which is ok
+      setSshKeyInfo(null)
+    } finally {
+      setSshKeyLoading(false)
+    }
+  }
+
+  const loadKnownHosts = async () => {
+    try {
+      setKnownHostsLoading(true)
+      const data = await apiClient.getKnownHosts()
+      setKnownHosts(data.entries || [])
+    } catch (error) {
+      setKnownHosts([])
+    } finally {
+      setKnownHostsLoading(false)
+    }
+  }
 
   // Save config mutation
   const saveConfigMutation = useMutation({
@@ -134,6 +210,31 @@ const Configuration: React.FC = () => {
     if (config?.smtp) {
       setTestResult(null)
       await testSmtpMutation.mutateAsync(config.smtp)
+    }
+  }
+
+  const handleSendTestEmail = async () => {
+    if (config?.smtp) {
+      setTestResult(null)
+      try {
+        const result = await apiClient.sendTestEmail(config.smtp)
+        setTestResult(result.success ? 'Test email sent successfully!' : `Failed: ${result.message}`)
+      } catch (error: any) {
+        setTestResult(`Failed: ${error.response?.data?.detail || error.message}`)
+      }
+    }
+  }
+
+  const handleValidateRpkiCache = async () => {
+    try {
+      const result = await apiClient.validateRpkiCache()
+      if (result.ok) {
+        setTestResult('RPKI cache is valid')
+      } else {
+        setTestResult(`RPKI cache issues: ${result.issues?.join(', ')}`)
+      }
+    } catch (error: any) {
+      setTestResult(`Failed to validate RPKI cache: ${error.response?.data?.detail || error.message}`)
     }
   }
 
@@ -188,6 +289,159 @@ const Configuration: React.FC = () => {
     }
   }
 
+  // SSH Key Management Handlers
+  const handleGenerateKey = async () => {
+    try {
+      setSshKeyLoading(true)
+      const result = await apiClient.generateSSHKey({ key_type: 'ed25519' })
+      setSshKeyInfo(result)
+      setShowSuccess(true)
+    } catch (error: any) {
+      console.error('Failed to generate SSH key:', error)
+    } finally {
+      setSshKeyLoading(false)
+    }
+  }
+
+  const handleUploadKey = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    
+    try {
+      setSshKeyLoading(true)
+      const result = await apiClient.uploadSSHKey(file)
+      setSshKeyInfo(result)
+      setShowSuccess(true)
+    } catch (error: any) {
+      console.error('Failed to upload SSH key:', error)
+    } finally {
+      setSshKeyLoading(false)
+    }
+  }
+
+
+  const handleFetchHost = async () => {
+    if (!fetchHostDialog.host) return
+    
+    try {
+      setKnownHostsLoading(true)
+      const result = await apiClient.fetchHostKey(
+        fetchHostDialog.host,
+        fetchHostDialog.port
+      )
+      
+      // Ask user to confirm adding the key
+      if (confirm(`Add this host key?\n\nHost: ${fetchHostDialog.host}\nFingerprint: ${result.fingerprint}`)) {
+        await apiClient.addKnownHost(result.key_entry)
+        await loadKnownHosts()
+        setShowSuccess(true)
+      }
+      
+      setFetchHostDialog({ open: false, host: '', port: 22 })
+    } catch (error: any) {
+      console.error('Failed to fetch host key:', error)
+      alert(`Failed to fetch host key: ${error.message || error}`)
+    } finally {
+      setKnownHostsLoading(false)
+    }
+  }
+
+  const handleAddHost = async () => {
+    if (!addHostDialog.entry) return
+    
+    try {
+      await apiClient.addKnownHost(addHostDialog.entry)
+      await loadKnownHosts()
+      setAddHostDialog({ open: false, entry: '' })
+      setShowSuccess(true)
+    } catch (error: any) {
+      console.error('Failed to add known host:', error)
+      alert(`Failed to add host: ${error.message || error}`)
+    }
+  }
+
+  const handleRemoveHost = async (lineNumber: number) => {
+    if (confirm('Remove this host from known_hosts?')) {
+      try {
+        await apiClient.removeKnownHost(lineNumber)
+        await loadKnownHosts()
+        setShowSuccess(true)
+      } catch (error: any) {
+        console.error('Failed to remove host:', error)
+      }
+    }
+  }
+
+  // Export/Import handlers
+  const handleExportConfig = async () => {
+    try {
+      const blob = await apiClient.exportConfig()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `otto_bgp_config_${new Date().toISOString().split('T')[0]}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      setShowSuccess(true)
+    } catch (error: any) {
+      console.error('Failed to export config:', error)
+      alert('Failed to export configuration')
+    }
+  }
+
+  const handleImportConfig = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    
+    if (!confirm('Import configuration? This will backup and replace the current configuration.')) {
+      return
+    }
+    
+    try {
+      const result = await apiClient.importConfig(file)
+      await queryClient.refetchQueries()
+      setShowSuccess(true)
+      alert(`Configuration imported successfully. Backup ID: ${result.backup_id}`)
+      window.location.reload() // Reload to get new config
+    } catch (error: any) {
+      console.error('Failed to import config:', error)
+      alert(`Failed to import configuration: ${error.message || error}`)
+    }
+  }
+
+  const loadBackups = async () => {
+    try {
+      setBackupsLoading(true)
+      const data = await apiClient.listBackups()
+      setBackups(data.backups || [])
+    } catch (error) {
+      console.error('Failed to load backups:', error)
+      setBackups([])
+    } finally {
+      setBackupsLoading(false)
+    }
+  }
+
+  const handleRestoreBackup = async (backupId: string) => {
+    if (!confirm(`Restore configuration from backup ${backupId}? Current configuration will be backed up first.`)) {
+      return
+    }
+    
+    try {
+      const result = await apiClient.restoreBackup(backupId)
+      await queryClient.refetchQueries()
+      setBackupDialog({ open: false })
+      setShowSuccess(true)
+      alert(`Configuration restored successfully. Previous backup ID: ${result.previous_backup_id}`)
+      window.location.reload() // Reload to get restored config
+    } catch (error: any) {
+      console.error('Failed to restore backup:', error)
+      alert(`Failed to restore backup: ${error.message || error}`)
+    }
+  }
+
   const isLoading = configLoading || devicesLoading
 
   if (isLoading) {
@@ -219,11 +473,12 @@ const Configuration: React.FC = () => {
         <Tabs value={tabValue} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }} variant="scrollable" scrollButtons="auto">
           <Tab icon={<RouterIcon />} label="Devices" />
           <Tab icon={<SecurityIcon />} label="Global SSH" />
-          <Tab icon={<EmailIcon />} label="SMTP" />
+          <Tab icon={<EmailIcon />} label="Notifications" />
           <Tab icon={<VerifiedIcon />} label="RPKI Validation" />
           <Tab icon={<BuildIcon />} label="BGPq4" />
           <Tab icon={<ShieldIcon />} label="Guardrails" />
           <Tab icon={<NetworkIcon />} label="Network Security" />
+          <Tab icon={<AutoIcon />} label="Autonomous Mode" />
         </Tabs>
 
         <Box sx={{ p: 3 }}>
@@ -335,13 +590,254 @@ const Configuration: React.FC = () => {
                 />
               </Grid>
             </Grid>
+            
+            {/* SSH Key Management Section */}
+            <Box sx={{ mt: 4 }}>
+              <Divider sx={{ mb: 3 }}>
+                <Chip label="SSH Key Management" />
+              </Divider>
+              
+              {/* SSH Key Actions */}
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <Typography variant="h6" gutterBottom>
+                    SSH Keypair
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <Button
+                    variant="contained"
+                    onClick={handleGenerateKey}
+                    disabled={sshKeyLoading}
+                    startIcon={<BuildIcon />}
+                  >
+                    Generate New Keypair
+                  </Button>
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <Button
+                    variant="outlined"
+                    component="label"
+                    disabled={sshKeyLoading}
+                  >
+                    Upload Private Key
+                    <input
+                      type="file"
+                      hidden
+                      accept=".pem,.key,*"
+                      onChange={handleUploadKey}
+                    />
+                  </Button>
+                </Grid>
+                
+                {/* Display SSH Key Info */}
+                {sshKeyInfo?.public_key && (
+                  <Grid item xs={12}>
+                    <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Public Key
+                      </Typography>
+                      <TextField
+                        fullWidth
+                        multiline
+                        rows={2}
+                        value={sshKeyInfo?.public_key || ''}
+                        InputProps={{ readOnly: true }}
+                        variant="filled"
+                        sx={{ mb: 2 }}
+                      />
+                      
+                      {sshKeyInfo?.fingerprints && (
+                        <>
+                          <Typography variant="subtitle2" gutterBottom>
+                            Fingerprints
+                          </Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                            SHA256: {sshKeyInfo?.fingerprints?.sha256}
+                          </Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                            MD5: {sshKeyInfo?.fingerprints?.md5}
+                          </Typography>
+                        </>
+                      )}
+                    </Paper>
+                  </Grid>
+                )}
+              </Grid>
+              
+              {/* Known Hosts Management */}
+              <Box sx={{ mt: 4 }}>
+                <Typography variant="h6" gutterBottom>
+                  Known Hosts
+                </Typography>
+                
+                <Box display="flex" gap={2} mb={2}>
+                  <Button
+                    variant="outlined"
+                    onClick={() => setAddHostDialog({ open: true, entry: '' })}
+                    startIcon={<AddIcon />}
+                  >
+                    Add Entry
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    onClick={() => setFetchHostDialog({ open: true, host: '', port: 22 })}
+                    startIcon={<NetworkIcon />}
+                  >
+                    Fetch Host Key
+                  </Button>
+                </Box>
+                
+                {knownHostsLoading ? (
+                  <Typography>Loading known hosts...</Typography>
+                ) : knownHosts.length > 0 ? (
+                  <TableContainer component={Paper} variant="outlined">
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Host</TableCell>
+                          <TableCell>Key Type</TableCell>
+                          <TableCell>Fingerprint</TableCell>
+                          <TableCell align="right">Actions</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {knownHosts.map((entry) => (
+                          <TableRow key={entry.line}>
+                            <TableCell>{entry.host}</TableCell>
+                            <TableCell>{entry.key_type}</TableCell>
+                            <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
+                              {entry.fingerprint}
+                            </TableCell>
+                            <TableCell align="right">
+                              <IconButton
+                                size="small"
+                                onClick={() => handleRemoveHost(entry.line)}
+                                color="error"
+                              >
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                ) : (
+                  <Typography color="text.secondary">
+                    No known hosts configured
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+            
+            {/* NETCONF Configuration Section */}
+            <Box sx={{ mt: 4 }}>
+              <Divider sx={{ mb: 3 }}>
+                <Chip label="NETCONF Configuration" />
+              </Divider>
+              
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <Typography variant="h6" gutterBottom>
+                    NETCONF Defaults
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    Configure default settings for NETCONF policy application
+                  </Typography>
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="NETCONF Username"
+                    value={config.netconf?.username || ''}
+                    onChange={(e) => handleConfigChange('netconf', 'username', e.target.value)}
+                    margin="normal"
+                    helperText="Override SSH username for NETCONF"
+                  />
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="NETCONF Password"
+                    type="password"
+                    value={config.netconf?.password || ''}
+                    onChange={(e) => handleConfigChange('netconf', 'password', e.target.value)}
+                    margin="normal"
+                    helperText="Override SSH password for NETCONF"
+                  />
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="SSH Key Path"
+                    value={config.netconf?.ssh_key || ''}
+                    onChange={(e) => handleConfigChange('netconf', 'ssh_key', e.target.value)}
+                    margin="normal"
+                    helperText="Path to SSH key for NETCONF authentication"
+                  />
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="NETCONF Port"
+                    type="number"
+                    value={config.netconf?.port || 830}
+                    onChange={(e) => handleConfigChange('netconf', 'port', parseInt(e.target.value))}
+                    margin="normal"
+                    helperText="Default: 830"
+                  />
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Operation Timeout (seconds)"
+                    type="number"
+                    value={config.netconf?.timeout || 60}
+                    onChange={(e) => handleConfigChange('netconf', 'timeout', parseInt(e.target.value))}
+                    margin="normal"
+                    helperText="Timeout for NETCONF operations"
+                  />
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Default Confirmed Commit (minutes)"
+                    type="number"
+                    value={config.netconf?.default_confirmed_commit || 5}
+                    onChange={(e) => handleConfigChange('netconf', 'default_confirmed_commit', parseInt(e.target.value))}
+                    margin="normal"
+                    helperText="Automatic rollback time if not confirmed"
+                  />
+                </Grid>
+                
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    label="Commit Comment Prefix"
+                    value={config.netconf?.commit_comment_prefix || '[Otto BGP]'}
+                    onChange={(e) => handleConfigChange('netconf', 'commit_comment_prefix', e.target.value)}
+                    margin="normal"
+                    helperText="Prefix added to all commit messages"
+                  />
+                </Grid>
+              </Grid>
+            </Box>
           </TabPanel>
 
           <TabPanel value={tabValue} index={2}>
-            {/* SMTP Configuration */}
+            {/* Notifications Configuration */}
             <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
               <Typography variant="h5">
-                SMTP Configuration
+                Email Notifications
               </Typography>
               <FormControlLabel
                 control={
@@ -430,6 +926,62 @@ const Configuration: React.FC = () => {
                       helperText="Enter email addresses separated by commas"
                     />
                   </Grid>
+                  
+                  {/* Phase 1: Notification Preferences */}
+                  <Grid item xs={12}>
+                    <Divider sx={{ my: 2 }}>
+                      <Chip label="Notification Preferences" />
+                    </Divider>
+                  </Grid>
+                  
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Subject Prefix"
+                      value={config.smtp?.subject_prefix || '[Otto BGP Autonomous]'}
+                      onChange={(e) => handleConfigChange('smtp', 'subject_prefix', e.target.value)}
+                      margin="normal"
+                      helperText="Prefix added to all email subjects"
+                    />
+                  </Grid>
+                  
+                  <Grid item xs={12} md={6}>
+                    <Box sx={{ mt: 2 }}>
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={config.smtp?.send_on_success || false}
+                            onChange={(e) => handleConfigChange('smtp', 'send_on_success', e.target.checked)}
+                          />
+                        }
+                        label="Send on Success"
+                      />
+                    </Box>
+                  </Grid>
+                  
+                  <Grid item xs={12} md={6}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={config.smtp?.send_on_failure !== false}
+                          onChange={(e) => handleConfigChange('smtp', 'send_on_failure', e.target.checked)}
+                        />
+                      }
+                      label="Send on Failure"
+                    />
+                  </Grid>
+                  
+                  <Grid item xs={12} md={6}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={config.smtp?.alert_on_manual || false}
+                          onChange={(e) => handleConfigChange('smtp', 'alert_on_manual', e.target.checked)}
+                        />
+                      }
+                      label="Alert on Manual Actions"
+                    />
+                  </Grid>
                 </Grid>
 
                 <Divider sx={{ my: 2 }} />
@@ -441,7 +993,15 @@ const Configuration: React.FC = () => {
                     onClick={handleTestSmtp}
                     disabled={testSmtpMutation.isPending}
                   >
-                    {testSmtpMutation.isPending ? 'Testing...' : 'Test SMTP'}
+                    {testSmtpMutation.isPending ? 'Testing...' : 'Validate Config'}
+                  </Button>
+                  
+                  <Button
+                    variant="contained"
+                    startIcon={<EmailIcon />}
+                    onClick={handleSendTestEmail}
+                  >
+                    Send Test Email
                   </Button>
                   
                   {testResult && (
@@ -520,6 +1080,111 @@ const Configuration: React.FC = () => {
                   }
                   label="Strict Validation (reject invalid ROAs)"
                 />
+              </Grid>
+              
+              {/* Phase 2: Advanced RPKI Options */}
+              <Grid item xs={12}>
+                <Accordion sx={{ mt: 2 }}>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Typography>Advanced RPKI Settings</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={6}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={config.rpki?.fail_closed !== false}
+                              onChange={(e) => handleConfigChange('rpki', 'fail_closed', e.target.checked)}
+                            />
+                          }
+                          label="Fail Closed (block on validation failure)"
+                        />
+                      </Grid>
+                      
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          type="number"
+                          label="Max VRP Age (hours)"
+                          value={config.rpki?.max_vrp_age_hours ?? 24}
+                          onChange={(e) => handleConfigChange('rpki', 'max_vrp_age_hours', parseInt(e.target.value))}
+                          margin="normal"
+                          helperText="Maximum age for VRP cache data"
+                        />
+                      </Grid>
+                      
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          label="VRP Cache Path"
+                          value={config.rpki?.vrp_cache_path || ''}
+                          onChange={(e) => handleConfigChange('rpki', 'vrp_cache_path', e.target.value)}
+                          margin="normal"
+                          helperText="Path to VRP cache file"
+                        />
+                      </Grid>
+                      
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          label="Allowlist Path"
+                          value={config.rpki?.allowlist_path || ''}
+                          onChange={(e) => handleConfigChange('rpki', 'allowlist_path', e.target.value)}
+                          margin="normal"
+                          helperText="Path to RPKI allowlist file"
+                        />
+                      </Grid>
+                      
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          type="number"
+                          label="Max Invalid Percent"
+                          value={config.rpki?.max_invalid_percent ?? 10}
+                          onChange={(e) => handleConfigChange('rpki', 'max_invalid_percent', parseInt(e.target.value))}
+                          margin="normal"
+                          helperText="Maximum percentage of invalid prefixes allowed"
+                        />
+                      </Grid>
+                      
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          type="number"
+                          label="Max Not Found Percent"
+                          value={config.rpki?.max_notfound_percent ?? 50}
+                          onChange={(e) => handleConfigChange('rpki', 'max_notfound_percent', parseInt(e.target.value))}
+                          margin="normal"
+                          helperText="Maximum percentage of not-found prefixes allowed"
+                        />
+                      </Grid>
+                      
+                      <Grid item xs={12}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={config.rpki?.require_vrp_data || false}
+                              onChange={(e) => handleConfigChange('rpki', 'require_vrp_data', e.target.checked)}
+                            />
+                          }
+                          label="Require VRP Data (fail if no data available)"
+                        />
+                      </Grid>
+                      
+                      <Grid item xs={12}>
+                        <Divider sx={{ my: 2 }} />
+                        <Button
+                          variant="outlined"
+                          startIcon={<CheckCircleIcon />}
+                          onClick={handleValidateRpkiCache}
+                        >
+                          Validate RPKI Cache
+                        </Button>
+                      </Grid>
+                    </Grid>
+                  </AccordionDetails>
+                </Accordion>
               </Grid>
             </Grid>
           </TabPanel>
@@ -609,6 +1274,124 @@ const Configuration: React.FC = () => {
                   label="IPv6 Support"
                 />
               </Grid>
+
+              {/* IRR Proxy Configuration Subsection */}
+              <Grid item xs={12}>
+                <Divider sx={{ my: 3 }} />
+                <Typography variant="h6" gutterBottom>
+                  IRR Proxy Configuration
+                </Typography>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Configure SSH tunnel for accessing IRR servers through a jump host
+                </Typography>
+              </Grid>
+
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.irr_proxy?.enabled || false}
+                      onChange={(e) => handleConfigChange('irr_proxy', 'enabled', e.target.checked)}
+                    />
+                  }
+                  label="Enable IRR Proxy"
+                />
+              </Grid>
+
+              {config.irr_proxy?.enabled && (
+                <>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Proxy Method"
+                      value={config.irr_proxy?.method || 'ssh_tunnel'}
+                      onChange={(e) => handleConfigChange('irr_proxy', 'method', e.target.value)}
+                      margin="normal"
+                      select
+                      SelectProps={{ native: true }}
+                      helperText="Method for proxying IRR connections"
+                    >
+                      <option value="ssh_tunnel">SSH Tunnel</option>
+                    </TextField>
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Jump Host"
+                      value={config.irr_proxy?.jump_host || ''}
+                      onChange={(e) => handleConfigChange('irr_proxy', 'jump_host', e.target.value)}
+                      margin="normal"
+                      helperText="SSH jump host for tunnel (e.g., jump.example.com)"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Jump User"
+                      value={config.irr_proxy?.jump_user || ''}
+                      onChange={(e) => handleConfigChange('irr_proxy', 'jump_user', e.target.value)}
+                      margin="normal"
+                      helperText="Username for SSH jump host"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="SSH Key File"
+                      value={config.irr_proxy?.ssh_key_file || ''}
+                      onChange={(e) => handleConfigChange('irr_proxy', 'ssh_key_file', e.target.value)}
+                      margin="normal"
+                      helperText="Path to SSH private key (optional)"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Known Hosts File"
+                      value={config.irr_proxy?.known_hosts_file || ''}
+                      onChange={(e) => handleConfigChange('irr_proxy', 'known_hosts_file', e.target.value)}
+                      margin="normal"
+                      helperText="Path to SSH known_hosts file (optional)"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Connection Timeout (seconds)"
+                      type="number"
+                      value={config.irr_proxy?.connection_timeout || 30}
+                      onChange={(e) => handleConfigChange('irr_proxy', 'connection_timeout', parseInt(e.target.value))}
+                      margin="normal"
+                      helperText="Timeout for establishing SSH tunnel"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12}>
+                    <Button
+                      variant="outlined"
+                      startIcon={<TestIcon />}
+                      onClick={async () => {
+                        try {
+                          const result = await apiClient.testIrrProxy()
+                          alert(result.success 
+                              ? 'IRR Proxy test successful' 
+                              : `IRR Proxy test failed: ${result.message}`)
+                        } catch (error: any) {
+                          alert(`Failed to test IRR proxy: ${error.response?.data?.detail || error.message}`)
+                        }
+                      }}
+                      disabled={!config.irr_proxy?.jump_host}
+                    >
+                      Test IRR Proxy
+                    </Button>
+                  </Grid>
+                </>
+              )}
             </Grid>
           </TabPanel>
 
@@ -795,11 +1578,185 @@ const Configuration: React.FC = () => {
               </Grid>
             </Grid>
           </TabPanel>
+
+          {/* Autonomous Mode Configuration */}
+          <TabPanel value={tabValue} index={7}>
+            <Typography variant="h5" gutterBottom>
+              Autonomous Mode Configuration
+            </Typography>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Configure unattended operation and automatic policy application
+            </Typography>
+            
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.autonomous_mode?.enabled || false}
+                      onChange={(e) => handleConfigChange('autonomous_mode', 'enabled', e.target.checked)}
+                    />
+                  }
+                  label="Enable Autonomous Mode"
+                />
+                <Typography variant="body2" color="text.secondary" sx={{ ml: 4 }}>
+                  When enabled, Otto BGP will operate unattended with enhanced safety guardrails
+                </Typography>
+              </Grid>
+              
+              {config.autonomous_mode?.enabled && (
+                <>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Auto-Apply Threshold"
+                      type="number"
+                      value={config.autonomous_mode?.auto_apply_threshold ?? 100}
+                      onChange={(e) => handleConfigChange('autonomous_mode', 'auto_apply_threshold', parseInt(e.target.value))}
+                      margin="normal"
+                      helperText="Maximum number of prefix changes to apply automatically"
+                    />
+                  </Grid>
+                  
+                  <Grid item xs={12}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={config.autonomous_mode?.require_confirmation !== false}
+                          onChange={(e) => handleConfigChange('autonomous_mode', 'require_confirmation', e.target.checked)}
+                        />
+                      }
+                      label="Require Confirmation for Major Changes"
+                    />
+                    <Typography variant="body2" color="text.secondary" sx={{ ml: 4 }}>
+                      Prompt for confirmation when changes exceed safety thresholds
+                    </Typography>
+                  </Grid>
+                  
+                  <Grid item xs={12}>
+                    <Divider sx={{ my: 2 }} />
+                    <Typography variant="h6" gutterBottom>
+                      Safety Overrides
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      Advanced settings for experienced operators (use with caution)
+                    </Typography>
+                  </Grid>
+                  
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      fullWidth
+                      label="Max Session Loss %"
+                      type="number"
+                      value={config.autonomous_mode?.safety_overrides?.max_session_loss_percent ?? 10}
+                      onChange={(e) => {
+                        const newValue = parseInt(e.target.value)
+                        setConfig(prev => ({
+                          ...prev!,
+                          autonomous_mode: {
+                            ...prev!.autonomous_mode!,
+                            safety_overrides: {
+                              ...prev!.autonomous_mode?.safety_overrides,
+                              max_session_loss_percent: newValue
+                            }
+                          }
+                        }))
+                      }}
+                      margin="normal"
+                      helperText="Maximum acceptable BGP session loss percentage"
+                      inputProps={{ min: 0, max: 100 }}
+                    />
+                  </Grid>
+                  
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      fullWidth
+                      label="Max Route Loss %"
+                      type="number"
+                      value={config.autonomous_mode?.safety_overrides?.max_route_loss_percent ?? 20}
+                      onChange={(e) => {
+                        const newValue = parseInt(e.target.value)
+                        setConfig(prev => ({
+                          ...prev!,
+                          autonomous_mode: {
+                            ...prev!.autonomous_mode!,
+                            safety_overrides: {
+                              ...prev!.autonomous_mode?.safety_overrides,
+                              max_route_loss_percent: newValue
+                            }
+                          }
+                        }))
+                      }}
+                      margin="normal"
+                      helperText="Maximum acceptable route loss percentage"
+                      inputProps={{ min: 0, max: 100 }}
+                    />
+                  </Grid>
+                  
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      fullWidth
+                      label="Monitoring Duration (seconds)"
+                      type="number"
+                      value={config.autonomous_mode?.safety_overrides?.monitoring_duration_seconds ?? 300}
+                      onChange={(e) => {
+                        const newValue = parseInt(e.target.value)
+                        setConfig(prev => ({
+                          ...prev!,
+                          autonomous_mode: {
+                            ...prev!.autonomous_mode!,
+                            safety_overrides: {
+                              ...prev!.autonomous_mode?.safety_overrides,
+                              monitoring_duration_seconds: newValue
+                            }
+                          }
+                        }))
+                      }}
+                      margin="normal"
+                      helperText="Duration to monitor for impact after policy application"
+                      inputProps={{ min: 60, max: 3600 }}
+                    />
+                  </Grid>
+                </>
+              )}
+            </Grid>
+          </TabPanel>
         </Box>
       </Paper>
 
-      {/* Save Button - Always visible */}
-      <Box display="flex" justifyContent="flex-end" gap={2} sx={{ mt: 3 }}>
+      {/* Configuration Actions - Always visible */}
+      <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 3 }}>
+        {/* Export/Import Actions */}
+        <Box display="flex" gap={2}>
+          <Button
+            variant="outlined"
+            onClick={handleExportConfig}
+            startIcon={<SaveIcon />}
+          >
+            Export Config
+          </Button>
+          <Button
+            variant="outlined"
+            component="label"
+            startIcon={<SaveIcon />}
+          >
+            Import Config
+            <input
+              type="file"
+              hidden
+              accept=".json"
+              onChange={handleImportConfig}
+            />
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => setBackupDialog({ open: true })}
+          >
+            Manage Backups
+          </Button>
+        </Box>
+        
+        {/* Save Button */}
         <Button
           variant="contained"
           size="large"
@@ -869,6 +1826,125 @@ const Configuration: React.FC = () => {
           <Button onClick={handleCloseDeviceDialog}>Cancel</Button>
           <Button onClick={handleSaveDevice} variant="contained">
             {deviceDialog.mode === 'add' ? 'Add' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Fetch Host Key Dialog */}
+      <Dialog open={fetchHostDialog.open} onClose={() => setFetchHostDialog({ open: false, host: '', port: 22 })} maxWidth="sm" fullWidth>
+        <DialogTitle>Fetch Host Key</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            label="Host"
+            value={fetchHostDialog.host}
+            onChange={(e) => setFetchHostDialog({ ...fetchHostDialog, host: e.target.value })}
+            margin="normal"
+            helperText="Hostname or IP address"
+            autoFocus
+          />
+          <TextField
+            fullWidth
+            label="Port"
+            type="number"
+            value={fetchHostDialog.port}
+            onChange={(e) => setFetchHostDialog({ ...fetchHostDialog, port: parseInt(e.target.value) || 22 })}
+            margin="normal"
+            helperText="SSH port (default: 22)"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFetchHostDialog({ open: false, host: '', port: 22 })}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleFetchHost} 
+            variant="contained"
+            disabled={!fetchHostDialog.host || knownHostsLoading}
+          >
+            Fetch
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add Known Host Dialog */}
+      <Dialog open={addHostDialog.open} onClose={() => setAddHostDialog({ open: false, entry: '' })} maxWidth="md" fullWidth>
+        <DialogTitle>Add Known Host Entry</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            label="Host Key Entry"
+            value={addHostDialog.entry}
+            onChange={(e) => setAddHostDialog({ ...addHostDialog, entry: e.target.value })}
+            margin="normal"
+            multiline
+            rows={3}
+            helperText="Paste the complete known_hosts entry (e.g., hostname ssh-rsa AAAAB3...)"
+            autoFocus
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAddHostDialog({ open: false, entry: '' })}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleAddHost} 
+            variant="contained"
+            disabled={!addHostDialog.entry}
+          >
+            Add
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Backup Management Dialog */}
+      <Dialog open={backupDialog.open} onClose={() => setBackupDialog({ open: false })} maxWidth="md" fullWidth>
+        <DialogTitle>Manage Configuration Backups</DialogTitle>
+        <DialogContent>
+          {backupsLoading ? (
+            <Typography>Loading backups...</Typography>
+          ) : backups.length === 0 ? (
+            <Typography color="text.secondary">No backups available</Typography>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Backup ID</TableCell>
+                    <TableCell>Files</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {backups.map((backup) => (
+                    <TableRow key={backup.id}>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                          {backup.timestamp}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        {backup.files.map(f => f.name).join(', ')}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => handleRestoreBackup(backup.id)}
+                        >
+                          Restore
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBackupDialog({ open: false })}>
+            Close
           </Button>
         </DialogActions>
       </Dialog>

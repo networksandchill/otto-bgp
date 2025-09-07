@@ -60,14 +60,24 @@ def create_app() -> FastAPI:
 
         return await call_next(request)
     
-    # Mount static assets
-    if (WEBUI_ROOT / "assets").exists():
-        app.mount("/assets", StaticFiles(directory=WEBUI_ROOT / "assets"), name="assets")
+    # Mount static assets  
+    static_dir = WEBUI_ROOT / "static"
+    if not static_dir.exists():
+        # Fallback to direct webui directory if static subdirectory doesn't exist
+        static_dir = WEBUI_ROOT
+    
+    if (static_dir / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
     
     # App-level routes
     @app.get("/")
     async def serve_index():
-        index_path = WEBUI_ROOT / "index.html"
+        # Try static subdirectory first, then direct webui directory
+        static_dir = WEBUI_ROOT / "static"
+        if not static_dir.exists():
+            static_dir = WEBUI_ROOT
+            
+        index_path = static_dir / "index.html"
         if index_path.exists():
             return FileResponse(index_path)
         return HTMLResponse("<h1>Otto BGP WebUI</h1><p>Frontend assets not found</p>")
@@ -77,7 +87,7 @@ def create_app() -> FastAPI:
         return JSONResponse({"status": "ok", "timestamp": datetime.utcnow().isoformat()})
     
     # Include routers
-    from webui.api import auth, setup, profile, users, devices, config, reports, systemd, rpki, logs
+    from webui.api import auth, setup, profile, users, devices, config, reports, systemd, rpki, logs, irr_proxy, ssh
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
@@ -89,12 +99,19 @@ def create_app() -> FastAPI:
     app.include_router(systemd.router, prefix="/api/systemd", tags=["systemd"])
     app.include_router(rpki.router, prefix="/api/rpki", tags=["rpki"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
+    app.include_router(irr_proxy.router, prefix="/api/irr-proxy", tags=["irr-proxy"])
+    app.include_router(ssh.router, prefix="/api/ssh", tags=["ssh"])
     
     # Catch-all route - MUST BE LAST
     @app.get("/{path:path}")
     async def catch_all(path: str):
         """Catch-all route for client-side routing"""
-        index_path = WEBUI_ROOT / "index.html"
+        # Try static subdirectory first, then direct webui directory
+        static_dir = WEBUI_ROOT / "static"
+        if not static_dir.exists():
+            static_dir = WEBUI_ROOT
+            
+        index_path = static_dir / "index.html"
         if index_path.exists():
             return FileResponse(index_path)
         return HTMLResponse("<h1>Otto BGP WebUI</h1><p>Frontend assets not found</p>")

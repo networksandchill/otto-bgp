@@ -52,6 +52,26 @@ export interface SSHConfig {
   port?: number
 }
 
+// SSH Key Management Types
+export interface KnownHostEntry {
+  line: number
+  host: string
+  key_type: string
+  fingerprint: string
+  raw: string
+}
+
+// NETCONF Configuration Type
+export interface NetconfConfig {
+  username?: string
+  password?: string
+  ssh_key?: string
+  port?: number
+  timeout?: number
+  default_confirmed_commit?: number
+  commit_comment_prefix?: string
+}
+
 export interface SMTPConfig {
   enabled: boolean
   host?: string
@@ -61,6 +81,11 @@ export interface SMTPConfig {
   use_tls?: boolean
   from_address?: string
   to_addresses?: string[]
+  // Phase 1: Notification preferences
+  subject_prefix?: string
+  send_on_success?: boolean
+  send_on_failure?: boolean
+  alert_on_manual?: boolean
 }
 
 export interface RPKIConfig {
@@ -69,6 +94,15 @@ export interface RPKIConfig {
   validator_url?: string
   refresh_interval?: number
   strict_validation?: boolean
+  // Phase 2: Advanced RPKI options
+  fail_closed?: boolean
+  max_vrp_age_hours?: number
+  vrp_cache_path?: string
+  allowlist_path?: string
+  max_invalid_percent?: number
+  max_notfound_percent?: number
+  require_vrp_data?: boolean
+  vrp_sources?: string[]
 }
 
 export interface BGPq4Config {
@@ -106,6 +140,9 @@ export interface AppConfig {
   bgpq4?: BGPq4Config
   guardrails?: GuardrailConfig
   network_security?: NetworkSecurityConfig
+  irr_proxy?: IRRProxyConfig
+  autonomous_mode?: AutonomousModeConfig
+  netconf?: NetconfConfig
   [key: string]: any
 }
 
@@ -157,4 +194,37 @@ export interface SystemDResponse {
 export interface ServiceControlRequest {
   action: 'start' | 'stop' | 'restart' | 'reload'
   service: string
+}
+
+// IRR Proxy Types
+export interface IRRProxyTunnel {
+  name: string
+  local_port: number
+  remote_host: string
+  remote_port: number
+}
+
+export interface IRRProxyConfig {
+  enabled: boolean
+  method?: 'ssh_tunnel'
+  jump_host?: string
+  jump_user?: string
+  ssh_key_file?: string | null
+  known_hosts_file?: string | null
+  connection_timeout?: number
+  tunnels?: IRRProxyTunnel[]
+}
+
+// Autonomous Mode Types
+export interface SafetyOverridesConfig {
+  max_session_loss_percent?: number
+  max_route_loss_percent?: number
+  monitoring_duration_seconds?: number
+}
+
+export interface AutonomousModeConfig {
+  enabled: boolean
+  auto_apply_threshold?: number
+  require_confirmation?: boolean
+  safety_overrides?: SafetyOverridesConfig
 }

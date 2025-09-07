@@ -43,7 +43,7 @@ def normalize_email_addresses(addresses: Any) -> List[str]:
     """Normalize and validate email addresses from CSV or list"""
     if not addresses:
         return []
-    
+
     # Handle CSV string or list
     if isinstance(addresses, str):
         addr_list = [a.strip() for a in addresses.split(',')]
@@ -51,18 +51,18 @@ def normalize_email_addresses(addresses: Any) -> List[str]:
         addr_list = [str(a).strip() for a in addresses]
     else:
         return []
-    
+
     # Filter empty and validate format
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     valid_addresses = []
     seen_domains = set()
-    
+
     for addr in addr_list:
         if not addr or len(addr) > 254:
             continue
         if not re.match(email_pattern, addr):
             continue
-        
+
         # Deduplicate by lowercase domain
         parts = addr.split('@')
         if len(parts) == 2:
@@ -70,7 +70,7 @@ def normalize_email_addresses(addresses: Any) -> List[str]:
             if domain_key not in seen_domains:
                 seen_domains.add(domain_key)
                 valid_addresses.append(addr)
-    
+
     # Cap at 50 recipients
     return valid_addresses[:50]
 
@@ -79,7 +79,7 @@ def update_core_email_config(ui_smtp: Dict[str, Any]) -> Dict[str, Any]:
     """Map UI SMTP config to core nested structure and update config.json"""
     # Load current config without env fallback
     config = load_config_json_only()
-    
+
     # Ensure nested structure exists
     if 'autonomous_mode' not in config:
         config['autonomous_mode'] = {}
@@ -87,10 +87,10 @@ def update_core_email_config(ui_smtp: Dict[str, Any]) -> Dict[str, Any]:
         config['autonomous_mode']['notifications'] = {}
     if 'email' not in config['autonomous_mode']['notifications']:
         config['autonomous_mode']['notifications']['email'] = {}
-    
+
     # Map UI fields to core structure
     email_config = config['autonomous_mode']['notifications']['email']
-    
+
     # Map each field with proper naming
     if 'host' in ui_smtp:
         email_config['smtp_server'] = ui_smtp['host']
@@ -98,6 +98,15 @@ def update_core_email_config(ui_smtp: Dict[str, Any]) -> Dict[str, Any]:
         email_config['smtp_port'] = int(ui_smtp['port'])
     if 'use_tls' in ui_smtp:
         email_config['smtp_use_tls'] = bool(ui_smtp['use_tls'])
+    # Phase 1: Additional notification preferences
+    if 'subject_prefix' in ui_smtp:
+        email_config['subject_prefix'] = ui_smtp['subject_prefix']
+    if 'send_on_success' in ui_smtp:
+        email_config['send_on_success'] = bool(ui_smtp['send_on_success'])
+    if 'send_on_failure' in ui_smtp:
+        email_config['send_on_failure'] = bool(ui_smtp['send_on_failure'])
+    if 'alert_on_manual' in ui_smtp:
+        email_config['alert_on_manual'] = bool(ui_smtp['alert_on_manual'])
     if 'username' in ui_smtp:
         email_config['smtp_username'] = ui_smtp['username']
     if 'password' in ui_smtp:
@@ -108,14 +117,14 @@ def update_core_email_config(ui_smtp: Dict[str, Any]) -> Dict[str, Any]:
         email_config['to_addresses'] = normalize_email_addresses(ui_smtp['to_addresses'])
     if 'enabled' in ui_smtp:
         email_config['enabled'] = bool(ui_smtp['enabled'])
-    
+
     # Set default subject prefix if not present
     if 'subject_prefix' not in email_config:
         email_config['subject_prefix'] = '[Otto BGP Autonomous]'
-    
+
     # Save updated config with atomic write
     atomic_write_json(CONFIG_PATH, config, mode=0o600)
-    
+
     return email_config
 
 
@@ -299,12 +308,131 @@ def sync_config_to_otto_env(config: Dict[str, Any]) -> bool:
         # SMTP - DO NOT write to otto.env anymore
         # SMTP configuration is now persisted only in config.json
 
+        # Autonomous Mode alignment (Phase 1a + Phase 4)
+        if 'autonomous_mode' in config:
+            am = config['autonomous_mode']
+            env_dict['OTTO_BGP_AUTONOMOUS_ENABLED'] = str(am.get('enabled', False)).lower()
+            if 'auto_apply_threshold' in am:
+                env_dict['OTTO_BGP_AUTO_THRESHOLD'] = str(am['auto_apply_threshold'])
+            if 'require_confirmation' in am:
+                env_dict['OTTO_BGP_REQUIRE_CONFIRMATION'] = str(am['require_confirmation']).lower()
+
+            # Safety overrides (Phase 4)
+            if 'safety_overrides' in am:
+                so = am['safety_overrides']
+                if 'max_session_loss_percent' in so:
+                    env_dict['OTTO_BGP_MAX_SESSION_LOSS_PERCENT'] = str(
+                        so['max_session_loss_percent'])
+                if 'max_route_loss_percent' in so:
+                    env_dict['OTTO_BGP_MAX_ROUTE_LOSS_PERCENT'] = str(
+                        so['max_route_loss_percent'])
+                if 'monitoring_duration_seconds' in so:
+                    env_dict['OTTO_BGP_MONITORING_DURATION'] = str(
+                        so['monitoring_duration_seconds'])
+
+        # RPKI advanced alignment (Phase 1a)
+        if 'rpki' in config:
+            rpki = config['rpki']
+            if 'fail_closed' in rpki:
+                env_dict['OTTO_BGP_RPKI_FAIL_CLOSED'] = str(rpki['fail_closed']).lower()
+            if 'max_vrp_age_hours' in rpki:
+                env_dict['OTTO_BGP_RPKI_MAX_VRP_AGE'] = str(rpki['max_vrp_age_hours'])
+            if rpki.get('vrp_cache_path'):
+                env_dict['OTTO_BGP_RPKI_VRP_CACHE'] = rpki['vrp_cache_path']
+            if rpki.get('allowlist_path'):
+                env_dict['OTTO_BGP_RPKI_ALLOWLIST'] = rpki['allowlist_path']
+
+        # NETCONF alignment (Phase 1a + Phase 6)
+        if 'netconf' in config:
+            nc = config['netconf']
+            if nc.get('username'):
+                env_dict['NETCONF_USERNAME'] = nc['username']
+            if nc.get('password'):
+                env_dict['NETCONF_PASSWORD'] = nc['password']
+            if nc.get('ssh_key'):
+                env_dict['NETCONF_SSH_KEY'] = nc['ssh_key']
+            if 'port' in nc:
+                env_dict['NETCONF_PORT'] = str(nc['port'])
+            if 'timeout' in nc:
+                env_dict['OTTO_BGP_NETCONF_TIMEOUT'] = str(nc['timeout'])
+            # Phase 6: Additional NETCONF settings
+            if 'default_confirmed_commit' in nc:
+                env_dict['OTTO_BGP_NETCONF_CONFIRMED_TIMEOUT'] = str(
+                    nc['default_confirmed_commit'])
+            if nc.get('commit_comment_prefix'):
+                env_dict['OTTO_BGP_NETCONF_COMMIT_PREFIX'] = nc['commit_comment_prefix']
+
         # Atomic write
         with tempfile.NamedTemporaryFile('w', dir=str(otto_env_path.parent), delete=False) as tmp:
             tmp.write("# Otto BGP Configuration\n")
-            tmp.write(f"# Generated by WebUI at {datetime.utcnow().isoformat()}\n\n")
-            for key in sorted(env_dict.keys()):
+            tmp.write(f"# Generated by WebUI at {datetime.utcnow().isoformat()}\n")
+            tmp.write("# This file is managed by Otto BGP WebUI and consumed by CLI\n\n")
+
+            # Group environment variables by consumer
+            tmp.write("# SSH Configuration (CLI collectors)\n")
+            for key in ['SSH_USERNAME', 'SSH_PASSWORD', 'SSH_KEY_PATH']:
+                if key in env_dict:
+                    tmp.write(f"{key}={env_dict[key]}\n")
+
+            tmp.write("\n# Autonomous Mode (CLI appliers)\n")
+            for key in ['OTTO_BGP_AUTONOMOUS_ENABLED',
+                        'OTTO_BGP_AUTO_THRESHOLD',
+                        'OTTO_BGP_REQUIRE_CONFIRMATION',
+                        'OTTO_BGP_MAX_SESSION_LOSS_PERCENT',
+                        'OTTO_BGP_MAX_ROUTE_LOSS_PERCENT',
+                        'OTTO_BGP_MONITORING_DURATION']:
+                if key in env_dict:
+                    tmp.write(f"{key}={env_dict[key]}\n")
+
+            tmp.write("\n# RPKI Configuration (CLI validators)\n")
+            for key in sorted([k for k in env_dict.keys() if k.startswith('OTTO_BGP_RPKI_')]):
                 tmp.write(f"{key}={env_dict[key]}\n")
+
+            tmp.write("\n# NETCONF Configuration (CLI appliers)\n")
+            for key in ['NETCONF_USERNAME', 'NETCONF_PASSWORD', 'NETCONF_SSH_KEY',
+                        'NETCONF_PORT', 'OTTO_BGP_NETCONF_TIMEOUT',
+                        'OTTO_BGP_NETCONF_CONFIRMED_TIMEOUT',
+                        'OTTO_BGP_NETCONF_COMMIT_PREFIX']:
+                if key in env_dict:
+                    tmp.write(f"{key}={env_dict[key]}\n")
+
+            tmp.write("\n# BGPq4 Configuration (CLI generators)\n")
+            for key in sorted([k for k in env_dict.keys() if 'BGPQ4' in k or 'IRR' in k]):
+                tmp.write(f"{key}={env_dict[key]}\n")
+
+            tmp.write("\n# Guardrails (CLI safety)\n")
+            for key in sorted([k for k in env_dict.keys() if 'GUARDRAILS' in k or 'AUTO_APPLY' in k or
+                              'SESSION_LOSS' in k or 'ROUTE_LOSS' in k or 'BOGON' in k or 'MONITORING' in k]):
+                if key not in ['OTTO_BGP_AUTO_THRESHOLD', 'OTTO_BGP_REQUIRE_CONFIRMATION']:  # Already written above
+                    tmp.write(f"{key}={env_dict[key]}\n")
+
+            tmp.write("\n# Network Security (CLI security)\n")
+            for key in sorted([k for k in env_dict.keys() if 'ALLOWED_NETWORKS' in k or 'BLOCKED_NETWORKS' in k or
+                              'STRICT_HOST' in k or 'SSH_CONNECTION' in k or 'SSH_MAX' in k or 'SSH_KNOWN' in k]):
+                tmp.write(f"{key}={env_dict[key]}\n")
+
+            tmp.write("\n# Other Settings\n")
+            written_keys = set()
+            for section in [['SSH_USERNAME', 'SSH_PASSWORD', 'SSH_KEY_PATH'],
+                            ['OTTO_BGP_AUTONOMOUS_ENABLED',
+                             'OTTO_BGP_AUTO_THRESHOLD',
+                             'OTTO_BGP_REQUIRE_CONFIRMATION',
+                             'OTTO_BGP_MAX_SESSION_LOSS_PERCENT',
+                             'OTTO_BGP_MAX_ROUTE_LOSS_PERCENT',
+                             'OTTO_BGP_MONITORING_DURATION'],
+                            ['NETCONF_USERNAME', 'NETCONF_PASSWORD', 'NETCONF_SSH_KEY', 'NETCONF_PORT',
+                             'OTTO_BGP_NETCONF_TIMEOUT', 'OTTO_BGP_NETCONF_CONFIRMED_TIMEOUT',
+                             'OTTO_BGP_NETCONF_COMMIT_PREFIX']]:
+                written_keys.update(section)
+            for prefix in ['OTTO_BGP_RPKI_', 'BGPQ4', 'IRR', 'GUARDRAILS', 'AUTO_APPLY', 'SESSION_LOSS',
+                           'ROUTE_LOSS', 'BOGON', 'MONITORING', 'ALLOWED_NETWORKS', 'BLOCKED_NETWORKS',
+                           'STRICT_HOST', 'SSH_CONNECTION', 'SSH_MAX', 'SSH_KNOWN']:
+                written_keys.update([k for k in env_dict.keys() if prefix in k])
+
+            for key in sorted(env_dict.keys()):
+                if key not in written_keys:
+                    tmp.write(f"{key}={env_dict[key]}\n")
+
             tmp_path = tmp.name
         os.replace(tmp_path, otto_env_path)
         os.chmod(otto_env_path, 0o600)
@@ -316,7 +444,7 @@ def sync_config_to_otto_env(config: Dict[str, Any]) -> bool:
 def load_config() -> Dict[str, Any]:
     """Load configuration from config.json with otto.env fallback"""
     config = {}
-    
+
     # First try config.json
     if CONFIG_PATH.exists():
         try:
@@ -324,11 +452,11 @@ def load_config() -> Dict[str, Any]:
                 config = json.load(f)
         except Exception:
             pass
-    
+
     # If no config.json, fall back to otto.env
     if not config:
         config = load_config_from_otto_env()
-    
+
     # Map nested core email config to flat SMTP for UI
     if 'autonomous_mode' in config and 'notifications' in config['autonomous_mode']:
         if 'email' in config['autonomous_mode']['notifications']:
@@ -343,7 +471,7 @@ def load_config() -> Dict[str, Any]:
                 'from_address': email_cfg.get('from_address', ''),
                 'to_addresses': email_cfg.get('to_addresses', [])
             }
-    
+
     return config
 
 

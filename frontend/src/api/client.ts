@@ -175,6 +175,49 @@ class ApiClient {
     return response.data
   }
 
+  async sendTestEmail(smtp?: SMTPConfig): Promise<{ success: boolean; message?: string }> {
+    const response = await this.client.post('/config/send-test-email', smtp || {})
+    return response.data
+  }
+
+  async validateRpkiCache(): Promise<{ ok: boolean; issues?: string[] }> {
+    const response = await this.client.post('/rpki/validate-cache', {})
+    return response.data
+  }
+
+  // Config Export/Import endpoints
+  async exportConfig(): Promise<Blob> {
+    const response = await this.client.get('/config/export', {
+      responseType: 'blob'
+    })
+    return response.data
+  }
+
+  async importConfig(file: File): Promise<{ success: boolean; message?: string; backup_id?: string }> {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await this.client.post('/config/import', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+    return response.data
+  }
+
+  async listBackups(): Promise<{ backups: Array<{
+    id: string
+    timestamp: string
+    files: Array<{ name: string; size: number }>
+  }> }> {
+    const response = await this.client.get('/config/backups')
+    return response.data
+  }
+
+  async restoreBackup(backupId: string): Promise<{ success: boolean; message?: string; previous_backup_id?: string }> {
+    const response = await this.client.post('/config/restore', { backup_id: backupId })
+    return response.data
+  }
+
   // Reports endpoints
   async getDeploymentMatrix(): Promise<DeploymentMatrix | { error: string }> {
     const response = await this.client.get<DeploymentMatrix | { error: string }>('/reports/matrix')
@@ -352,6 +395,96 @@ class ApiClient {
 
   async deleteUser(username: string): Promise<any> {
     const response = await this.client.delete(`/users/${username}`)
+    return response.data
+  }
+
+  // SSH Key Management endpoints
+  async generateSSHKey(data?: { key_type?: 'ed25519' | 'rsa' | 'ecdsa'; path?: string }): Promise<{
+    success: boolean
+    message: string
+    public_key?: string
+    fingerprints?: { sha256: string; md5: string }
+  }> {
+    const response = await this.client.post('/ssh/generate-key', data || { key_type: 'ed25519' })
+    return response.data
+  }
+
+  async getSSHPublicKey(path?: string): Promise<{
+    public_key: string
+    fingerprints: { sha256: string; md5: string }
+    path: string
+  }> {
+    const params = path ? { path } : {}
+    const response = await this.client.get('/ssh/public-key', { params })
+    return response.data
+  }
+
+  async uploadSSHKey(file: File, path?: string): Promise<{
+    success: boolean
+    message: string
+    public_key?: string
+    fingerprints?: { sha256: string; md5: string }
+  }> {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (path) {
+      formData.append('path', path)
+    }
+    const response = await this.client.post('/ssh/upload-key', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    return response.data
+  }
+
+  async getKnownHosts(path?: string): Promise<{
+    entries: Array<{
+      line: number
+      host: string
+      key_type: string
+      fingerprint: string
+      raw: string
+    }>
+    path: string
+  }> {
+    const params = path ? { path } : {}
+    const response = await this.client.get('/ssh/known-hosts', { params })
+    return response.data
+  }
+
+  async addKnownHost(entry: string, path?: string): Promise<{
+    success: boolean
+    message: string
+  }> {
+    const params = path ? { path } : {}
+    const response = await this.client.post('/ssh/known-hosts/add', { entry }, { params })
+    return response.data
+  }
+
+  async fetchHostKey(host: string, port: number = 22): Promise<{
+    success: boolean
+    key_entry: string
+    fingerprint: string
+    message: string
+  }> {
+    const response = await this.client.post('/ssh/known-hosts/fetch', { host, port })
+    return response.data
+  }
+
+  async removeKnownHost(line_number: number, path?: string): Promise<{
+    success: boolean
+    message: string
+  }> {
+    const params = path ? { path } : {}
+    const response = await this.client.delete('/ssh/known-hosts/remove', {
+      data: { line_number },
+      params
+    })
+    return response.data
+  }
+
+  // IRR Proxy endpoints
+  async testIrrProxy(): Promise<{ success: boolean; message?: string; stdout?: string; stderr?: string }> {
+    const response = await this.client.post('/irr-proxy/test', {})
     return response.data
   }
 }
