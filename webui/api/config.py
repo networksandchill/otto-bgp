@@ -56,6 +56,83 @@ async def update_config(request: Request,
     )
     audit_log('prechange_backup_created',
               user=user.get('sub'), resource=str(backup_dir))
+    # Validate guardrails configuration
+    if 'guardrails' in new_config:
+        try:
+            from otto_bgp.appliers.guardrails import (
+                validate_guardrail_config, initialize_default_guardrails
+            )
+
+            # Initialize guardrail registry if needed
+            try:
+                initialize_default_guardrails()
+            except Exception:
+                pass  # Registry may already be initialized
+
+            gr = new_config['guardrails']
+            enabled = gr.get('enabled_guardrails', [])
+
+            # Build env_overrides dict for validation
+            env_overrides = {}
+            if 'prefix_count_thresholds' in gr or 'strictness' in gr:
+                prefix_config = {}
+                if 'prefix_count_thresholds' in gr:
+                    prefix_config['custom_thresholds'] = gr['prefix_count_thresholds']
+                if 'strictness' in gr and 'prefix_count' in gr['strictness']:
+                    prefix_config['strictness_level'] = gr['strictness']['prefix_count']
+                if prefix_config:
+                    env_overrides['prefix_count'] = prefix_config
+
+            # Validate guardrail configuration
+            validation_errors = validate_guardrail_config(enabled, env_overrides)
+            if validation_errors:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "issues": [
+                            {"path": "guardrails", "msg": err}
+                            for err in validation_errors
+                        ]
+                    }
+                )
+
+            # Check RPKI conditional enforcement
+            # If RPKI is enabled, rpki_validation must be in enabled list
+            if 'rpki' in new_config and new_config.get('rpki', {}).get('enabled'):
+                if 'rpki_validation' not in enabled:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "issues": [{
+                                "path": "guardrails.enabled_guardrails",
+                                "msg": "rpki_validation guardrail is mandatory when RPKI is enabled"
+                            }]
+                        }
+                    )
+
+            # Validate strictness enum values
+            if 'strictness' in gr:
+                valid_strictness = {'low', 'medium', 'high', 'strict'}
+                for guardrail_name, strictness_value in gr['strictness'].items():
+                    if strictness_value and strictness_value not in valid_strictness:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "issues": [{
+                                    "path": f"guardrails.strictness.{guardrail_name}",
+                                    "msg": f"Invalid strictness '{strictness_value}'. Must be one of: {', '.join(sorted(valid_strictness))}"
+                                }]
+                            }
+                        )
+
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions as-is
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={"issues": [{"path": "guardrails", "msg": f"Validation error: {str(e)}"}]}
+            )
+
     # Handle SMTP separately - persist to config.json nested structure
     if 'smtp' in new_config:
         smtp_config = new_config.pop('smtp')

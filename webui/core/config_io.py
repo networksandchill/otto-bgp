@@ -182,15 +182,30 @@ def load_config_from_otto_env() -> Dict[str, Any]:
             'ipv6_enabled': env_dict.get('OTTO_BGP_IPV6_ENABLED', 'false').lower() == 'true'
         }
 
-        # Guardrails settings
+        # Guardrails settings (NEW CANONICAL SCHEMA)
         config['guardrails'] = {
-            'enabled': env_dict.get('OTTO_BGP_GUARDRAILS_ENABLED', 'true').lower() == 'true',
-            'max_prefix_threshold': int(env_dict.get('OTTO_BGP_AUTO_APPLY_THRESHOLD', '100')),
-            'max_session_loss_percent': int(env_dict.get('OTTO_BGP_MAX_SESSION_LOSS_PERCENT', '10')),
-            'max_route_loss_percent': int(env_dict.get('OTTO_BGP_MAX_ROUTE_LOSS_PERCENT', '20')),
-            'monitoring_duration': int(env_dict.get('OTTO_BGP_MONITORING_DURATION_SECONDS', '300')),
-            'bogon_check_enabled': env_dict.get('OTTO_BGP_BOGON_CHECK_ENABLED', 'true').lower() == 'true',
-            'require_confirmation': env_dict.get('OTTO_BGP_REQUIRE_CONFIRMATION', 'false').lower() == 'true'
+            # Parse comma-separated enabled guardrails list
+            # Critical guardrails are automatically enforced at runtime
+            'enabled_guardrails': [
+                g.strip()
+                for g in env_dict.get('OTTO_BGP_GUARDRAILS', '').split(',')
+                if g.strip()
+            ],
+
+            # Per-guardrail strictness levels
+            'strictness': {
+                'prefix_count': env_dict.get('OTTO_BGP_PREFIX_STRICTNESS', 'medium'),
+                'bogon_prefix': env_dict.get('OTTO_BGP_BOGON_STRICTNESS', 'high'),
+                'rpki_validation': env_dict.get('OTTO_BGP_RPKI_STRICTNESS', 'strict')
+            },
+
+            # Prefix count thresholds
+            'prefix_count_thresholds': {
+                'max_total_prefixes': int(env_dict.get('OTTO_BGP_PREFIX_MAX_TOTAL', '500000')),
+                'max_prefixes_per_as': int(env_dict.get('OTTO_BGP_PREFIX_MAX_PER_AS', '100000')),
+                'warning_threshold': float(env_dict.get('OTTO_BGP_PREFIX_WARNING', '0.8')),
+                'critical_threshold': float(env_dict.get('OTTO_BGP_PREFIX_CRITICAL', '0.95'))
+            }
         }
 
         # Network Security settings
@@ -274,22 +289,36 @@ def sync_config_to_otto_env(config: Dict[str, Any]) -> bool:
                 env_dict['OTTO_BGP_IPV4_ENABLED'] = str(bgpq4['ipv4_enabled']).lower()
             if 'ipv6_enabled' in bgpq4:
                 env_dict['OTTO_BGP_IPV6_ENABLED'] = str(bgpq4['ipv6_enabled']).lower()
-        # Guardrails
+        # Guardrails (NEW CANONICAL SCHEMA)
         if 'guardrails' in config:
             gr = config['guardrails']
-            env_dict['OTTO_BGP_GUARDRAILS_ENABLED'] = str(gr.get('enabled', True)).lower()
-            if 'max_prefix_threshold' in gr:
-                env_dict['OTTO_BGP_AUTO_APPLY_THRESHOLD'] = str(gr['max_prefix_threshold'])
-            if 'max_session_loss_percent' in gr:
-                env_dict['OTTO_BGP_MAX_SESSION_LOSS_PERCENT'] = str(gr['max_session_loss_percent'])
-            if 'max_route_loss_percent' in gr:
-                env_dict['OTTO_BGP_MAX_ROUTE_LOSS_PERCENT'] = str(gr['max_route_loss_percent'])
-            if 'bogon_check_enabled' in gr:
-                env_dict['OTTO_BGP_BOGON_CHECK_ENABLED'] = str(gr['bogon_check_enabled']).lower()
-            if 'require_confirmation' in gr:
-                env_dict['OTTO_BGP_REQUIRE_CONFIRMATION'] = str(gr['require_confirmation']).lower()
-            if 'monitoring_duration' in gr:
-                env_dict['OTTO_BGP_MONITORING_DURATION_SECONDS'] = str(gr['monitoring_duration'])
+
+            # Write enabled guardrails list (comma-separated)
+            # Critical guardrails are always enforced at runtime regardless
+            if 'enabled_guardrails' in gr and gr['enabled_guardrails']:
+                env_dict['OTTO_BGP_GUARDRAILS'] = ','.join(gr['enabled_guardrails'])
+
+            # Write strictness overrides
+            if 'strictness' in gr:
+                strictness = gr['strictness']
+                if 'prefix_count' in strictness:
+                    env_dict['OTTO_BGP_PREFIX_STRICTNESS'] = strictness['prefix_count']
+                if 'bogon_prefix' in strictness:
+                    env_dict['OTTO_BGP_BOGON_STRICTNESS'] = strictness['bogon_prefix']
+                if 'rpki_validation' in strictness:
+                    env_dict['OTTO_BGP_RPKI_STRICTNESS'] = strictness['rpki_validation']
+
+            # Write prefix count thresholds
+            if 'prefix_count_thresholds' in gr:
+                thresholds = gr['prefix_count_thresholds']
+                if 'max_total_prefixes' in thresholds:
+                    env_dict['OTTO_BGP_PREFIX_MAX_TOTAL'] = str(thresholds['max_total_prefixes'])
+                if 'max_prefixes_per_as' in thresholds:
+                    env_dict['OTTO_BGP_PREFIX_MAX_PER_AS'] = str(thresholds['max_prefixes_per_as'])
+                if 'warning_threshold' in thresholds:
+                    env_dict['OTTO_BGP_PREFIX_WARNING'] = str(thresholds['warning_threshold'])
+                if 'critical_threshold' in thresholds:
+                    env_dict['OTTO_BGP_PREFIX_CRITICAL'] = str(thresholds['critical_threshold'])
         # Network Security
         if 'network_security' in config:
             ns = config['network_security']

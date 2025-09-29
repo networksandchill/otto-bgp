@@ -1,19 +1,21 @@
 import React, { useState, useEffect } from 'react'
-import { 
+import {
   Container, Typography, Paper, Box, TextField, Button,
   Grid, Alert, Snackbar, FormControlLabel, Switch,
   Divider, Chip, Tabs, Tab, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, IconButton, Dialog,
   DialogTitle, DialogContent, DialogActions, Accordion,
-  AccordionSummary, AccordionDetails
+  AccordionSummary, AccordionDetails, FormControl, InputLabel,
+  Select, MenuItem, FormHelperText
 } from '@mui/material'
-import { 
+import {
   Save as SaveIcon, Science as TestIcon, Add as AddIcon,
   Edit as EditIcon, Delete as DeleteIcon, Router as RouterIcon,
   Email as EmailIcon, Security as SecurityIcon, Shield as ShieldIcon,
-  VerifiedUser as VerifiedIcon, Build as BuildIcon, 
+  VerifiedUser as VerifiedIcon, Build as BuildIcon,
   NetworkCheck as NetworkIcon, ExpandMore as ExpandMoreIcon,
-  CheckCircle as CheckCircleIcon, PlayCircleOutline as AutoIcon
+  CheckCircle as CheckCircleIcon, PlayCircleOutline as AutoIcon,
+  Lock as LockIcon
 } from '@mui/icons-material'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
@@ -1401,93 +1403,251 @@ const Configuration: React.FC = () => {
               Guardrail Configuration
             </Typography>
             <Typography variant="body2" color="text.secondary" gutterBottom>
-              Configure safety mechanisms to prevent dangerous policy changes
+              Configure safety mechanisms to prevent dangerous policy changes. Critical guardrails are always active.
             </Typography>
-            
-            <Grid container spacing={2}>
+
+            {/* RPKI Warning Banner */}
+            {config.rpki?.enabled && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <strong>RPKI Guardrail:</strong> The rpki_validation guardrail is mandatory when RPKI validation is enabled.
+                For per-AS exceptions, use the SQLite RPKI override feature.
+              </Alert>
+            )}
+
+            <Grid container spacing={3}>
+              {/* Critical Guardrails - Always Active */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom>
+                  Critical Guardrails (Always Active)
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip label="bogon_prefix" color="error" icon={<LockIcon />} />
+                  <Chip label="signal_handling" color="error" icon={<LockIcon />} />
+                  <Chip label="concurrent_operation" color="error" icon={<LockIcon />} />
+                  {config.rpki?.enabled && (
+                    <Chip label="rpki_validation" color="warning" icon={<LockIcon />} />
+                  )}
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  Critical guardrails cannot be disabled and are enforced for all operations.
+                </Typography>
+              </Grid>
+
+              {/* Configurable Guardrails */}
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom>
+                  Configurable Guardrails
+                </Typography>
+              </Grid>
+
+              {/* Prefix Count Guardrail */}
               <Grid item xs={12}>
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={config.guardrails?.enabled !== false}
-                      onChange={(e) => handleConfigChange('guardrails', 'enabled', e.target.checked)}
+                      checked={config.guardrails?.enabled_guardrails?.includes('prefix_count') !== false}
+                      onChange={(e) => {
+                        const enabled = config.guardrails?.enabled_guardrails || []
+                        const newEnabled = e.target.checked
+                          ? [...enabled, 'prefix_count'].filter((v, i, a) => a.indexOf(v) === i)
+                          : enabled.filter(g => g !== 'prefix_count')
+                        setConfig({
+                          ...config,
+                          guardrails: {
+                            ...config.guardrails,
+                            enabled_guardrails: newEnabled
+                          }
+                        })
+                      }}
                     />
                   }
-                  label="Enable Guardrails"
+                  label="Enable Prefix Count Guardrail"
                 />
+                <Typography variant="caption" display="block" color="text.secondary" sx={{ ml: 4 }}>
+                  Validates prefix counts against safety thresholds to prevent router overload
+                </Typography>
               </Grid>
-              
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Max Prefix Change Threshold"
-                  type="number"
-                  value={config.guardrails?.max_prefix_threshold || 100}
-                  onChange={(e) => handleConfigChange('guardrails', 'max_prefix_threshold', parseInt(e.target.value))}
-                  margin="normal"
-                  helperText="Maximum number of prefix changes allowed"
-                />
-              </Grid>
-              
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Max Session Loss (%)"
-                  type="number"
-                  value={config.guardrails?.max_session_loss_percent || 5.0}
-                  onChange={(e) => handleConfigChange('guardrails', 'max_session_loss_percent', parseFloat(e.target.value))}
-                  margin="normal"
-                  helperText="Maximum acceptable BGP session loss percentage"
-                />
-              </Grid>
-              
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Max Route Loss (%)"
-                  type="number"
-                  value={config.guardrails?.max_route_loss_percent || 10.0}
-                  onChange={(e) => handleConfigChange('guardrails', 'max_route_loss_percent', parseFloat(e.target.value))}
-                  margin="normal"
-                  helperText="Maximum acceptable route loss percentage"
-                />
-              </Grid>
-              
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Monitoring Duration (seconds)"
-                  type="number"
-                  value={config.guardrails?.monitoring_duration || 300}
-                  onChange={(e) => handleConfigChange('guardrails', 'monitoring_duration', parseInt(e.target.value))}
-                  margin="normal"
-                  helperText="Duration to monitor after policy application"
-                />
-              </Grid>
-              
+
+              {/* Prefix Count Configuration (when enabled) */}
+              {config.guardrails?.enabled_guardrails?.includes('prefix_count') && (
+                <>
+                  <Grid item xs={12} md={6}>
+                    <FormControl fullWidth margin="normal">
+                      <InputLabel>Prefix Count Strictness</InputLabel>
+                      <Select
+                        value={config.guardrails?.strictness?.prefix_count || 'medium'}
+                        onChange={(e) => setConfig({
+                          ...config,
+                          guardrails: {
+                            ...config.guardrails,
+                            strictness: {
+                              ...config.guardrails?.strictness,
+                              prefix_count: e.target.value as 'low' | 'medium' | 'high' | 'strict'
+                            }
+                          }
+                        })}
+                      >
+                        <MenuItem value="low">Low</MenuItem>
+                        <MenuItem value="medium">Medium</MenuItem>
+                        <MenuItem value="high">High</MenuItem>
+                        <MenuItem value="strict">Strict</MenuItem>
+                      </Select>
+                      <FormHelperText>Enforcement level for prefix count limits</FormHelperText>
+                    </FormControl>
+                  </Grid>
+
+                  <Grid item xs={12}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Prefix Count Thresholds
+                    </Typography>
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Max Total Prefixes"
+                      type="number"
+                      value={config.guardrails?.prefix_count_thresholds?.max_total_prefixes || 500000}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        guardrails: {
+                          ...config.guardrails,
+                          prefix_count_thresholds: {
+                            ...config.guardrails?.prefix_count_thresholds,
+                            max_total_prefixes: parseInt(e.target.value)
+                          }
+                        }
+                      })}
+                      margin="normal"
+                      helperText="Maximum total prefixes across all policies"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Max Prefixes Per AS"
+                      type="number"
+                      value={config.guardrails?.prefix_count_thresholds?.max_prefixes_per_as || 100000}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        guardrails: {
+                          ...config.guardrails,
+                          prefix_count_thresholds: {
+                            ...config.guardrails?.prefix_count_thresholds,
+                            max_prefixes_per_as: parseInt(e.target.value)
+                          }
+                        }
+                      })}
+                      margin="normal"
+                      helperText="Maximum prefixes per individual AS"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Warning Threshold (0.0-1.0)"
+                      type="number"
+                      inputProps={{ step: 0.1, min: 0, max: 1 }}
+                      value={config.guardrails?.prefix_count_thresholds?.warning_threshold || 0.8}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        guardrails: {
+                          ...config.guardrails,
+                          prefix_count_thresholds: {
+                            ...config.guardrails?.prefix_count_thresholds,
+                            warning_threshold: parseFloat(e.target.value)
+                          }
+                        }
+                      })}
+                      margin="normal"
+                      helperText="Warning threshold as ratio of max (e.g., 0.8 = 80%)"
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="Critical Threshold (0.0-1.0)"
+                      type="number"
+                      inputProps={{ step: 0.1, min: 0, max: 1 }}
+                      value={config.guardrails?.prefix_count_thresholds?.critical_threshold || 0.95}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        guardrails: {
+                          ...config.guardrails,
+                          prefix_count_thresholds: {
+                            ...config.guardrails?.prefix_count_thresholds,
+                            critical_threshold: parseFloat(e.target.value)
+                          }
+                        }
+                      })}
+                      margin="normal"
+                      helperText="Critical threshold as ratio of max (e.g., 0.95 = 95%)"
+                    />
+                  </Grid>
+                </>
+              )}
+
+              {/* Strictness for Critical Guardrails */}
               <Grid item xs={12}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={config.guardrails?.bogon_check_enabled !== false}
-                      onChange={(e) => handleConfigChange('guardrails', 'bogon_check_enabled', e.target.checked)}
-                    />
-                  }
-                  label="Enable Bogon Prefix Detection"
-                />
+                <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+                  Strictness Levels for Critical Guardrails
+                </Typography>
               </Grid>
-              
-              <Grid item xs={12}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={config.guardrails?.require_confirmation || false}
-                      onChange={(e) => handleConfigChange('guardrails', 'require_confirmation', e.target.checked)}
-                    />
-                  }
-                  label="Require Manual Confirmation"
-                />
+
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth margin="normal">
+                  <InputLabel>Bogon Prefix Strictness</InputLabel>
+                  <Select
+                    value={config.guardrails?.strictness?.bogon_prefix || 'high'}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      guardrails: {
+                        ...config.guardrails,
+                        strictness: {
+                          ...config.guardrails?.strictness,
+                          bogon_prefix: e.target.value as 'low' | 'medium' | 'high' | 'strict'
+                        }
+                      }
+                    })}
+                  >
+                    <MenuItem value="low">Low</MenuItem>
+                    <MenuItem value="medium">Medium</MenuItem>
+                    <MenuItem value="high">High</MenuItem>
+                    <MenuItem value="strict">Strict</MenuItem>
+                  </Select>
+                  <FormHelperText>Enforcement level for bogon prefix detection</FormHelperText>
+                </FormControl>
               </Grid>
+
+              {config.rpki?.enabled && (
+                <Grid item xs={12} md={6}>
+                  <FormControl fullWidth margin="normal">
+                    <InputLabel>RPKI Validation Strictness</InputLabel>
+                    <Select
+                      value={config.guardrails?.strictness?.rpki_validation || 'strict'}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        guardrails: {
+                          ...config.guardrails,
+                          strictness: {
+                            ...config.guardrails?.strictness,
+                            rpki_validation: e.target.value as 'low' | 'medium' | 'high' | 'strict'
+                          }
+                        }
+                      })}
+                    >
+                      <MenuItem value="low">Low</MenuItem>
+                      <MenuItem value="medium">Medium</MenuItem>
+                      <MenuItem value="high">High</MenuItem>
+                      <MenuItem value="strict">Strict</MenuItem>
+                    </Select>
+                    <FormHelperText>Enforcement level for RPKI validation</FormHelperText>
+                  </FormControl>
+                </Grid>
+              )}
             </Grid>
           </TabPanel>
 

@@ -115,13 +115,24 @@ export interface BGPq4Config {
 }
 
 export interface GuardrailConfig {
-  enabled?: boolean
-  max_prefix_threshold?: number
-  max_session_loss_percent?: number
-  max_route_loss_percent?: number
-  bogon_check_enabled?: boolean
-  require_confirmation?: boolean
-  monitoring_duration?: number
+  // List of enabled guardrail names
+  // Critical guardrails are always enforced server-side
+  enabled_guardrails?: string[]
+
+  // Per-guardrail strictness levels
+  strictness?: {
+    prefix_count?: 'low' | 'medium' | 'high' | 'strict'
+    bogon_prefix?: 'low' | 'medium' | 'high' | 'strict'
+    rpki_validation?: 'low' | 'medium' | 'high' | 'strict'
+  }
+
+  // Prefix count thresholds (optional overrides)
+  prefix_count_thresholds?: {
+    max_total_prefixes?: number      // Positive integer
+    max_prefixes_per_as?: number     // Positive integer
+    warning_threshold?: number       // 0.0-1.0 ratio
+    critical_threshold?: number      // 0.0-1.0 ratio
+  }
 }
 
 export interface NetworkSecurityConfig {
