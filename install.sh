@@ -366,7 +366,8 @@ install_python_deps() {
     # Install WebUI dependencies (optional, only in system mode)
     if [[ "$INSTALL_MODE" == "system" ]]; then
         log_info "Installing WebUI adapter dependencies..."
-        "$VENV_DIR/bin/pip" install --quiet fastapi 'uvicorn[standard]' PyJWT 'passlib[bcrypt]' python-multipart || {
+        # Pin bcrypt<4 for passlib compatibility
+        "$VENV_DIR/bin/pip" install --quiet fastapi 'uvicorn[standard]' PyJWT 'passlib[bcrypt]' 'bcrypt<4' python-multipart || {
             log_warn "WebUI dependencies installation failed (optional)"
         }
     fi

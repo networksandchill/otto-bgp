@@ -50,8 +50,14 @@ async def setup_admin(request: Request):
         return JSONResponse({'success': True})
 
     except Exception as e:
-        logger.error(f"Admin setup failed: {e}")
-        return JSONResponse({'error': 'Setup failed'}, status_code=500)
+        # Log full traceback for diagnostics
+        logger.exception("Admin setup failed")
+        # Provide a clearer hint for common bcrypt backend issues
+        msg = 'Setup failed'
+        es = str(e)
+        if "has no attribute '__about__'" in es or 'password cannot be longer than 72 bytes' in es:
+            msg = 'bcrypt_backend_error'
+        return JSONResponse({'error': msg}, status_code=500)
 
 
 @router.post('/config')
