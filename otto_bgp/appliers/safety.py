@@ -946,17 +946,24 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
         
         return report
     
-    def execute_pipeline(self, policies: List[Dict], hostname: str, mode: str) -> 'ApplicationResult':
+    def execute_pipeline(self, policies: List[Dict], hostname: str, mode: str,
+                         rollout_context: Optional[Dict[str, str]] = None) -> 'ApplicationResult':
         """
         Execute unified pipeline with mode-dependent behavior
-        
+
         Single pipeline with mode-dependent finalization:
         - Always-active guardrails (1-4) regardless of mode
         - Mode switches only affect finalization behavior
         - System mode: manual confirmation required
         - Autonomous mode: auto-finalize after health checks
-        
+
         Args:
+            policies: List of policy configurations to apply
+            hostname: Target router hostname
+            mode: Execution mode (system or autonomous)
+            rollout_context: Optional coordination context (run_id, stage_id, target_id)
+
+        Original Args:
             policies: List of BGP policies to apply
             hostname: Target router hostname
             mode: Execution mode ('system' or 'autonomous')
@@ -966,11 +973,24 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
         """
         # Initialize mode manager
         mode_manager = ModeManager(mode)
-        
+
         # Set mode switches in safety configuration
         auto_finalize = mode_manager.should_auto_finalize()
         self.logger.info(f"Executing pipeline in {mode_manager.get_mode_description()} mode")
-        
+
+        # Record pipeline start event if coordinated
+        if rollout_context:
+            self._record_rollout_event(
+                rollout_context.get('run_id'),
+                'pipeline_start',
+                {
+                    'hostname': hostname,
+                    'target_id': rollout_context.get('target_id'),
+                    'stage_id': rollout_context.get('stage_id'),
+                    'mode': mode
+                }
+            )
+
         try:
             # GUARDRAIL 1: Exclusive lock (always active)
             device_kwargs = {
@@ -1018,7 +1038,19 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
                     # MODE SWITCH: Finalization behavior
                     finalization_strategy = mode_manager.get_finalization_strategy()
                     finalization_strategy.execute(cu, commit_info, health_result)
-                    
+
+                    # Record pipeline success event if coordinated
+                    if rollout_context:
+                        self._record_rollout_event(
+                            rollout_context.get('run_id'),
+                            'pipeline_success',
+                            {
+                                'hostname': hostname,
+                                'target_id': rollout_context.get('target_id'),
+                                'commit_finalized': commit_info.success
+                            }
+                        )
+
                     return ApplicationResult(success=True, exit_code=OttoExitCodes.SUCCESS)
                     
         except ConnectError as e:
@@ -1134,6 +1166,28 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
         except Exception as e:
             self.logger.error(f"Health check failed: {e}")
             return HealthResult(success=False, details=[], error=str(e))
+
+    def _record_rollout_event(self, run_id: Optional[str],
+                              event_type: str,
+                              payload: Dict[str, Any]) -> None:
+        """Record rollout event to database if run_id is provided
+
+        Args:
+            run_id: Rollout run identifier
+            event_type: Type of event (pipeline_start, pipeline_success, etc.)
+            payload: Event payload data
+        """
+        if not run_id:
+            return
+
+        try:
+            from otto_bgp.database import MultiRouterDAO
+            dao = MultiRouterDAO()
+            dao.record_event(run_id=run_id, event_type=event_type, payload=payload)
+            self.logger.debug(f"Recorded rollout event: {event_type}")
+        except Exception as e:
+            # Don't fail pipeline on event recording errors
+            self.logger.warning(f"Failed to record rollout event: {e}")
 
 
 @dataclass

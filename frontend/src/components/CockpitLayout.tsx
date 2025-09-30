@@ -24,6 +24,7 @@ import {
   ExitToApp,
   People as PeopleIcon,
   Person,
+  Timeline as TimelineIcon,
 } from '@mui/icons-material'
 import { useAuth } from '../hooks/useAuth'
 
@@ -50,6 +51,7 @@ const CockpitLayout: React.FC = () => {
   const menuItems = [
     { path: '/dashboard', label: 'System', icon: <DashboardIcon />, role: 'read_only' },
     { path: '/reports', label: 'BGP Policies', icon: <NetworkIcon />, role: 'read_only' },
+    { path: '/rollouts', label: 'Multi-Router Rollouts', icon: <TimelineIcon />, role: 'read_only' },
     { path: '/rpki', label: 'RPKI Status', icon: <SecurityIcon />, role: 'read_only' },
     { path: '/rpki-overrides', label: 'RPKI Overrides', icon: <BlockIcon />, role: 'admin' },
     { path: '/logs', label: 'Logs', icon: <StorageIcon />, role: 'read_only' },

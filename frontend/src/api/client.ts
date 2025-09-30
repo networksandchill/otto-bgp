@@ -533,6 +533,38 @@ class ApiClient {
     const response = await this.client.post('/irr-proxy/test', {})
     return response.data
   }
+
+  // Multi-Router Rollout endpoints
+  async listRollouts(status?: string, limit: number = 50): Promise<any> {
+    const response = await this.client.get('/pipeline/rollouts', {
+      params: { status, limit }
+    })
+    return response.data
+  }
+
+  async getRolloutStatus(runId: string): Promise<any> {
+    const response = await this.client.get(`/pipeline/rollouts/${runId}`)
+    return response.data
+  }
+
+  async getRolloutStages(runId: string): Promise<any> {
+    const response = await this.client.get(`/pipeline/rollouts/${runId}/stages`)
+    return response.data
+  }
+
+  async getRolloutTargets(runId: string, stageId: string, state?: string): Promise<any> {
+    const response = await this.client.get(`/pipeline/rollouts/${runId}/stages/${stageId}/targets`, {
+      params: { state }
+    })
+    return response.data
+  }
+
+  async getRolloutEvents(runId: string, eventType?: string, limit: number = 100): Promise<any> {
+    const response = await this.client.get(`/pipeline/rollouts/${runId}/events`, {
+      params: { event_type: eventType, limit }
+    })
+    return response.data
+  }
 }
 
 export const apiClient = new ApiClient()

@@ -16,6 +16,7 @@ import Logs from './pages/Logs'
 import Users from './pages/Users'
 import Profile from './pages/Profile'
 import SetupWizard from './pages/setup/SetupWizard'
+import { RolloutList, RolloutDetail } from './components/Rollout'
 import apiClient from './api/client'
 import { initActivityTracking } from './utils/activityTracker'
 import { IdleWarningModal } from './components/IdleWarningModal'
@@ -156,6 +157,16 @@ const AppContent: React.FC = () => {
         <Route path="profile" element={
           <RequireRole role="read_only">
             <Profile />
+          </RequireRole>
+        } />
+        <Route path="rollouts" element={
+          <RequireRole role="read_only">
+            <RolloutList />
+          </RequireRole>
+        } />
+        <Route path="rollouts/:runId" element={
+          <RequireRole role="read_only">
+            <RolloutDetail />
           </RequireRole>
         } />
       </Route>

@@ -89,7 +89,7 @@ def create_app() -> FastAPI:
     # Include routers
     from webui.api import (
         auth, setup, profile, users, devices, config, reports, systemd,
-        rpki, rpki_overrides, logs, irr_proxy, ssh
+        rpki, rpki_overrides, logs, irr_proxy, ssh, pipeline
     )
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
@@ -109,7 +109,8 @@ def create_app() -> FastAPI:
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
     app.include_router(irr_proxy.router, prefix="/api/irr-proxy", tags=["irr-proxy"])
     app.include_router(ssh.router, prefix="/api/ssh", tags=["ssh"])
-    
+    app.include_router(pipeline.router, prefix="/api/pipeline", tags=["pipeline"])
+
     # Catch-all route - MUST BE LAST
     @app.get("/{path:path}")
     async def catch_all(path: str):

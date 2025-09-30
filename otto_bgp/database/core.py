@@ -113,8 +113,60 @@ class DatabaseManager:
                     ON rpki_override_history(as_number);
                 CREATE INDEX IF NOT EXISTS idx_history_date
                     ON rpki_override_history(timestamp);
+
+                -- Multi-router coordination tables
+                CREATE TABLE IF NOT EXISTS rollout_runs (
+                    run_id TEXT PRIMARY KEY,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT NOT NULL
+                        CHECK(status IN ('planning', 'active', 'paused', 'completed', 'failed', 'aborted')),
+                    initiated_by TEXT CHECK(length(initiated_by) <= 100)
+                );
+
+                CREATE TABLE IF NOT EXISTS rollout_stages (
+                    stage_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    sequencing INTEGER NOT NULL,
+                    name TEXT NOT NULL CHECK(length(name) <= 200),
+                    guardrail_snapshot TEXT,
+                    FOREIGN KEY(run_id) REFERENCES rollout_runs(run_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS rollout_targets (
+                    target_id TEXT PRIMARY KEY,
+                    stage_id TEXT NOT NULL,
+                    hostname TEXT NOT NULL CHECK(length(hostname) <= 255),
+                    policy_hash TEXT CHECK(length(policy_hash) <= 64),
+                    state TEXT NOT NULL
+                        CHECK(state IN ('pending', 'in_progress', 'completed', 'failed', 'skipped')),
+                    last_error TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(stage_id) REFERENCES rollout_stages(stage_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS rollout_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK(length(event_type) <= 100),
+                    payload TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(run_id) REFERENCES rollout_runs(run_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_rollout_runs_status
+                    ON rollout_runs(status);
+                CREATE INDEX IF NOT EXISTS idx_rollout_runs_created
+                    ON rollout_runs(created_at);
+                CREATE INDEX IF NOT EXISTS idx_rollout_stages_run
+                    ON rollout_stages(run_id, sequencing);
+                CREATE INDEX IF NOT EXISTS idx_rollout_targets_stage
+                    ON rollout_targets(stage_id, state);
+                CREATE INDEX IF NOT EXISTS idx_rollout_targets_hostname
+                    ON rollout_targets(hostname);
+                CREATE INDEX IF NOT EXISTS idx_rollout_events_run
+                    ON rollout_events(run_id, timestamp);
             ''')
-            logger.info("Applied migration: initial schema")
+            logger.info("Applied migration: initial schema with multi-router coordination")
 
     @contextmanager
     def transaction(self):

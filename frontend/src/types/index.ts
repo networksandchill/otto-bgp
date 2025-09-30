@@ -239,3 +239,6 @@ export interface AutonomousModeConfig {
   require_confirmation?: boolean
   safety_overrides?: SafetyOverridesConfig
 }
+
+// Re-export rollout types
+export * from './rollout'

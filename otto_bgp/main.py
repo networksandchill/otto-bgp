@@ -805,17 +805,150 @@ def cmd_pipeline(args):
             return OttoExitCodes.VALIDATION_FAILED
         
         logger.info(f"Generated {len(policies)} policies for {len(devices)} devices")
-        
-        # Execute unified pipeline for each device
+
+        # Check if multi-router coordination is requested
+        use_coordinator = getattr(args, 'multi_router', False)
+        run_id = getattr(args, 'run_id', None)
+
+        if use_coordinator:
+            # Multi-router coordinated rollout
+            from otto_bgp.pipeline.multi_router_coordinator import (
+                MultiRouterCoordinator,
+                BlastStrategy,
+                PhasedStrategy,
+                CanaryStrategy,
+                CoordinatorConfig
+            )
+
+            logger.info("Using multi-router coordinator for staged rollout")
+
+            # Create coordinator with configuration
+            coordinator_config = CoordinatorConfig(
+                default_concurrency=getattr(args, 'concurrency', 5),
+                enable_events=True,
+                auto_progress_stages=True
+            )
+            coordinator = MultiRouterCoordinator(config=coordinator_config)
+
+            # Select strategy
+            strategy_name = getattr(args, 'strategy', 'blast')
+            concurrency = getattr(args, 'concurrency', 5)
+
+            if strategy_name == 'blast':
+                strategy = BlastStrategy(concurrency=concurrency)
+            elif strategy_name == 'phased':
+                strategy = PhasedStrategy(group_by='region', concurrency=concurrency)
+            elif strategy_name == 'canary':
+                # Use first device as canary
+                canary_hostname = devices[0].hostname if devices else None
+                strategy = CanaryStrategy(canary_hostname=canary_hostname, concurrency=concurrency)
+            else:
+                strategy = BlastStrategy(concurrency=concurrency)
+
+            # Resume existing run or plan new run
+            if run_id:
+                logger.info(f"Resuming rollout run: {run_id}")
+                coordinator.hydrate_from_db(run_id)
+            else:
+                # Convert devices to dict format for coordinator
+                device_list = [
+                    {
+                        'hostname': d.hostname,
+                        'address': d.address,
+                        'region': getattr(d, 'region', 'default')
+                    }
+                    for d in devices
+                ]
+
+                # Convert policies to dict format (hostname -> policy content)
+                policy_dict = {
+                    p.get('device_hostname'): p
+                    for p in policies
+                    if p and p.get('device_hostname')
+                }
+
+                # Plan new rollout run
+                initiated_by = getattr(args, 'user', 'cli')
+                run_id = coordinator.plan_run(
+                    devices=device_list,
+                    policies=policy_dict,
+                    strategy=strategy,
+                    initiated_by=initiated_by
+                )
+                logger.info(f"Created rollout run: {run_id}")
+                print(f"Rollout run created: {run_id}")
+
+            # Execute coordinated rollout
+            total_completed = 0
+            total_failed = 0
+
+            while True:
+                batch = coordinator.next_batch(concurrency=concurrency)
+                if not batch:
+                    break
+
+                logger.info(f"Processing batch from stage '{batch.stage_name}': {len(batch.targets)} targets")
+                print(f"\nProcessing stage: {batch.stage_name} ({len(batch.targets)} targets)")
+
+                for target in batch.targets:
+                    # Find device info
+                    device = next((d for d in devices if d.hostname == target.hostname), None)
+                    if not device:
+                        coordinator.fail_target(target.target_id, "Device not found")
+                        total_failed += 1
+                        continue
+
+                    # Get policies for this device
+                    device_policies = [p for p in policies if p and p.get('device_hostname') == target.hostname]
+                    if not device_policies:
+                        coordinator.skip_target(target.target_id, "No policies for device")
+                        continue
+
+                    # Execute pipeline for this target
+                    try:
+                        result = safety_manager.execute_pipeline(
+                            policies=device_policies,
+                            hostname=target.hostname,
+                            mode=mode,
+                            rollout_context={
+                                'run_id': run_id,
+                                'stage_id': batch.stage_id,
+                                'target_id': target.target_id
+                            }
+                        )
+
+                        if result.success:
+                            coordinator.complete_target(target.target_id, result={'exit_code': result.exit_code})
+                            total_completed += 1
+                            print(f"  ✓ {target.hostname}")
+                        else:
+                            coordinator.fail_target(target.target_id, f"Pipeline failed: {result.exit_code}")
+                            total_failed += 1
+                            print(f"  ✗ {target.hostname}: {result.exit_code}")
+
+                    except Exception as e:
+                        coordinator.fail_target(target.target_id, str(e))
+                        total_failed += 1
+                        print(f"  ✗ {target.hostname}: {e}")
+
+            # Report coordinated rollout results
+            print(f"\nCoordinated rollout complete:")
+            print(f"  Run ID: {run_id}")
+            print(f"  Completed: {total_completed}")
+            print(f"  Failed: {total_failed}")
+
+            return OttoExitCodes.SUCCESS if total_failed == 0 else OttoExitCodes.POLICY_APPLICATION_ERROR
+
+        # Traditional sequential pipeline execution
         results = []
         failed_count = 0
-        
+
         # DEFENSIVE VALIDATION: Final safety check before iteration
         if not devices or len(devices) == 0:
             logger.error("Device list became invalid before iteration")
             print("Error: Device list corruption detected")
             return OttoExitCodes.VALIDATION_FAILED
-        
+
         for device in devices:
             # DEFENSIVE VALIDATION: Per-device safety checks
             if device is None:
@@ -1134,6 +1267,76 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
     except Exception as e:
         logger.error(f"Failed to generate policies: {e}")
         return []  # Always return empty list, never None
+
+
+def cmd_rollout_status(args):
+    """Check status of multi-router rollout"""
+    from otto_bgp.utils.logging import get_logger
+    from otto_bgp.database import MultiRouterDAO
+    logger = get_logger('otto-bgp.rollout-status')
+
+    try:
+        dao = MultiRouterDAO()
+        run_id = args.run_id
+
+        # Get run summary
+        summary = dao.get_run_summary(run_id)
+        if not summary:
+            print(f"Rollout run not found: {run_id}")
+            return 1
+
+        run = summary['run']
+        stages = summary['stages']
+        stage_stats = summary['stage_stats']
+
+        # Display run information
+        print(f"\nRollout Run: {run['run_id']}")
+        print(f"Status: {run['status']}")
+        print(f"Created: {run['created_at']}")
+        if run['initiated_by']:
+            print(f"Initiated by: {run['initiated_by']}")
+
+        # Display stage information
+        print(f"\nStages: {len(stages)}")
+        for stage_stat in stage_stats:
+            print(f"\n  Stage {stage_stat['sequencing']}: {stage_stat['stage_name']}")
+            print(f"    Total: {stage_stat['total']}")
+            print(f"    Pending: {stage_stat['pending']}")
+            print(f"    In Progress: {stage_stat['in_progress']}")
+            print(f"    Completed: {stage_stat['completed']}")
+            print(f"    Failed: {stage_stat['failed']}")
+            print(f"    Skipped: {stage_stat['skipped']}")
+
+            # Show detailed target info if verbose
+            if args.verbose and stage_stat['total'] > 0:
+                stage_id = stage_stat['stage_id']
+                targets = dao.get_targets(stage_id)
+                print(f"\n    Targets:")
+                for target in targets:
+                    status_symbol = {
+                        'pending': '⏸',
+                        'in_progress': '▶',
+                        'completed': '✓',
+                        'failed': '✗',
+                        'skipped': '⊘'
+                    }.get(target.state, '?')
+                    print(f"      {status_symbol} {target.hostname} ({target.state})")
+                    if target.last_error:
+                        print(f"        Error: {target.last_error}")
+
+        # Display recent events
+        if args.verbose:
+            print(f"\nRecent Events:")
+            events = summary['recent_events'][:10]  # Show last 10
+            for event in events:
+                print(f"  [{event['timestamp']}] {event['event_type']}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to get rollout status: {e}")
+        print(f"Error: {e}")
+        return 1
 
 
 def cmd_test_proxy(args):
@@ -1560,13 +1763,29 @@ def create_parser():
                                 help='CSV file with device addresses')
     pipeline_parser.add_argument('--output-dir', default='bgp_pipeline_output',
                                 help='Output directory for all pipeline results (default: bgp_pipeline_output)')
-    pipeline_parser.add_argument('--mode', choices=['system', 'autonomous'], 
+    pipeline_parser.add_argument('--mode', choices=['system', 'autonomous'],
                                 default='system', help='Execution mode (default: system)')
     pipeline_parser.add_argument('--timeout', type=int, default=30,
                                 help='Command timeout in seconds (default: 30)')
     pipeline_parser.add_argument('--command-timeout', type=int, default=60,
                                 help='SSH command timeout in seconds (default: 60)')
-    
+    pipeline_parser.add_argument('--multi-router', action='store_true',
+                                help='Use multi-router coordinator for staged rollout')
+    pipeline_parser.add_argument('--strategy', choices=['blast', 'phased', 'canary'],
+                                default='blast', help='Rollout strategy (default: blast)')
+    pipeline_parser.add_argument('--concurrency', type=int, default=5,
+                                help='Concurrent operations per stage (default: 5)')
+    pipeline_parser.add_argument('--run-id', type=str,
+                                help='Resume existing rollout run by ID')
+
+    # rollout-status subcommand
+    rollout_status_parser = subparsers.add_parser('rollout-status',
+                                                  help='Check status of multi-router rollout',
+                                                  parents=[common_flags_parent])
+    rollout_status_parser.add_argument('run_id', help='Rollout run ID')
+    rollout_status_parser.add_argument('--verbose', '-v', action='store_true',
+                                      help='Show detailed target information')
+
     # test-proxy subcommand
     test_proxy_parser = subparsers.add_parser('test-proxy',
                                              help='Test IRR proxy configuration and connectivity',
@@ -1689,6 +1908,7 @@ def main():
         'list': cmd_list,
         'apply': cmd_apply,
         'pipeline': cmd_pipeline,
+        'rollout-status': cmd_rollout_status,
         'test-proxy': cmd_test_proxy,
         'rpki-check': cmd_rpki_check,
         'rpki-override': cmd_rpki_override
