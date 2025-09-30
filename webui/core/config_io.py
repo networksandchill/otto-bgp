@@ -231,7 +231,7 @@ def load_config_from_otto_env() -> Dict[str, Any]:
                 'use_tls': env_dict.get('OTTO_BGP_SMTP_USE_TLS', 'true').lower() == 'true',
                 'username': env_dict.get('OTTO_BGP_SMTP_USERNAME', ''),
                 'password': env_dict.get('OTTO_BGP_SMTP_PASSWORD', ''),
-                'from_address': env_dict.get('OTTO_BGP_EMAIL_FROM', ''),
+                'from_address': env_dict.get('OTTO_BGP_FROM_ADDRESS', ''),
                 'to_addresses': normalize_email_addresses(env_dict.get('OTTO_BGP_EMAIL_TO', ''))
             }
 

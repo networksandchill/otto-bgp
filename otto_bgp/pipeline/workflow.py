@@ -69,17 +69,41 @@ class BGPPolicyPipeline:
         if self.config.rpki_enabled:
             self._initialize_rpki_validator()
         
-        # Initialize proxy manager if configured
+        # Initialize proxy manager and BGPq4 configuration
         proxy_manager = None
+        bgpq4_timeout = 30
+        bgpq4_irr_source = None
+        bgpq4_aggregate = True
+        bgpq4_ipv4 = True
+        bgpq4_ipv6 = False
+
         try:
             from ..utils.config import get_config_manager
             config_manager = get_config_manager()
             irr_config = config_manager.get_config()
-            
+
+            # Get BGPq4 configuration from ConfigManager
+            if irr_config.bgpq4:
+                bgpq4_timeout = irr_config.bgpq4.timeout
+                bgpq4_irr_source = irr_config.bgpq4.irr_source
+                bgpq4_aggregate = irr_config.bgpq4.aggregate_prefixes
+                bgpq4_ipv4 = irr_config.bgpq4.ipv4_enabled
+                bgpq4_ipv6 = irr_config.bgpq4.ipv6_enabled
+                self.logger.info(f"Pipeline: Using BGPq4 config - timeout: {bgpq4_timeout}s, "
+                               f"sources: {bgpq4_irr_source}, aggregate: {bgpq4_aggregate}")
+
+                # Override mode if configured (unless dev_mode already set)
+                if not config.dev_mode and irr_config.bgpq4.mode:
+                    try:
+                        bgpq4_mode = BGPq4Mode[irr_config.bgpq4.mode.upper()]
+                        self.logger.info(f"Pipeline: Using BGPq4 mode from config: {bgpq4_mode.value}")
+                    except (KeyError, AttributeError):
+                        self.logger.warning(f"Pipeline: Invalid BGPq4 mode in config: {irr_config.bgpq4.mode}")
+
             if irr_config.irr_proxy and irr_config.irr_proxy.enabled:
                 self.logger.info("Pipeline: IRR proxy enabled - initializing proxy manager")
                 from ..proxy import IRRProxyManager, ProxyConfig
-                
+
                 proxy_config = ProxyConfig(
                     enabled=irr_config.irr_proxy.enabled,
                     method=irr_config.irr_proxy.method,
@@ -98,10 +122,18 @@ class BGPPolicyPipeline:
                     self.logger.warning(f"Pipeline: Failed to establish proxy tunnels: {e}")
         except Exception as e:
             self.logger.warning(f"Pipeline: Failed to initialize proxy manager: {e}")
-        
+
         self.ssh_collector = JuniperSSHCollector()
         self.as_extractor = ASNumberExtractor()
-        self.bgp_generator = BGPq4Wrapper(mode=bgpq4_mode, proxy_manager=proxy_manager)
+        self.bgp_generator = BGPq4Wrapper(
+            mode=bgpq4_mode,
+            command_timeout=bgpq4_timeout,
+            proxy_manager=proxy_manager,
+            irr_source=bgpq4_irr_source,
+            aggregate_prefixes=bgpq4_aggregate,
+            ipv4_enabled=bgpq4_ipv4,
+            ipv6_enabled=bgpq4_ipv6
+        )
         self.router_inspector = RouterInspector()
         
         # Pipeline state - properly isolated between runs

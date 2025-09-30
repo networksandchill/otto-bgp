@@ -191,20 +191,21 @@ def cmd_policy(args):
     from otto_bgp.utils.logging import get_logger
     logger = get_logger('otto-bgp.policy')
     
-    # Initialize bgpq4 wrapper with proxy support
+    # Initialize bgpq4 wrapper with proxy support and full config
     from otto_bgp.generators.bgpq4_wrapper import BGPq4Mode
-    mode = BGPq4Mode.PODMAN if getattr(args, 'dev', False) else BGPq4Mode.AUTO
-    
-    # Check for proxy configuration
+
+    # Check for proxy configuration and load full BGPq4 config
     proxy_manager = None
+    config_manager = None
+    config = None
     try:
         config_manager = get_config_manager()
         config = config_manager.get_config()
-        
+
         if config.irr_proxy and config.irr_proxy.enabled:
             logger.info("IRR proxy enabled - initializing proxy manager")
             from otto_bgp.proxy import IRRProxyManager, ProxyConfig
-            
+
             proxy_config = ProxyConfig(
                 enabled=config.irr_proxy.enabled,
                 method=config.irr_proxy.method,
@@ -222,11 +223,45 @@ def cmd_policy(args):
                 logger.warning(f"Failed to establish proxy tunnels: {e}")
     except Exception as e:
         logger.warning(f"Failed to initialize proxy manager: {e}")
-    
+
+    # Determine BGPq4 mode (CLI arg > config > AUTO)
+    if getattr(args, 'dev', False):
+        mode = BGPq4Mode.PODMAN
+    elif config and config.bgpq4 and config.bgpq4.mode:
+        try:
+            mode = BGPq4Mode[config.bgpq4.mode.upper()]
+        except (KeyError, AttributeError):
+            logger.warning(f"Invalid BGPq4 mode in config: {config.bgpq4.mode}, using AUTO")
+            mode = BGPq4Mode.AUTO
+    else:
+        mode = BGPq4Mode.AUTO
+
+    # Get BGPq4 configuration from ConfigManager
+    bgpq4_timeout = getattr(args, 'timeout', None)
+    bgpq4_irr_source = None
+    bgpq4_aggregate = True
+    bgpq4_ipv4 = True
+    bgpq4_ipv6 = False
+
+    if config and config.bgpq4:
+        if bgpq4_timeout is None:
+            bgpq4_timeout = config.bgpq4.timeout
+        bgpq4_irr_source = config.bgpq4.irr_source
+        bgpq4_aggregate = config.bgpq4.aggregate_prefixes
+        bgpq4_ipv4 = config.bgpq4.ipv4_enabled
+        bgpq4_ipv6 = config.bgpq4.ipv6_enabled
+
+    if bgpq4_timeout is None:
+        bgpq4_timeout = 30
+
     bgpq4 = BGPq4Wrapper(
         mode=mode,
-        command_timeout=getattr(args, 'timeout', 30),
-        proxy_manager=proxy_manager
+        command_timeout=bgpq4_timeout,
+        proxy_manager=proxy_manager,
+        irr_source=bgpq4_irr_source,
+        aggregate_prefixes=bgpq4_aggregate,
+        ipv4_enabled=bgpq4_ipv4,
+        ipv6_enabled=bgpq4_ipv6
     )
     
     # Test connection if requested  

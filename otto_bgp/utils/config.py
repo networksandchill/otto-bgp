@@ -38,14 +38,55 @@ class SSHConfig:
 
 
 @dataclass
+class BGPQ4Config:
+    """BGPq4 tool configuration"""
+    mode: str = "auto"
+    timeout: int = 45
+    irr_source: str = "RADB,RIPE,APNIC"
+    aggregate_prefixes: bool = True
+    ipv4_enabled: bool = True
+    ipv6_enabled: bool = False
+    max_workers: int = 4
+    retry_attempts: int = 2
+
+    def __post_init__(self):
+        """Load from environment variables if not set"""
+        if os.getenv('OTTO_BGP_BGPQ4_MODE'):
+            self.mode = os.getenv('OTTO_BGP_BGPQ4_MODE')
+        if os.getenv('OTTO_BGP_BGPQ4_TIMEOUT'):
+            try:
+                self.timeout = int(os.getenv('OTTO_BGP_BGPQ4_TIMEOUT'))
+            except ValueError:
+                pass
+        if os.getenv('OTTO_BGP_IRR_SOURCE'):
+            self.irr_source = os.getenv('OTTO_BGP_IRR_SOURCE')
+        if os.getenv('OTTO_BGP_AGGREGATE_PREFIXES'):
+            self.aggregate_prefixes = os.getenv('OTTO_BGP_AGGREGATE_PREFIXES').lower() == 'true'
+        if os.getenv('OTTO_BGP_IPV4_ENABLED'):
+            self.ipv4_enabled = os.getenv('OTTO_BGP_IPV4_ENABLED').lower() == 'true'
+        if os.getenv('OTTO_BGP_IPV6_ENABLED'):
+            self.ipv6_enabled = os.getenv('OTTO_BGP_IPV6_ENABLED').lower() == 'true'
+        if os.getenv('OTTO_BGP_BGPQ4_MAX_WORKERS'):
+            try:
+                self.max_workers = int(os.getenv('OTTO_BGP_BGPQ4_MAX_WORKERS'))
+            except ValueError:
+                pass
+        if os.getenv('OTTO_BGP_BGPQ4_RETRY_ATTEMPTS'):
+            try:
+                self.retry_attempts = int(os.getenv('OTTO_BGP_BGPQ4_RETRY_ATTEMPTS'))
+            except ValueError:
+                pass
+
+
+@dataclass
 class BGPq3Config:
-    """BGPq3 tool configuration"""
+    """BGPq3 tool configuration (legacy)"""
     native_path: Optional[str] = None
     docker_image: str = "mirceaulinic/bgpq3"
     use_docker: bool = False
     use_podman: bool = False
     command_timeout: int = 30
-    
+
     def __post_init__(self):
         """Load from environment variables if not set"""
         if self.native_path is None:
@@ -348,6 +389,7 @@ AUTONOMOUS_MODE_SCHEMA = {
 class BGPToolkitConfig:
     """Main configuration container"""
     ssh: SSHConfig = None
+    bgpq4: BGPQ4Config = None
     bgpq3: BGPq3Config = None
     as_processing: ASProcessingConfig = None
     output: OutputConfig = None
@@ -356,11 +398,13 @@ class BGPToolkitConfig:
     installation_mode: InstallationModeConfig = None
     autonomous_mode: AutonomousModeConfig = None
     rpki: RPKIConfig = None
-    
+
     def __post_init__(self):
         """Initialize subconfigs if not provided"""
         if self.ssh is None:
             self.ssh = SSHConfig()
+        if self.bgpq4 is None:
+            self.bgpq4 = BGPQ4Config()
         if self.bgpq3 is None:
             self.bgpq3 = BGPq3Config()
         if self.as_processing is None:

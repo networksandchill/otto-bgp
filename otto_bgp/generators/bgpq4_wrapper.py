@@ -427,7 +427,7 @@ class BGPq4Wrapper:
         'alternative': 'bgpq4/bgpq4'
     }
     
-    def __init__(self, 
+    def __init__(self,
                  mode: BGPq4Mode = BGPq4Mode.AUTO,
                  docker_image: str = None,
                  command_timeout: int = 30,
@@ -435,10 +435,14 @@ class BGPq4Wrapper:
                  proxy_manager=None,
                  enable_cache: bool = True,
                  cache_ttl: int = 3600,
-                 proxy_tunnels: Dict[str, Tuple[str, int]] = None):
+                 proxy_tunnels: Dict[str, Tuple[str, int]] = None,
+                 irr_source: str = None,
+                 aggregate_prefixes: bool = True,
+                 ipv4_enabled: bool = True,
+                 ipv6_enabled: bool = False):
         """
         Initialize bgpq4 wrapper
-        
+
         Args:
             mode: Execution mode (native, docker, podman, auto)
             docker_image: Docker image to use (default: ghcr.io/bgp/bgpq4:latest)
@@ -448,6 +452,10 @@ class BGPq4Wrapper:
             enable_cache: Enable policy caching (default: True)
             cache_ttl: Cache TTL in seconds (default: 1 hour)
             proxy_tunnels: Dict mapping tunnel names to (host, port) for workers
+            irr_source: IRR sources to query (comma-separated, e.g., "RADB,RIPE,APNIC")
+            aggregate_prefixes: Enable prefix aggregation (default: True)
+            ipv4_enabled: Generate IPv4 policies (default: True)
+            ipv6_enabled: Generate IPv6 policies (default: False)
         """
         self.logger = logging.getLogger(__name__)
         self.mode = mode
@@ -458,6 +466,10 @@ class BGPq4Wrapper:
         self.proxy_tunnels = proxy_tunnels or {}
         self.enable_cache = enable_cache
         self.cache_ttl = cache_ttl
+        self.irr_source = irr_source or "RADB,RIPE,APNIC"
+        self.aggregate_prefixes = aggregate_prefixes
+        self.ipv4_enabled = ipv4_enabled
+        self.ipv6_enabled = ipv6_enabled
         
         # Initialize cache
         self.cache = None
@@ -529,35 +541,35 @@ class BGPq4Wrapper:
     def _build_bgpq4_command(self, as_number: int, policy_name: str = None, irr_server: str = None) -> List[str]:
         """
         Build bgpq4 command for given AS number with security validation
-        
+
         Args:
             as_number: AS number to generate policy for
             policy_name: Custom policy name (default: AS<number>)
             irr_server: Optional IRR server preference for proxy selection
-            
+
         Returns:
             Complete command list for subprocess
-            
+
         Raises:
             ValueError: If AS number or policy name is invalid
         """
         # Validate AS number first for security
         validated_as = validate_as_number(as_number)
-        
+
         # Generate or validate policy name
         if policy_name is None:
             policy_name = f"AS{validated_as}"
         else:
             policy_name = validate_policy_name(policy_name)
-        
+
         # Base command from detected configuration
         command = self.bgpq4_command.copy()
-        
+
         # Apply proxy modifications if available
         if self.proxy_manager:
             command = self.proxy_manager.wrap_bgpq4_command(command, irr_server)
             self.logger.debug(f"Applied proxy configuration to bgpq4 command")
-        
+
         # If running in a worker without a proxy_manager, but with provided tunnel mapping,
         # inject localhost:port for bgpq4
         if not self.proxy_manager and getattr(self, 'proxy_tunnels', None):
@@ -567,11 +579,43 @@ class BGPq4Wrapper:
             if '-h' not in command:
                 command.extend(['-h', host, '-p', str(port)])
                 self.logger.debug(f"Injected proxy_tunnels endpoint {name} -> {host}:{port}")
-        
-        # Add bgpq4 arguments: -J (Juniper), -l (prefix-list), policy_name, AS_number
-        # Using validated inputs prevents command injection
-        command.extend(['-Jl', policy_name, f'AS{validated_as}'])
-        
+
+        # Add IRR source specification if configured
+        if self.irr_source:
+            command.extend(['-S', self.irr_source])
+            self.logger.debug(f"Using IRR sources: {self.irr_source}")
+
+        # Add prefix aggregation flag if enabled
+        if self.aggregate_prefixes:
+            command.append('-A')
+            self.logger.debug("Prefix aggregation enabled")
+
+        # Add Juniper format flag
+        command.append('-J')
+
+        # Add address family flags based on configuration
+        if self.ipv4_enabled and self.ipv6_enabled:
+            # Both IPv4 and IPv6 (default bgpq4 behavior, no extra flags needed)
+            self.logger.debug("Generating policies for IPv4 and IPv6")
+        elif self.ipv4_enabled:
+            # IPv4 only (use -4 flag)
+            command.append('-4')
+            self.logger.debug("Generating policies for IPv4 only")
+        elif self.ipv6_enabled:
+            # IPv6 only (use -6 flag)
+            command.append('-6')
+            self.logger.debug("Generating policies for IPv6 only")
+        else:
+            # Neither enabled - this shouldn't happen, but default to IPv4
+            command.append('-4')
+            self.logger.warning("No address family enabled, defaulting to IPv4")
+
+        # Add prefix-list format and name
+        command.extend(['-l', policy_name])
+
+        # Add AS number (must be last argument)
+        command.append(f'AS{validated_as}')
+
         self.logger.debug(f"Built secure bgpq4 command for AS{validated_as}: {' '.join(command)}")
         return command
     

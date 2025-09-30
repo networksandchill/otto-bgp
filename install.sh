@@ -467,7 +467,7 @@ create_config() {
     # Additional customizations for autonomous mode
     if [[ "$AUTONOMOUS_MODE" == true ]]; then
         # Replace autonomous-specific placeholders
-        sed -i "s|AUTO_APPLY_THRESHOLD_PLACEHOLDER|${AUTO_APPLY_THRESHOLD:-100}|g" "$CONFIG_DIR/otto.env"
+        sed -i "s|AUTO_THRESHOLD_PLACEHOLDER|${AUTO_THRESHOLD:-100}|g" "$CONFIG_DIR/otto.env"
         sed -i "s|SMTP_ENABLED_PLACEHOLDER|true|g" "$CONFIG_DIR/otto.env"
         sed -i "s|SMTP_SERVER_PLACEHOLDER|$SMTP_SERVER|g" "$CONFIG_DIR/otto.env"
         sed -i "s|SMTP_PORT_PLACEHOLDER|$SMTP_PORT|g" "$CONFIG_DIR/otto.env"
@@ -539,7 +539,7 @@ configure_autonomous_mode() {
     
     # Get auto-apply threshold
     read -p "Maximum prefix count for auto-apply [100]: " threshold
-    AUTO_APPLY_THRESHOLD=${threshold:-100}
+    AUTO_THRESHOLD=${threshold:-100}
     
     echo ""
     echo -e "${BLUE}📧 CONFIGURING EMAIL NOTIFICATIONS${NC}"
@@ -569,7 +569,7 @@ configure_autonomous_mode() {
     
     echo ""
     echo -e "${GREEN}✅ AUTONOMOUS MODE CONFIGURED${NC}"
-    echo "   - Auto-apply threshold: $AUTO_APPLY_THRESHOLD prefixes (informational)"
+    echo "   - Auto threshold: $AUTO_THRESHOLD prefixes (informational)"
     echo "   - Risk level: low only"
     echo "   - Confirmed commits: enabled"
     echo "   - Email notifications: enabled for ALL NETCONF events"
