@@ -253,6 +253,52 @@ class ApiClient {
     return response.data
   }
 
+  // RPKI Override Management
+  async listRpkiOverrides(page: number = 1, perPage: number = 50): Promise<{
+    overrides: Array<{
+      as_number: number
+      rpki_enabled: boolean
+      reason: string
+      modified_date: string
+      modified_by: string
+    }>
+    total: number
+    page: number
+    per_page: number
+  }> {
+    const response = await this.client.get(`/rpki-overrides/overrides?page=${page}&per_page=${perPage}`)
+    return response.data
+  }
+
+  async disableRpkiForAs(asNumber: number, reason: string): Promise<{ success: boolean; message: string }> {
+    const response = await this.client.post(`/rpki-overrides/overrides/${asNumber}/disable`, { reason })
+    return response.data
+  }
+
+  async enableRpkiForAs(asNumber: number, reason: string): Promise<{ success: boolean; message: string }> {
+    const response = await this.client.post(`/rpki-overrides/overrides/${asNumber}/enable`, { reason })
+    return response.data
+  }
+
+  async getRpkiOverrideHistory(asNumber?: number, limit: number = 100): Promise<{
+    history: Array<{
+      id: number
+      as_number: number
+      action: string
+      reason: string
+      timestamp: string
+      user: string
+      ip_address: string
+    }>
+    total: number
+  }> {
+    const params = new URLSearchParams()
+    if (asNumber) params.append('as_number', asNumber.toString())
+    params.append('limit', limit.toString())
+    const response = await this.client.get(`/rpki-overrides/overrides/history?${params}`)
+    return response.data
+  }
+
   // Logs endpoints
   async getLogs(params?: { service?: string; level?: string; limit?: number }): Promise<any> {
     const searchParams = new URLSearchParams()

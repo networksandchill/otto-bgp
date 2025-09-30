@@ -11,6 +11,7 @@ import CockpitDashboard from './pages/CockpitDashboard'
 import Reports from './pages/Reports'
 import Configuration from './pages/Configuration'
 import RpkiStatus from './pages/RpkiStatus'
+import RpkiOverrides from './pages/RpkiOverrides'
 import Logs from './pages/Logs'
 import Users from './pages/Users'
 import Profile from './pages/Profile'
@@ -130,6 +131,11 @@ const AppContent: React.FC = () => {
         <Route path="rpki" element={
           <RequireRole role="read_only">
             <RpkiStatus />
+          </RequireRole>
+        } />
+        <Route path="rpki-overrides" element={
+          <RequireRole role="admin">
+            <RpkiOverrides />
           </RequireRole>
         } />
         <Route path="logs" element={
