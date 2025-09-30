@@ -42,7 +42,16 @@ from typing import Dict, List, Optional, Set, Tuple, Union, Any, Iterator
 from ipaddress import ip_network, ip_address, AddressValueError, NetmaskValueError
 
 # Otto BGP imports for integration
-from ..appliers.guardrails import GuardrailComponent, GuardrailResult, GuardrailConfig
+from ..appliers.guardrails import (
+    GuardrailComponent, GuardrailResult, GuardrailConfig
+)
+
+# Import database override manager
+try:
+    from otto_bgp.database.rpki_overrides import RPKIOverrideManager
+    SQLITE_AVAILABLE = True
+except ImportError:
+    SQLITE_AVAILABLE = False
 
 
 class ThreadHealthMonitor:
@@ -983,9 +992,30 @@ class RPKIValidator:
     def _validate_prefix_streaming(self, prefix: str, asn: int) -> RPKIValidationResult:
         """
         Memory-efficient streaming validation using lazy VRP cache
-        
+
         Achieves 70-90% memory reduction while maintaining validation accuracy.
         """
+        # Check for per-AS RPKI override (stable hook point)
+        if SQLITE_AVAILABLE:
+            try:
+                override_mgr = RPKIOverrideManager()
+                if override_mgr.is_rpki_disabled(asn):
+                    self.logger.info(
+                        f"AS{asn}: RPKI validation disabled "
+                        "(customer override)"
+                    )
+                    return RPKIValidationResult(
+                        prefix=prefix,
+                        asn=asn,
+                        state=RPKIState.NOTFOUND,
+                        reason="RPKI validation disabled for this AS "
+                               "(customer override)",
+                        allowlisted=True
+                    )
+            except Exception as e:
+                self.logger.warning(f"Failed to check RPKI override: {e}")
+                # Continue with normal validation on error (fail-open for overrides)
+
         # Check allowlist first (fast path)
         if (prefix, asn) in self._allowlist:
             return RPKIValidationResult(
@@ -1086,13 +1116,13 @@ class RPKIValidator:
         """
         Lightweight AS-level RPKI check for policy generation with streaming optimization.
         Returns summary of AS's ROA coverage without full prefix validation.
-        
+
         Uses streaming mode for memory efficiency when available, otherwise
         falls back to legacy full-dataset scanning.
-        
+
         Args:
             as_number: AS number to check
-            
+
         Returns:
             Dict with keys:
             - has_valid_roas: bool - AS has at least one valid ROA
@@ -1109,6 +1139,25 @@ class RPKIValidator:
                 'state': RPKIState.ERROR,
                 'message': f"Invalid AS number: {e}"
             }
+
+        # Check for per-AS RPKI override
+        if SQLITE_AVAILABLE:
+            try:
+                override_mgr = RPKIOverrideManager()
+                if override_mgr.is_rpki_disabled(validated_asn):
+                    self.logger.info(
+                        f"AS{validated_asn}: RPKI validation disabled "
+                        "(override)"
+                    )
+                    return {
+                        'has_valid_roas': True,
+                        'total_roas': 0,
+                        'state': RPKIState.NOTFOUND,
+                        'message': f"AS{validated_asn}: RPKI validation "
+                                   f"disabled (customer override)"
+                    }
+            except Exception as e:
+                self.logger.warning(f"Failed to check RPKI override: {e}")
         
         if not self.vrp_cache_path or not self.vrp_cache_path.exists():
             raise ValueError("RPKI cache file required for validation")

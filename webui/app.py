@@ -87,7 +87,10 @@ def create_app() -> FastAPI:
         return JSONResponse({"status": "ok", "timestamp": datetime.utcnow().isoformat()})
     
     # Include routers
-    from webui.api import auth, setup, profile, users, devices, config, reports, systemd, rpki, logs, irr_proxy, ssh
+    from webui.api import (
+        auth, setup, profile, users, devices, config, reports, systemd,
+        rpki, rpki_overrides, logs, irr_proxy, ssh
+    )
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
@@ -98,6 +101,11 @@ def create_app() -> FastAPI:
     app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
     app.include_router(systemd.router, prefix="/api/systemd", tags=["systemd"])
     app.include_router(rpki.router, prefix="/api/rpki", tags=["rpki"])
+    app.include_router(
+        rpki_overrides.router,
+        prefix="/api/rpki-overrides",
+        tags=["rpki-overrides"]
+    )
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
     app.include_router(irr_proxy.router, prefix="/api/irr-proxy", tags=["irr-proxy"])
     app.include_router(ssh.router, prefix="/api/ssh", tags=["ssh"])

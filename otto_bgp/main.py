@@ -1338,6 +1338,72 @@ def cmd_rpki_check(args):
         return 2
 
 
+def cmd_rpki_override(args):
+    """Manage RPKI overrides"""
+    from otto_bgp.utils.logging import get_logger
+    from otto_bgp.database.rpki_overrides import RPKIOverrideManager
+    from otto_bgp.appliers.exit_codes import OttoExitCodes
+    logger = get_logger('otto-bgp.rpki-override')
+
+    try:
+        mgr = RPKIOverrideManager()
+    except Exception as e:
+        print(f"✗ Failed to initialize database: {e}")
+        return OttoExitCodes.DATABASE_ERROR
+
+    if args.override_action == 'list':
+        overrides = mgr.get_all_overrides()
+        if not overrides:
+            print("✓ No RPKI overrides configured")
+        else:
+            print(f"✓ RPKI Overrides ({len(overrides)} total):")
+            for override in overrides:
+                status = "Disabled" if not override['rpki_enabled'] else "Enabled"
+                print(f"  AS{override['as_number']}: RPKI {status}")
+                if override.get('reason'):
+                    print(f"    Reason: {override['reason']}")
+                if override.get('modified_by'):
+                    modified_date = override['modified_date']
+                    modified_by = override['modified_by']
+                    print(f"    Modified by: {modified_by} at {modified_date}")
+
+    elif args.override_action == 'disable':
+        user = os.getenv('USER', 'cli')
+        success = mgr.disable_rpki(args.as_number, args.reason, user)
+        if success:
+            print(f"✓ RPKI validation disabled for AS{args.as_number}")
+        else:
+            print(f"✗ Failed to disable RPKI for AS{args.as_number}")
+            return OttoExitCodes.DATABASE_ERROR
+
+    elif args.override_action == 'enable':
+        user = os.getenv('USER', 'cli')
+        success = mgr.enable_rpki(args.as_number, args.reason, user)
+        if success:
+            print(f"✓ RPKI validation enabled for AS{args.as_number}")
+        else:
+            print(f"✗ Failed to enable RPKI for AS{args.as_number}")
+            return OttoExitCodes.DATABASE_ERROR
+
+    elif args.override_action == 'history':
+        history = mgr.get_override_history(args.as_number, args.limit)
+        if not history:
+            print("✓ No override history found")
+        else:
+            print(f"✓ RPKI Override History ({len(history)} entries):")
+            for entry in history:
+                timestamp = entry['timestamp']
+                as_number = entry['as_number']
+                action = entry['action']
+                print(f"  {timestamp}: AS{as_number} - {action}")
+                if entry.get('reason'):
+                    print(f"    Reason: {entry['reason']}")
+                if entry.get('user'):
+                    print(f"    User: {entry['user']}")
+
+    return OttoExitCodes.SUCCESS
+
+
 def create_common_flags_parent():
     """Create a parent parser with common global flags and mutual exclusion groups"""
     parent_parser = argparse.ArgumentParser(add_help=False)
@@ -1516,7 +1582,31 @@ def create_parser():
                                              parents=[common_flags_parent])
     rpki_check_parser.add_argument('--max-age', type=int,
                                   help='Maximum cache age in seconds (overrides config)')
-    
+
+    # RPKI Override Management subcommand
+    rpki_override_parser = subparsers.add_parser('rpki-override',
+                                                help='Manage per-AS RPKI validation overrides',
+                                                parents=[common_flags_parent])
+    rpki_override_subparsers = rpki_override_parser.add_subparsers(dest='override_action')
+
+    # List overrides
+    rpki_override_list = rpki_override_subparsers.add_parser('list', help='List all RPKI overrides')
+
+    # Disable RPKI for AS
+    rpki_override_disable = rpki_override_subparsers.add_parser('disable', help='Disable RPKI for an AS')
+    rpki_override_disable.add_argument('as_number', type=int, help='AS number')
+    rpki_override_disable.add_argument('--reason', type=str, default='Manual override', help='Reason for disabling')
+
+    # Enable RPKI for AS
+    rpki_override_enable = rpki_override_subparsers.add_parser('enable', help='Enable RPKI for an AS')
+    rpki_override_enable.add_argument('as_number', type=int, help='AS number')
+    rpki_override_enable.add_argument('--reason', type=str, default='Re-enabling RPKI', help='Reason for enabling')
+
+    # Show history
+    rpki_override_history = rpki_override_subparsers.add_parser('history', help='Show override history')
+    rpki_override_history.add_argument('--as', dest='as_number', type=int, help='Filter by AS number')
+    rpki_override_history.add_argument('--limit', type=int, default=50, help='Number of entries to show')
+
     return parser
 
 
@@ -1600,7 +1690,8 @@ def main():
         'apply': cmd_apply,
         'pipeline': cmd_pipeline,
         'test-proxy': cmd_test_proxy,
-        'rpki-check': cmd_rpki_check
+        'rpki-check': cmd_rpki_check,
+        'rpki-override': cmd_rpki_override
     }
     
     try:
