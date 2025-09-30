@@ -25,6 +25,10 @@ from ..utils.config import ConfigManager
 from ..utils.logging import setup_logging
 from ..models import RouterProfile
 from ..discovery import RouterInspector
+from .multi_router_coordinator import (
+    MultiRouterCoordinator, RolloutStrategy,
+    BlastStrategy, PhasedStrategy, CanaryStrategy
+)
 
 
 @dataclass
@@ -37,6 +41,10 @@ class PipelineConfig:
     input_file: Optional[str] = None  # For direct file processing
     dev_mode: bool = False  # Use Docker for bgpq4
     rpki_enabled: bool = True  # RPKI validation
+    # Multi-router coordinator settings
+    use_coordinator: bool = False  # Enable staged rollout coordination
+    rollout_strategy: Optional[str] = None  # Strategy: blast, phased, canary
+    strategy_config: Optional[Dict] = None  # Strategy-specific configuration
 
 
 @dataclass
@@ -135,7 +143,13 @@ class BGPPolicyPipeline:
             ipv6_enabled=bgpq4_ipv6
         )
         self.router_inspector = RouterInspector()
-        
+
+        # Initialize multi-router coordinator if enabled
+        self.coordinator: Optional[MultiRouterCoordinator] = None
+        if self.config.use_coordinator:
+            self.coordinator = MultiRouterCoordinator()
+            self.logger.info("Multi-router coordinator initialized for staged rollouts")
+
         # Pipeline state - properly isolated between runs
         self._reset_pipeline_state()
         self._pipeline_used = False  # Track if pipeline has been used
@@ -445,8 +459,13 @@ class BGPPolicyPipeline:
                         self.logger.info(f"  Discovered {discovery_result.total_as_numbers} AS numbers for {profile.hostname}")
                     else:
                         self.logger.warning(f"  No AS numbers discovered for {profile.hostname}")
-            
-            # Phase 3: Generate Policies per Router
+
+            # Decision Point: Coordinator-driven or direct execution
+            if self.coordinator and self.config.use_coordinator:
+                # Coordinator mode: Plan rollout and enqueue targets
+                return self._run_with_coordinator(all_as_numbers, errors)
+
+            # Phase 3: Generate Policies per Router (Direct execution mode)
             try:
                 self.logger.info(f"Phase 3: Generating router-specific policies")
                 
@@ -543,12 +562,154 @@ class BGPPolicyPipeline:
                     self.logger.warning(f"⚠ {rpki_rollup['invalid']} AS numbers failed RPKI validation")
             
             return result
-            
+
         except Exception as e:
             errors.append(f"Router-aware pipeline failed: {str(e)}")
             self.logger.error(f"Router-aware pipeline failed: {str(e)}", exc_info=True)
             return self._create_error_result(errors)
-    
+
+    def _run_with_coordinator(self, all_as_numbers: set, errors: List[str]) -> PipelineResult:
+        """
+        Execute pipeline using multi-router coordinator for staged rollout.
+
+        Phase 3 (Coordinator Mode):
+        - Generate policies for all routers
+        - Build device and policy mappings
+        - Plan rollout with configured strategy
+        - Enqueue targets (execution happens outside pipeline)
+
+        Args:
+            all_as_numbers: Set of all discovered AS numbers
+            errors: List of errors from previous phases
+
+        Returns:
+            PipelineResult with coordinator run_id for later execution
+        """
+        self.logger.info("Phase 3: Coordinator mode - planning staged rollout")
+
+        router_directories = []
+        total_policies = 0
+        policies_map = {}  # hostname -> policy content mapping
+        devices_list = []  # Device info for coordinator
+
+        try:
+            # Generate policies for all routers (generators remain unchanged)
+            for profile in self.router_profiles:
+                if not profile.discovered_as_numbers:
+                    self.logger.warning(f"Skipping {profile.hostname} - no AS numbers discovered")
+                    continue
+
+                # Create router-specific output directory
+                router_dir = self._create_router_directory(profile)
+                router_directories.append(str(router_dir))
+
+                # RPKI validation if enabled
+                if self.rpki_validator and profile.discovered_as_numbers:
+                    self.logger.info(f"Performing RPKI validation for {profile.hostname}")
+                    try:
+                        as_list = list(profile.discovered_as_numbers)
+                        rpki_results = {}
+                        for as_number in as_list:
+                            result = self.rpki_validator.check_as_validity(as_number)
+                            rpki_results[as_number] = result
+                        profile.rpki_validation_results = rpki_results
+                    except Exception as e:
+                        self.logger.warning(f"RPKI validation failed for {profile.hostname}: {e}")
+                        profile.rpki_validation_results = {}
+
+                # Generate policies (using existing generator, unchanged)
+                self.logger.info(f"Generating policies for {profile.hostname}: {len(profile.discovered_as_numbers)} AS numbers")
+                success_count = self._generate_router_policies(profile, router_dir)
+                total_policies += success_count
+
+                # Create metadata
+                self._create_router_metadata(profile, router_dir, success_count)
+
+                # Build policy mapping for coordinator
+                policy_content = self._collect_router_policies(router_dir)
+                policies_map[profile.hostname] = {
+                    'policy_files': list(router_dir.glob("AS*_policy.txt")),
+                    'as_numbers': list(profile.discovered_as_numbers),
+                    'policy_count': success_count
+                }
+
+                # Build device info for coordinator
+                devices_list.append({
+                    'hostname': profile.hostname,
+                    'address': profile.ip_address,
+                    'region': getattr(profile, 'region', 'default'),
+                    'role': getattr(profile, 'role', 'default'),
+                    'policy_count': success_count
+                })
+
+            # Select rollout strategy
+            strategy = self._create_rollout_strategy()
+
+            # Plan rollout with coordinator
+            self.logger.info(f"Planning rollout with strategy: {self.config.rollout_strategy or 'blast'}")
+            run_id = self.coordinator.plan_run(
+                devices=devices_list,
+                policies=policies_map,
+                strategy=strategy,
+                initiated_by='workflow_pipeline'
+            )
+
+            execution_time = time.time() - self.start_time
+
+            result = PipelineResult(
+                success=True,
+                devices_processed=len(self.router_profiles),
+                routers_configured=len([p for p in self.router_profiles if p.discovered_as_numbers]),
+                as_numbers_found=len(all_as_numbers),
+                policies_generated=total_policies,
+                execution_time=execution_time,
+                output_files=self._list_output_files(),
+                router_directories=router_directories,
+                errors=errors
+            )
+
+            self.logger.info(f"✓ Coordinator rollout planned: run_id={run_id}")
+            self.logger.info(f"  Routers staged: {result.routers_configured}")
+            self.logger.info(f"  Total AS numbers: {result.as_numbers_found}")
+            self.logger.info(f"  Policies generated: {result.policies_generated}")
+            self.logger.info(f"  Use 'otto-bgp pipeline status --run {run_id}' to check status")
+
+            return result
+
+        except Exception as e:
+            errors.append(f"Coordinator planning failed: {str(e)}")
+            self.logger.error(f"Coordinator planning failed: {str(e)}", exc_info=True)
+            return self._create_error_result(errors)
+
+    def _create_rollout_strategy(self) -> RolloutStrategy:
+        """Create rollout strategy based on configuration"""
+        strategy_name = self.config.rollout_strategy or 'blast'
+        strategy_config = self.config.strategy_config or {}
+
+        if strategy_name == 'phased':
+            group_by = strategy_config.get('group_by', 'region')
+            concurrency = strategy_config.get('concurrency', 2)
+            return PhasedStrategy(group_by=group_by, concurrency=concurrency)
+
+        elif strategy_name == 'canary':
+            canary_hostname = strategy_config.get('canary_hostname')
+            if not canary_hostname:
+                self.logger.warning("Canary strategy requires canary_hostname, falling back to blast")
+                return BlastStrategy(concurrency=strategy_config.get('concurrency', 5))
+            concurrency = strategy_config.get('concurrency', 5)
+            return CanaryStrategy(canary_hostname=canary_hostname, concurrency=concurrency)
+
+        else:  # Default to blast
+            concurrency = strategy_config.get('concurrency', 5)
+            return BlastStrategy(concurrency=concurrency)
+
+    def _collect_router_policies(self, router_dir: Path) -> str:
+        """Collect all policy content for a router"""
+        policy_content = ""
+        for policy_file in sorted(router_dir.glob("AS*_policy.txt")):
+            policy_content += policy_file.read_text() + "\n"
+        return policy_content
+
     def _load_router_profiles(self) -> List[RouterProfile]:
         """Load router profiles from devices CSV (enhanced format)"""
         devices = self.ssh_collector.load_devices_from_csv(self.config.devices_file)
