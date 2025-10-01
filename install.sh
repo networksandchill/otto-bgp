@@ -709,6 +709,90 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 EOF
 
+    # Create RPKI preflight service
+    sudo tee /etc/systemd/system/otto-bgp-rpki-preflight.service > /dev/null << EOF
+[Unit]
+Description=Otto BGP RPKI Preflight - VRP Freshness Check
+Documentation=file://$LIB_DIR/README.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=otto-bgp-alert@%n.service
+
+[Service]
+Type=oneshot
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$LIB_DIR
+ExecStart=$BIN_DIR/otto-bgp rpki-check
+Environment=PYTHONPATH=$LIB_DIR
+Environment=OTTO_BGP_MODE=preflight
+EnvironmentFile=-$CONFIG_DIR/otto.env
+
+# Security hardening for preflight checks
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @cpu-emulation @obsolete @privileged @reboot @swap
+SystemCallErrorNumber=EPERM
+
+# File system access - minimal for RPKI validation
+ReadWritePaths=$DATA_DIR/logs
+ReadWritePaths=$DATA_DIR/cache
+ReadOnlyPaths=$CONFIG_DIR
+ReadOnlyPaths=$LIB_DIR
+
+# Network access - RPKI validation servers only
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=8.8.8.8/32
+IPAddressAllow=1.1.1.1/32
+IPAddressAllow=193.0.0.0/16
+IPAddressAllow=199.5.26.0/24
+
+# Capability restrictions
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otto-bgp-rpki-preflight
+LogLevelMax=info
+
+# Resource limits - minimal for preflight
+TimeoutStartSec=60
+TimeoutStopSec=10
+MemoryMax=256M
+MemorySwapMax=0
+CPUQuota=10%
+TasksMax=20
+LimitNOFILE=256
+LimitNPROC=10
+
+# Exit status handling
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     # Create timer for scheduled execution (if not autonomous mode)
     if [[ "$AUTONOMOUS_MODE" != true ]]; then
         sudo tee /etc/systemd/system/otto-bgp.timer > /dev/null << EOF
@@ -732,11 +816,12 @@ EOF
     
     # Reload systemd daemon
     sudo systemctl daemon-reload
-    
+
     log_info "SystemD services configured. To enable:"
     echo "  sudo systemctl enable otto-bgp.service"
     echo "  sudo systemctl enable otto-bgp-rpki-update.service"
     echo "  sudo systemctl enable otto-bgp-rpki-update.timer"
+    echo "  sudo systemctl enable otto-bgp-rpki-preflight.service"
     if [[ "$AUTONOMOUS_MODE" != true ]]; then
         echo "  sudo systemctl enable otto-bgp.timer"
         echo ""
@@ -748,6 +833,9 @@ EOF
         echo "To start RPKI updates:"
         echo "  sudo systemctl start otto-bgp-rpki-update.timer"
     fi
+    echo ""
+    echo "To test RPKI preflight:"
+    echo "  sudo systemctl start otto-bgp-rpki-preflight.service"
 }
 
 # TLS generation with OpenSSL compatibility for older versions
@@ -948,6 +1036,9 @@ otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-update.se
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-rpki-update.timer
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-rpki-update.timer
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-update.timer
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl start otto-bgp-rpki-preflight.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl stop otto-bgp-rpki-preflight.service
+otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl restart otto-bgp-rpki-preflight.service
 otto-bgp ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
 EOF
     
