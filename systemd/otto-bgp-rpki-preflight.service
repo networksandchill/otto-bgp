@@ -1,15 +1,22 @@
+# Optional for operators (documented change):
+# Add an OnFailure to preflight unit to trigger alert handler
+# [Unit]
+# OnFailure=otto-bgp-alert@%n.service
+# Create a templated otto-bgp-alert@.service that posts to alerting webhook.
+
 [Unit]
 Description=Otto BGP RPKI Preflight - VRP Freshness Check
 Documentation=file:///opt/otto-bgp/README.md
 After=network-online.target
 Wants=network-online.target
+OnFailure=otto-bgp-alert@%n.service
 
 [Service]
 Type=oneshot
 User=otto-bgp
 Group=otto-bgp
 WorkingDirectory=/opt/otto-bgp
-ExecStart=/opt/otto-bgp/venv/bin/python /opt/otto-bgp/otto_bgp/main.py rpki-check --max-age 86400
+ExecStart=/usr/local/bin/otto-bgp rpki-check
 Environment=PYTHONPATH=/opt/otto-bgp
 Environment=OTTO_BGP_MODE=preflight
 EnvironmentFile=-/etc/otto-bgp/otto.env

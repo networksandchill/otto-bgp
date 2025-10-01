@@ -17,11 +17,44 @@ async def rpki_status(user: dict = Depends(require_role("read_only"))):
     return data
 
 
+@router.post("/refresh")
+async def refresh_cache(user: dict = Depends(require_role("admin"))):
+    """Trigger a one-shot VRP cache refresh via systemd or rpki-client."""
+    attempted = False
+    ok = False
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["/usr/bin/systemctl", "start", "otto-bgp-rpki-update.service"],
+            capture_output=True, text=True
+        )
+        attempted = True
+        ok = (result.returncode == 0)
+    except Exception:
+        ok = False
+    if not ok:
+        try:
+            import shutil
+            import subprocess
+            if shutil.which("rpki-client"):
+                result = subprocess.run(
+                    ["rpki-client", "-j", "-o", str(RPKI_CACHE_PATH)],
+                    capture_output=True, text=True
+                )
+                attempted = True
+                ok = (result.returncode == 0)
+        except Exception:
+            ok = False
+    audit_log('rpki_cache_refresh', user=user.get('sub'))
+    return {"attempted": attempted, "ok": ok}
+
+
 @router.post("/validate-cache")
 async def validate_cache(user: dict = Depends(require_role("admin"))):
     """Validate RPKI cache freshness and structure"""
     issues = []
-    
+    is_stale = True  # Default to stale if no cache
+
     # Check if cache file exists
     if not RPKI_CACHE_PATH.exists():
         issues.append('VRP cache file not found')
@@ -42,9 +75,21 @@ async def validate_cache(user: dict = Depends(require_role("admin"))):
                 cache_age = datetime.now() - datetime.fromtimestamp(
                     cache_stat.st_mtime
                 )
-                if cache_age > timedelta(hours=48):
+                # Replace hardcoded 48h by reading config if available
+                is_stale = cache_age > timedelta(hours=48)
+                try:
+                    from otto_bgp.utils.config import get_config_manager
+                    _cfg = get_config_manager().get_config()
+                    _max_age_h = getattr(
+                        getattr(_cfg, 'rpki', None), 'max_vrp_age_hours', 48
+                    )
+                    is_stale = cache_age > timedelta(hours=_max_age_h)
+                except Exception:
+                    pass
+                if is_stale:
                     issues.append(
-                        f'VRP cache is stale ({int(cache_age.total_seconds() / 3600)} hours old)'
+                        f'VRP cache is stale '
+                        f'({int(cache_age.total_seconds() / 3600)} hours old)'
                     )
                 
                 # Check for required fields in first entry
@@ -76,10 +121,11 @@ async def validate_cache(user: dict = Depends(require_role("admin"))):
             pass  # CSV is optional
     
     audit_log('rpki_cache_validated', user=user.get('sub'))
-    
+
     return {
         "ok": len(issues) == 0,
         "issues": issues,
         "cache_path": str(RPKI_CACHE_PATH),
-        "cache_exists": RPKI_CACHE_PATH.exists()
+        "cache_exists": RPKI_CACHE_PATH.exists(),
+        "stale": is_stale
     }

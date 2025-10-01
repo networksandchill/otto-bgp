@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import {
   Grid,
   Paper,
@@ -7,12 +7,16 @@ import {
   Chip,
   LinearProgress,
   Alert,
+  Button,
+  CircularProgress,
 } from '@mui/material'
 import {
   Security as SecurityIcon,
   Schedule,
+  Refresh as RefreshIcon,
+  Warning as WarningIcon,
 } from '@mui/icons-material'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
 
 interface RpkiMetric {
@@ -52,12 +56,39 @@ const RpkiMetricCard: React.FC<RpkiMetric> = ({ label, value, total, color }) =>
 )
 
 const RpkiStatus: React.FC = () => {
+  const queryClient = useQueryClient()
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+
   // Fetch real RPKI data
   const { data: rpkiData, isLoading } = useQuery({
     queryKey: ['rpki-status'],
     queryFn: () => apiClient.getRpkiStatus(),
     refetchInterval: 60000, // Refresh every minute
   })
+
+  // Refresh cache mutation
+  const refreshMutation = useMutation({
+    mutationFn: () => apiClient.refreshRpkiCache(),
+    onSuccess: (data) => {
+      if (data.ok) {
+        setRefreshError(null)
+        // Refetch RPKI status after successful refresh
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['rpki-status'] })
+        }, 3000) // Wait 3s for cache to update
+      } else {
+        setRefreshError('Refresh attempted but may have failed')
+      }
+    },
+    onError: () => {
+      setRefreshError('Failed to trigger cache refresh')
+    },
+  })
+
+  const handleRefresh = () => {
+    setRefreshError(null)
+    refreshMutation.mutate()
+  }
 
   if (isLoading) {
     return (
@@ -83,17 +114,65 @@ const RpkiStatus: React.FC = () => {
           <Typography variant="h6" sx={{ color: '#f5f5f5', fontWeight: 600 }}>
             RPKI Validation Status
           </Typography>
-          <Chip
-            icon={<SecurityIcon sx={{ fontSize: 16 }} />}
-            label={rpkiData?.status === 'active' ? 'Active' : 'Inactive'}
-            size="small"
-            sx={{
-              bgcolor: rpkiData?.status === 'active' ? '#00a86b' : '#666',
-              color: '#fff',
-            }}
-          />
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={refreshMutation.isPending ? <CircularProgress size={16} /> : <RefreshIcon />}
+              onClick={handleRefresh}
+              disabled={refreshMutation.isPending}
+              sx={{
+                borderColor: '#333',
+                color: '#f5f5f5',
+                '&:hover': { borderColor: '#666', bgcolor: 'rgba(255,255,255,0.05)' },
+              }}
+            >
+              {refreshMutation.isPending ? 'Refreshing...' : 'Refresh Now'}
+            </Button>
+            <Chip
+              icon={<SecurityIcon sx={{ fontSize: 16 }} />}
+              label={rpkiData?.status === 'active' ? 'Active' : 'Inactive'}
+              size="small"
+              sx={{
+                bgcolor: rpkiData?.status === 'active' ? '#00a86b' : '#666',
+                color: '#fff',
+              }}
+            />
+          </Box>
         </Box>
       </Grid>
+
+      {/* Staleness Warning */}
+      {rpkiData?.stale && (
+        <Grid item xs={12}>
+          <Alert
+            severity="warning"
+            icon={<WarningIcon />}
+            sx={{ bgcolor: '#3d2800', color: '#ffa726', border: '1px solid #ffa726' }}
+          >
+            VRP cache is stale (age: {rpkiData.ageSeconds ? `${Math.floor(rpkiData.ageSeconds / 3600)}h` : 'unknown'}).
+            {rpkiData.failClosed && ' Fail-closed is enabled - operations may be blocked.'}
+          </Alert>
+        </Grid>
+      )}
+
+      {/* Refresh Error */}
+      {refreshError && (
+        <Grid item xs={12}>
+          <Alert severity="error" sx={{ bgcolor: '#3d0000', color: '#ff5252', border: '1px solid #ff5252' }}>
+            {refreshError}
+          </Alert>
+        </Grid>
+      )}
+
+      {/* Refresh Success */}
+      {refreshMutation.isSuccess && !refreshError && (
+        <Grid item xs={12}>
+          <Alert severity="success" sx={{ bgcolor: '#003d00', color: '#00a86b', border: '1px solid #00a86b' }}>
+            Cache refresh triggered successfully. Status will update in a few seconds.
+          </Alert>
+        </Grid>
+      )}
 
       {/* Metrics */}
       <Grid item xs={12} sm={6} md={3}>
@@ -140,6 +219,28 @@ const RpkiStatus: React.FC = () => {
               <Typography variant="body2" sx={{ color: '#f5f5f5' }}>
                 {rpkiData?.lastUpdate ? new Date(rpkiData.lastUpdate).toLocaleString() : 'Never'}
               </Typography>
+            </Box>
+            {rpkiData?.ageSeconds !== undefined && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="caption" sx={{ color: '#888' }}>Cache Age</Typography>
+                <Typography variant="body2" sx={{ color: rpkiData.stale ? '#ffa726' : '#f5f5f5' }}>
+                  {Math.floor(rpkiData.ageSeconds / 3600)}h {Math.floor((rpkiData.ageSeconds % 3600) / 60)}m
+                  {rpkiData.stale && ' (stale)'}
+                </Typography>
+              </Box>
+            )}
+            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Typography variant="caption" sx={{ color: '#888' }}>Fail-Closed Mode</Typography>
+              <Chip
+                label={rpkiData?.failClosed ? 'Enabled' : 'Disabled'}
+                size="small"
+                sx={{
+                  bgcolor: rpkiData?.failClosed ? '#003d00' : '#666',
+                  color: rpkiData?.failClosed ? '#00a86b' : '#f5f5f5',
+                  height: 20,
+                  fontSize: '0.7rem',
+                }}
+              />
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
               <Typography variant="caption" sx={{ color: '#888' }}>Update Frequency</Typography>

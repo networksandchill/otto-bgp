@@ -29,7 +29,33 @@ def get_rpki_status() -> Dict:
     }
     if RPKI_CACHE_PATH.exists():
         stats["status"] = "active"
-        stats["lastUpdate"] = datetime.fromtimestamp(RPKI_CACHE_PATH.stat().st_mtime).isoformat()
+        stats["lastUpdate"] = datetime.fromtimestamp(
+            RPKI_CACHE_PATH.stat().st_mtime
+        ).isoformat()
+
+        # Compute age/stale calculation using config
+        try:
+            from otto_bgp.utils.config import get_config_manager
+            _cfg = get_config_manager().get_config()
+            _max_age_h = getattr(
+                getattr(_cfg, 'rpki', None), 'max_vrp_age_hours', 48
+            )
+            _fail_closed = bool(
+                getattr(getattr(_cfg, 'rpki', None), 'fail_closed', True)
+            )
+        except Exception:
+            _max_age_h = 48
+            _fail_closed = True
+
+        age_seconds = int((
+            datetime.now() - datetime.fromtimestamp(
+                RPKI_CACHE_PATH.stat().st_mtime
+            )
+        ).total_seconds())
+        stats["ageSeconds"] = age_seconds
+        stats["stale"] = age_seconds > int(_max_age_h * 3600)
+        stats["failClosed"] = _fail_closed
+
         try:
             data = json.loads(RPKI_CACHE_PATH.read_text())
             if isinstance(data, list):

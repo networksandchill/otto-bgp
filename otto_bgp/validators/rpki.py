@@ -1639,20 +1639,36 @@ class RPKIValidator:
     def get_validation_stats(self) -> Dict[str, Any]:
         """
         Get comprehensive validation statistics including memory usage
-        
+
         Returns detailed statistics for both streaming and legacy modes,
         including memory usage, cache performance, and validation metrics.
         """
         # Streaming mode statistics (always enabled)
         cache_stats = self._lazy_cache.get_cache_stats()
         estimated_vrp_count = self._estimate_total_vrp_count()
-        
+
+        # Compute staleness using file mtime vs configured max age
+        vrp_entries_exist = self.vrp_cache_path.exists()
+        vrp_age_seconds = None
+        vrp_data_stale = True
+        if vrp_entries_exist:
+            try:
+                import time as _time
+                vrp_age_seconds = int(
+                    _time.time() - self.vrp_cache_path.stat().st_mtime
+                )
+                vrp_data_stale = (
+                    vrp_age_seconds > int(self.max_vrp_age_hours * 3600)
+                )
+            except Exception:
+                vrp_data_stale = True
+
         stats = {
             'mode': 'streaming',
             'allowlist_entries': len(self._allowlist),
             'vrp_entries': estimated_vrp_count,
-            'vrp_data_age': 'Available via streaming',
-            'vrp_data_stale': not self.vrp_cache_path.exists(),
+            'vrp_data_age_seconds': vrp_age_seconds,
+            'vrp_data_stale': (not vrp_entries_exist) or vrp_data_stale,
             'memory_optimization': {
                 'streaming_enabled': True,
                 'memory_usage_mb': cache_stats['estimated_memory_usage_mb'],
@@ -1662,17 +1678,22 @@ class RPKIValidator:
                 ),
                 'cache_performance': {
                     'hit_rate_percent': cache_stats['hit_rate_percent'],
-                    'total_requests': cache_stats['cache_stats']['hits'] + cache_stats['cache_stats']['misses'],
+                    'total_requests': (
+                        cache_stats['cache_stats']['hits'] +
+                        cache_stats['cache_stats']['misses']
+                    ),
                     'cache_hits': cache_stats['cache_stats']['hits'],
                     'cache_misses': cache_stats['cache_stats']['misses'],
                     'evictions': cache_stats['cache_stats']['evictions'],
-                    'memory_pressure_events': cache_stats['cache_stats']['memory_pressure_events'],
+                    'memory_pressure_events': (
+                        cache_stats['cache_stats']['memory_pressure_events']
+                    ),
                     'cached_prefix_keys': cache_stats['cached_prefix_keys'],
                     'cached_asn_keys': cache_stats['cached_asn_keys']
                 }
             }
         }
-        
+
         return stats
     
     def _estimate_total_vrp_count(self) -> int:

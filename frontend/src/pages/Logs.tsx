@@ -178,6 +178,7 @@ const Logs: React.FC = () => {
               <MenuItem value="webui">webui-adapter</MenuItem>
               <MenuItem value="rpki">rpki-update</MenuItem>
               <MenuItem value="rpki-client">rpki-client</MenuItem>
+              <MenuItem value="rpki-preflight">rpki-preflight</MenuItem>
             </Select>
           </FormControl>
 

@@ -15,6 +15,7 @@ ALLOWED_SERVICES = [
     'otto-bgp-webui-adapter.service',
     'otto-bgp-rpki-update.service',
     'otto-bgp-rpki-update.timer',
+    'otto-bgp-rpki-preflight.service',
 ]
 
 BASE_COMMANDS = {
@@ -47,6 +48,9 @@ BASE_COMMANDS = {
     ('stop', 'otto-bgp-rpki-update.timer'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'stop', 'otto-bgp-rpki-update.timer'],
     ('restart', 'otto-bgp-rpki-update.timer'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'restart', 'otto-bgp-rpki-update.timer'],
     ('reload', 'otto-bgp-rpki-update.timer'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'reload', 'otto-bgp-rpki-update.timer'],
+
+    ('start', 'otto-bgp-rpki-preflight.service'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'start', 'otto-bgp-rpki-preflight.service'],
+    ('restart', 'otto-bgp-rpki-preflight.service'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'restart', 'otto-bgp-rpki-preflight.service'],
 }
 
 

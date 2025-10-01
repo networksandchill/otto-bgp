@@ -21,7 +21,8 @@ async def get_system_logs(
             "otto-bgp": "otto-bgp.service",
             "webui": "otto-bgp-webui-adapter.service",
             "rpki": "otto-bgp-rpki-update.service",
-            "rpki-client": "rpki-client.service"
+            "rpki-client": "rpki-client.service",
+            "rpki-preflight": "otto-bgp-rpki-preflight.service"
         }
         unit = unit_map.get(service)
     

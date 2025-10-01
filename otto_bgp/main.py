@@ -1463,26 +1463,157 @@ def _get_rpki_config(config, args):
     }
 
 
+def _acquire_refresh_lock(cache_path, logger, timeout: int = 30):
+    """Advisory lock to serialize refresh attempts across processes."""
+    try:
+        import fcntl
+        import time as _time
+        from pathlib import Path as _Path
+        lock_path = _Path(cache_path).parent / ".refresh.lock"
+        fh = None
+        try:
+            fh = open(lock_path, 'w')
+            start = _time.time()
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    logger.debug(f"Acquired refresh lock: {lock_path}")
+                    return fh
+                except BlockingIOError:
+                    if _time.time() - start > timeout:
+                        logger.warning(
+                            "Timeout waiting for refresh lock; "
+                            "proceeding without lock"
+                        )
+                        fh.close()
+                        return None
+                    _time.sleep(0.5)
+        except Exception as inner_e:
+            if fh:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+            raise inner_e
+    except Exception as e:
+        logger.debug(f"Lock unavailable: {e}")
+        return None
+
+
+def _release_refresh_lock(lock_fh, logger):
+    """Release refresh lock file handle."""
+    try:
+        import fcntl
+        if lock_fh:
+            fcntl.flock(lock_fh, fcntl.LOCK_UN)
+            lock_fh.close()
+    except Exception:
+        pass
+
+
+def _try_vrp_cache_refresh(cache_path, logger) -> bool:
+    """Attempt a one-shot VRP cache refresh.
+
+    Returns True if a refresh was attempted; not a guarantee of freshness.
+    """
+    lock_fh = _acquire_refresh_lock(cache_path, logger)
+    try:
+        import subprocess
+        # Prefer systemd unit if available (greenfield system install)
+        result = subprocess.run(
+            ["/usr/bin/systemctl", "start",
+             "otto-bgp-rpki-update.service"],
+            check=False, capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0:
+            logger.info(
+                "Triggered otto-bgp-rpki-update.service for VRP refresh"
+            )
+            return True
+        logger.warning(
+            f"systemctl start otto-bgp-rpki-update.service "
+            f"returned {result.returncode}: {result.stderr.strip()}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to trigger systemd refresh: {e}")
+
+    # Fallback: call rpki-client directly if present
+    try:
+        import shutil
+        if shutil.which("rpki-client"):
+            import subprocess
+            result = subprocess.run(
+                ["rpki-client", "-j", "-o", str(cache_path)],
+                check=False, capture_output=True, text=True, timeout=180
+            )
+            if result.returncode == 0:
+                logger.info("Refreshed VRP cache via rpki-client fallback")
+                return True
+            logger.error(
+                f"rpki-client fallback failed: "
+                f"{result.returncode} {result.stderr.strip()}"
+            )
+        else:
+            logger.warning("rpki-client not found; cannot fallback refresh")
+    except Exception as e:
+        logger.error(f"Fallback rpki-client refresh error: {e}")
+    finally:
+        _release_refresh_lock(lock_fh, logger)
+    return False
+
+
+def _wait_for_cache_ready(cache_path, logger,
+                          max_wait_seconds: int = 45) -> bool:
+    """Poll for cache existence + parseable JSON to avoid partial reads."""
+    import time as _time
+    import json as _json
+    from pathlib import Path as _Path
+    cache_path = _Path(cache_path)
+    start = _time.time()
+    last_size = -1
+    stable = 0
+    while _time.time() - start < max_wait_seconds:
+        try:
+            if cache_path.exists():
+                st = cache_path.stat()
+                if st.st_size > 1024:  # basic sanity
+                    with open(cache_path, 'r') as f:
+                        _json.load(f)
+                    # simple stability check on size
+                    if st.st_size == last_size:
+                        stable += 1
+                        if stable >= 2:
+                            return True
+                    else:
+                        stable = 0
+                        last_size = st.st_size
+        except Exception:
+            pass
+        _time.sleep(1)
+    logger.warning("Cache did not reach ready state within wait window")
+    return False
+
+
 def cmd_rpki_check(args):
     """Validate RPKI cache freshness and structure (format-agnostic)"""
     from otto_bgp.utils.logging import get_logger
     logger = get_logger('otto-bgp.rpki-check')
-    
     try:
         from otto_bgp.validators.rpki import RPKIValidator
         from otto_bgp.utils.config import get_config_manager
         import time
-        
+        from pathlib import Path
+
         # Get configuration
         config_manager = get_config_manager()
         config = config_manager.get_config()
         rpki_config = getattr(config, 'rpki', None)
-        
+
         if not rpki_config or not rpki_config.enabled:
             logger.error("RPKI validation is not enabled in configuration")
             print("✗ RPKI validation is not enabled")
             return 1
-        
+
         # Initialize validator to check configuration
         validator = RPKIValidator(
             vrp_cache_path=Path(rpki_config.vrp_cache_path),
@@ -1491,46 +1622,111 @@ def cmd_rpki_check(args):
             max_vrp_age_hours=rpki_config.max_vrp_age_hours,
             logger=logger,
         )
-        
+
         cache_path = validator.vrp_cache_path
-        if not cache_path or not cache_path.exists():
-            logger.error("VRP cache not found")
-            print(f"✗ VRP cache not found: {cache_path}")
-            return 1
-        
-        # Check cache age
-        cache_age = time.time() - cache_path.stat().st_mtime
         max_age = args.max_age or (rpki_config.max_vrp_age_hours * 3600)
-        
-        if cache_age > max_age:
-            logger.error(f"VRP cache stale: {cache_age/3600:.1f}h > {max_age/3600:.1f}h")
-            print(f"✗ VRP cache stale: {cache_age/3600:.1f}h > {max_age/3600:.1f}h")
-            return 1
-        
-        # Test cache readability
-        try:
-            # Test basic readability by attempting to load metadata
-            test_result = validator.check_as_validity(64512)  # Use reserved AS for test
-            if test_result['state'] in ['valid', 'invalid', 'notfound']:
-                cache_readable = True
+
+        def _is_stale_or_missing() -> bool:
+            if not cache_path or not cache_path.exists():
+                return True
+            try:
+                cache_age = time.time() - cache_path.stat().st_mtime
+                return cache_age > max_age
+            except Exception:
+                return True
+
+        # First check
+        if _is_stale_or_missing():
+            logger.warning(
+                "VRP cache stale or missing; attempting one-shot refresh"
+            )
+            # up to 2 attempts with short waits
+            attempts = 0
+            while attempts < 2:
+                attempts += 1
+                _try_vrp_cache_refresh(cache_path, logger)
+                _wait_for_cache_ready(cache_path, logger,
+                                      max_wait_seconds=45)
+                if not _is_stale_or_missing():
+                    break
+                logger.warning(
+                    f"Refresh attempt {attempts} did not reach freshness; "
+                    f"retrying"
+                )
+
+        # Re-check freshness
+        if _is_stale_or_missing():
+            # Structured logging for monitoring
+            logger.warning(
+                f"RPKI_CACHE_STATUS=stale "
+                f"FAIL_CLOSED={rpki_config.fail_closed} "
+                f"MAX_AGE={max_age}"
+            )
+            if rpki_config.fail_closed:
+                logger.error(
+                    "VRP cache still stale/missing after refresh; "
+                    "failing closed"
+                )
+                logger.error("RPKI_CACHE_STATUS=missing")
+                print("✗ VRP cache stale or missing; fail-closed is enabled")
+                return 1
             else:
-                cache_readable = False
+                logger.warning(
+                    "VRP cache stale/missing; proceeding due to "
+                    "fail-open configuration"
+                )
+                print(
+                    "! VRP cache stale or missing; proceeding "
+                    "(fail-closed disabled)"
+                )
+                return 0
+
+        # Test cache readability via a light AS check
+        try:
+            # Use a well-known public AS present in most VRP sets
+            test_result = validator.check_as_validity(13335)  # Cloudflare
+            if str(test_result.get('state', '')).lower() in [
+                'valid', 'invalid', 'notfound'
+            ]:
+                cache_age = time.time() - cache_path.stat().st_mtime
+                # Structured logging for monitoring
+                logger.info(
+                    f"RPKI_CACHE_STATUS=ok "
+                    f"AGE_SECONDS={int(cache_age)} "
+                    f"PATH={cache_path}"
+                )
+                logger.info(f"RPKI cache OK: age {cache_age / 3600:.1f}h")
+                print(f"✓ RPKI cache OK: age {cache_age / 3600:.1f}h")
+                print(f"✓ Cache path: {cache_path}")
+                print(f"✓ Max age: {max_age / 3600:.1f}h")
+
+                # Write status file for external monitors (best-effort)
+                try:
+                    status_dir = (
+                        Path(rpki_config.vrp_cache_path).parent.parent /
+                        'cache'
+                    )
+                    status_dir.mkdir(parents=True, exist_ok=True)
+                    status_path = status_dir / 'rpki_status.json'
+                    import json as _json
+                    with open(status_path, 'w') as _fh:
+                        _json.dump({
+                            'status': 'ok',
+                            'age_seconds': int(cache_age),
+                            'path': str(cache_path),
+                            'fail_closed': bool(rpki_config.fail_closed)
+                        }, _fh)
+                except Exception:
+                    pass
+
+                return 0
+            logger.error("RPKI cache validation failed (unexpected state)")
+            print("✗ RPKI cache validation failed")
+            return 1
         except Exception as e:
-            logger.error(f"VRP cache unreadable: {e}")
-            print(f"✗ VRP cache unreadable: {e}")
-            return 1
-        
-        if cache_readable:
-            logger.info(f"RPKI cache OK: age {cache_age/3600:.1f}h")
-            print(f"✓ RPKI cache OK: age {cache_age/3600:.1f}h")
-            print(f"✓ Cache path: {cache_path}")
-            print(f"✓ Max age: {max_age/3600:.1f}h")
-            return 0
-        else:
-            logger.error("VRP cache validation failed")
-            print("✗ VRP cache validation failed")
-            return 1
-            
+            logger.error(f"RPKI check failed: {e}")
+            print(f"✗ RPKI check failed: {e}")
+            return 2
     except ImportError:
         logger.error("RPKI validator not available")
         print("✗ RPKI validator not available")
@@ -1605,6 +1801,34 @@ def cmd_rpki_override(args):
                     print(f"    User: {entry['user']}")
 
     return OttoExitCodes.SUCCESS
+
+
+def cmd_notify_email(args):
+    """Send an email using configured SMTP settings."""
+    from otto_bgp.utils.config import get_config_manager
+    from otto_bgp.appliers.safety import UnifiedSafetyManager
+    from otto_bgp.utils.logging import get_logger
+    logger = get_logger('otto-bgp.notify-email')
+    try:
+        cfg = get_config_manager().get_config()
+        email_cfg = cfg.autonomous_mode.notifications.email
+        if not email_cfg or not email_cfg.enabled:
+            print("✗ Email notifications disabled or not configured")
+            return 1
+        subject = args.subject
+        body = args.body
+        # Access the _send_email method via public interface if available
+        # or implement a simple SMTP send here
+        safety_mgr = UnifiedSafetyManager(
+            logger=logger, enable_signal_handlers=False
+        )
+        ok = safety_mgr._send_email(email_cfg, subject, body)
+        print("✓ Email sent" if ok else "✗ Email send failed")
+        return 0 if ok else 1
+    except Exception as e:
+        logger.error(f"Notify failed: {e}")
+        print(f"✗ Notify failed: {e}")
+        return 1
 
 
 def create_common_flags_parent():
@@ -1826,6 +2050,15 @@ def create_parser():
     rpki_override_history.add_argument('--as', dest='as_number', type=int, help='Filter by AS number')
     rpki_override_history.add_argument('--limit', type=int, default=50, help='Number of entries to show')
 
+    # Email notification subcommand
+    notify_parser = subparsers.add_parser(
+        'notify-email',
+        help='Send alert/test email',
+        parents=[common_flags_parent]
+    )
+    notify_parser.add_argument('--subject', required=True, help='Email subject')
+    notify_parser.add_argument('--body', required=True, help='Email body')
+
     return parser
 
 
@@ -1911,7 +2144,8 @@ def main():
         'rollout-status': cmd_rollout_status,
         'test-proxy': cmd_test_proxy,
         'rpki-check': cmd_rpki_check,
-        'rpki-override': cmd_rpki_override
+        'rpki-override': cmd_rpki_override,
+        'notify-email': cmd_notify_email
     }
     
     try:

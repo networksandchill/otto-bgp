@@ -253,6 +253,11 @@ class ApiClient {
     return response.data
   }
 
+  async refreshRpkiCache(): Promise<{ attempted: boolean; ok: boolean }> {
+    const response = await this.client.post('/rpki/refresh', {})
+    return response.data
+  }
+
   // RPKI Override Management
   async listRpkiOverrides(page: number = 1, perPage: number = 50): Promise<{
     overrides: Array<{

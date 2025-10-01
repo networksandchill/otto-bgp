@@ -59,6 +59,10 @@ bgp_pipeline_output/
 !README.txt
 !requirements.txt
 
+# Frontend build artifacts (only webui/static/ is deployed)
+frontend/dist/
+frontend/node_modules/
+
 # Credentials and sensitive data
 .env
 *.key

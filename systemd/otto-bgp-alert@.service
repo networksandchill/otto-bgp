@@ -1,0 +1,17 @@
+[Unit]
+Description=Otto BGP Alert Email (%i)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=otto-bgp
+Group=otto-bgp
+ExecStart=/usr/local/bin/otto-bgp notify-email --subject "RPKI preflight failed on %H" --body "Unit %i failed; VRP cache stale or missing."
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
