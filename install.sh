@@ -687,7 +687,28 @@ RandomizedDelaySec=300
 [Install]
 WantedBy=timers.target
 EOF
-    
+
+    # Create alert email service (template unit)
+    sudo tee /etc/systemd/system/otto-bgp-alert@.service > /dev/null << EOF
+[Unit]
+Description=Otto BGP Alert Email (%i)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=$SERVICE_USER
+Group=$SERVICE_USER
+ExecStart=$BIN_DIR/otto-bgp notify-email --subject "RPKI preflight failed on %H" --body "Unit %i failed; VRP cache stale or missing."
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     # Create timer for scheduled execution (if not autonomous mode)
     if [[ "$AUTONOMOUS_MODE" != true ]]; then
         sudo tee /etc/systemd/system/otto-bgp.timer > /dev/null << EOF
