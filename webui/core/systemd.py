@@ -50,6 +50,7 @@ BASE_COMMANDS = {
     ('reload', 'otto-bgp-rpki-update.timer'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'reload', 'otto-bgp-rpki-update.timer'],
 
     ('start', 'otto-bgp-rpki-preflight.service'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'start', 'otto-bgp-rpki-preflight.service'],
+    ('stop', 'otto-bgp-rpki-preflight.service'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'stop', 'otto-bgp-rpki-preflight.service'],
     ('restart', 'otto-bgp-rpki-preflight.service'): [SUDO_PATH, '-n', SYSTEMCTL_PATH, 'restart', 'otto-bgp-rpki-preflight.service'],
 }
 

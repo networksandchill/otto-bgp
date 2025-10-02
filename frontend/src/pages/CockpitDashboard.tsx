@@ -165,6 +165,7 @@ const CockpitDashboard: React.FC = () => {
       'otto-bgp.service',
       'otto-bgp-webui-adapter.service',
       'otto-bgp-rpki-update.service',
+      'otto-bgp-rpki-preflight.service',
       'otto-bgp.timer',
       'otto-bgp-rpki-update.timer',
       'rpki-client.service',
@@ -321,6 +322,13 @@ const CockpitDashboard: React.FC = () => {
               status={getServiceStatus('otto-bgp-rpki-update.service')}
               onAction={(action) => handleServiceAction('otto-bgp-rpki-update.service', action)}
               isLoading={loadingService === 'otto-bgp-rpki-update.service'}
+            />
+            <ServiceRow
+              name="otto-bgp-rpki-preflight.service"
+              description="RPKI validation preflight check"
+              status={getServiceStatus('otto-bgp-rpki-preflight.service')}
+              onAction={(action) => handleServiceAction('otto-bgp-rpki-preflight.service', action)}
+              isLoading={loadingService === 'otto-bgp-rpki-preflight.service'}
             />
             <ServiceRow
               name="rpki-client.service"
