@@ -469,7 +469,7 @@ export OTTO_BGP_SMTP_PORT=587
 export OTTO_BGP_SMTP_USERNAME=otto-bgp@company.com
 export OTTO_BGP_SMTP_PASSWORD=…
 export OTTO_BGP_FROM_ADDRESS=otto-bgp@company.com
-# Note: recipients (to_addresses) are not read from env; set in config.json
+# Recipients (to_addresses) can be supplied via OTTO_BGP_EMAIL_TO or through config.json; values are normalized by the WebUI/backend when saved.
 
 # Directories and logging
 export OTTO_BGP_OUTPUT_DIR=/var/lib/otto-bgp
@@ -541,7 +541,7 @@ Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CL
 - **list command**: Only supports `routers|as|groups` and plain-text output. No `--format` or `--filter` options.
 
 ### Configuration and Environment
-- **BGPQ4 env vars**: `OTTO_BGP_BGPQ4_*` variables are not read by the code. Selection is automatic or via `--dev` (Podman) for development.
+- **BGPQ4 env vars**: `OTTO_BGP_BGPQ4_*` overrides (mode, timeout, workers, retry, IRR source, protocol toggles) are honored by the ConfigManager. CLI flags still take precedence when provided.
 
 ### Feature Gaps
 - **test-proxy**: Has `--test-bgpq4` and `--timeout`. There is no `--test-as` flag; test uses a built-in AS.

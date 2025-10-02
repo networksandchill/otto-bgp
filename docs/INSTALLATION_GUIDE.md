@@ -891,7 +891,7 @@ export OTTO_BGP_AUTO_THRESHOLD=200   # Informational threshold used in notificat
 export OTTO_BGP_SMTP_SERVER=smtp.newserver.com
 export OTTO_BGP_SMTP_PORT=587
 export OTTO_BGP_FROM_ADDRESS=otto-bgp@company.com
-# Note: recipients are not read from env; see Known Gaps for how to set recipients
+# Recipients can be managed in the WebUI; `OTTO_BGP_EMAIL_TO` values are ingested and normalized when saved.
 
 # Installation (read by application config, not the installer)
 export OTTO_BGP_SERVICE_USER=custom-user
@@ -1096,7 +1096,7 @@ sudo userdel otto-bgp
 
 - Systemd service: install.sh generates a oneshot service that runs the unified pipeline and, when not in autonomous mode, a daily timer. Earlier examples with Type=notify, ExecReload, and different paths are outdated and have been replaced with the exact service shape created by install.sh.
 - Directory locations: install.sh installs into `/usr/local/bin`, `/usr/local/lib/otto-bgp`, and `/usr/local/venv` for system mode; and into `~/.local/bin`, `~/.local/lib/otto-bgp`, and `~/.local/venv` for user mode. Any references to `/opt/otto-bgp` are for manual deployment and are not used by the installer.
-- bgpq4 configuration via env: Runtime selection of bgpq4 is done via CLI and auto‑detection (native, docker, podman). The code does not read `OTTO_BGP_BGPQ4_*` environment variables. Ensure native `bgpq4` or Docker/Podman is available; use `otto-bgp policy --test` to verify.
+- bgpq4 configuration via env: `OTTO_BGP_BGPQ4_*` overrides populate the canonical configuration (mode, timeout, aggregation, workers, IPv4/IPv6 toggles). CLI or config file settings still take precedence when provided.
 - Configuration management: Some documentation refers to configuration validation CLI commands that don't exist. Configuration validation is done at runtime, not via CLI.
 - Dependencies: Code uses bgpq4 (not bgpq3) and actual requirements.txt contains only 4 packages: junos-eznc, paramiko, PyYAML, pandas.
 - Autonomous mode: Not a separate installation mode but a configuration flag (`AUTONOMOUS_MODE=true`) applied to system installations.

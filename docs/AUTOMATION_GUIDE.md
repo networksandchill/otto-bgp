@@ -26,7 +26,7 @@ Otto BGP v0.3.2 provides a router-aware pipeline to collect BGP context via SSH,
 - Known hosts and SSH hardening: NETCONF/SSH use strict host key checking and default known hosts at `/var/lib/otto-bgp/ssh-keys/known_hosts`. Ensure device host keys are present.
 - Email notifications: Best‑effort only. Notifications send on connect/preview/commit/rollback/disconnect when `autonomous_mode.notifications.email.enabled` is true and SMTP settings are valid. No retry/backoff beyond SMTP behavior.
 - No apply-confirm CLI command: Otto BGP does not provide a built-in `apply-confirm` command. Commit confirmation must be handled manually on the device or via NETCONF confirmed commits with timeouts.
-- RPKI validation dependency: RPKI validation requires pre-populated VRP cache files at configured paths. Cache must be updated externally or via autonomous preflight checks.
+- RPKI validation dependency: Installer provisions `otto-bgp-rpki-update.timer` and the preflight service refreshes caches before autonomous runs. Ensure external connectivity to RPKI sources or adjust paths for offline mirrors.
 
 ## Operational Modes
 

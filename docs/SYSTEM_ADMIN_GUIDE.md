@@ -103,7 +103,7 @@ Type=oneshot
 User=otto-bgp
 Group=otto-bgp
 WorkingDirectory=/usr/local/lib/otto-bgp
-ExecStart=/usr/local/bin/otto-bgp rpki-check --max-age 86400
+ExecStart=/usr/local/bin/otto-bgp rpki-check
 Environment=PYTHONPATH=/usr/local/lib/otto-bgp
 EnvironmentFile=-/etc/otto-bgp/otto.env
 

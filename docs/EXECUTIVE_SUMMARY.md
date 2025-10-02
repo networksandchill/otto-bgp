@@ -197,7 +197,6 @@ All guardrail outputs aggregate into a unified risk level (LOW/MEDIUM/HIGH/CRITI
 
 **RPKI Implementation Gaps:**
 - **Configuration-dependent validation:** RPKI checks only run when VRP cache paths and settings are provided in configuration
-- **Cache staleness handling:** Fail-closed behavior when VRP data exceeds configured age threshold may block legitimate operations
 - **Limited VRP sources:** Currently supports rpki-client and routinator JSON formats; other RPKI validators require format conversion
 
 **IPv6 Support Limitations:**
@@ -207,15 +206,15 @@ All guardrail outputs aggregate into a unified risk level (LOW/MEDIUM/HIGH/CRITI
 **Operational Dependencies:**
 - **IRR availability requirements:** bgpq4 requires Internet Routing Registry access; network partitions impact policy generation
 - **SSH tunnel proxy limitations:** IRR proxy functionality depends on reachable jump hosts and properly configured SSH keys
-- **SystemD integration:** Autonomous mode requires systemd; not compatible with other init systems
+- **Systemd integration:** Autonomous mode requires systemd; not compatible with other init systems
 - **Host key management:** Initial SSH host key collection requires manual setup process before production use
 
 **Monitoring and Alerting:**
-- **Email notification dependency:** Autonomous mode email notifications require proper SMTP configuration; silent failures reduce operational visibility
+- **Email notification dependency:** WebUI-managed SMTP settings still rely on external servers and offer best-effort delivery with no built-in retry/backoff.
 - **Limited metrics export:** No integration with monitoring systems like Prometheus or SNMP
 - **Log aggregation:** Structured logging exists but requires external log management for centralized monitoring
 
 **Scalability Considerations:**
 - **Memory usage with large AS sets:** Memory consumption scales with AS set size and bgpq4 output volume; RPKI VRP validation uses streaming and lazy caching to reduce memory during validation.
-- **Sequential processing:** Router processing is sequential; no parallel SSH collection across multiple devices
+- **Parallel load tuning:** Pipeline runs device collection and policy generation in parallel; operators should tune worker counts for IRR/API limits and router session capacity.
 - **Concurrent operation locks:** A process lock prevents concurrent runs. Stale locks are automatically removed when the holding PID is gone.

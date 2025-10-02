@@ -202,7 +202,7 @@ result = applier.apply_with_confirmation(policies, confirm_timeout=120, comment=
 
 ## Known Gaps and Limitations
 
-- Discover CLI diff flag: `otto-bgp discover --show-diff` invokes `generate_diff_report()` without building a diff first. To generate a diff, call `old = yaml_gen.load_previous_mappings(); new = mappings; diff = yaml_gen.diff_mappings(old, new); yaml_gen.generate_diff_report(diff)`.
+- Discovery diff customization: `otto-bgp discover --show-diff` now calls `generate_diff_report_from_current()` automatically. For bespoke workflows, load historical snapshots manually and call `generate_diff_report(diff)` with your own diff objects.
 - Adapter scope: `PolicyAdapter` and its merge logic are simplified and not a full Junos configuration parser. Validate outputs in a lab before use.
 - Vendor support: Discovery, adaptation, and applier paths target Junos. Other vendors are not implemented.
 - Reports: The reports module writes `deployment-matrix.csv`, `deployment-matrix.json`, and `deployment-summary.txt`. There is no `generation-log.json` writer in the current codebase.

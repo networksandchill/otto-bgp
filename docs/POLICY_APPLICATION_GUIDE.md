@@ -806,28 +806,26 @@ For additional support, refer to the main README.md or create an issue in the Ot
 
 1. **Juniper Router Support Only**: NETCONF functionality is currently limited to Juniper routers. Other vendor support is not implemented.
 
-2. **Limited Health Validation**: Post-commit health checks are basic and focus primarily on management interface and BGP neighbor status. More comprehensive router health validation is not implemented.
+2. **Limited Health Validation**: Post-commit health checks focus on management reachability and BGP session state. Deeper device health validation is still manual.
 
-### Configuration and Setup Gaps
+### Configuration and Setup Considerations
 
-1. **Installation Script Limitations**: The `./install.sh --autonomous` script referenced in documentation may not fully configure autonomous mode operation. Manual configuration may be required.
+1. **Installation Script Scope**: `./install.sh --autonomous` provisions core services, but operators must still review configuration (SMTP, device inventory, guardrail thresholds) before production use.
 
-2. **Email Notification Dependency**: Email notifications require external SMTP configuration and credentials stored in environment variables (e.g., `OTTO_BGP_SMTP_PASSWORD`). This setup is not automated.
+2. **Email Notification Requirements**: The WebUI persists SMTP configuration (including recipients) into `config.json` and normalizes env overrides, but successful delivery still depends on external SMTP reachability and credentials management.
 
-3. **RPKI Validation Optional**: RPKI validation is available but requires external RPKI cache setup and configuration. This is not included in base installation.
+3. **RPKI Validation Prerequisites**: `otto-bgp-rpki-update.timer` refreshes VRP caches and the preflight service runs before autonomous jobs. Environments without outbound access must supply offline mirrors for the configured cache paths.
 
 ### Operational Limitations
 
-1. **Limited Error Recovery**: While rollback capabilities exist, automated error recovery beyond basic rollback is limited. Complex failure scenarios may require manual intervention.
+1. **Limited Error Recovery**: While rollback capabilities exist, automated recovery beyond basic rollback is limited. Complex failure scenarios may require manual intervention.
 
-2. **No Multi-Router Coordination**: Policy application is performed on individual routers without coordination across multiple devices. Network-wide policy changes must be orchestrated externally.
+2. **Multi-Router Coordinator Scope**: The `--multi-router` workflow orchestrates staged rollouts, but it assumes a healthy database backend and does not yet coordinate cross-device rollback logic beyond stage-level success/failure.
 
-3. **Limited Diff Analysis**: Configuration diff analysis is basic and may not catch all potential issues with complex policy changes.
+3. **Diff Analysis Depth**: Configuration diff reporting highlights added/removed AS mappings; deep semantic analysis of large policy changes remains a manual review task.
 
-### Documentation Gaps
+### Documentation Coverage
 
-1. **Example Policy Files**: Documentation lacks comprehensive examples of actual policy files and router directory structure.
+1. **Troubleshooting Coverage**: Troubleshooting guidance does not cover every network connectivity, authentication, or configuration edge case.
 
-2. **Troubleshooting Coverage**: Troubleshooting section does not cover all common failure scenarios, particularly those related to network connectivity, authentication, and configuration errors.
-
-3. **Performance Characteristics**: Documentation does not provide guidance on performance characteristics, resource usage, or scaling limitations for large numbers of policies or prefixes.
+2. **Performance Characteristics**: Documentation still lacks detailed sizing guidance for large policy sets and high-frequency pipelines.

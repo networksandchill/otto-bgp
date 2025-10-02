@@ -707,45 +707,39 @@ Maintain comprehensive audit trails:
 
 ### Technical Dependencies
 
-1. **RPKI Cache Management**: 
-   - Manual VRP cache updates required (no automatic RPKI cache refresh)
-   - Fail-closed behavior when cache is stale (configurable threshold)
-   - No built-in RPKI validator - requires external rpki-client or routinator
-
-2. **SSH Host Key Management**:
+1. **SSH Host Key Management**:
    - Initial host key collection requires manual setup via scripts
    - No automatic host key rotation handling
    - Setup mode should only be used for initial deployment
-
-### Operational Limitations
-
-1. **Policy Application Scope**:
+2. **Policy Application Scope**:
    - Only manages `policy-options prefix-list` configurations
    - Does not modify routing policies or import/export statements beyond basic import policy references
    - Router-specific advanced BGP features not supported
 
-### Safety System Limitations
+### Operational Limitations
 
 1. **Guardrail Coverage**:
    - Prefix count changes detected but historical baselines not maintained
    - Bogon detection based on static RFC ranges (not dynamic threat intelligence)
    - No integration with external BGP monitoring systems
 
-2. **Mode Detection**:
+### Safety System Limitations
+
+1. **Mode Detection**:
    - Autonomous vs system mode determined by environment variables
    - Configuration changes require application restart
 
-3. **Error Recovery**:
+2. **Error Recovery**:
    - Limited automatic recovery from transient network failures
    - NETCONF rollback requires manual confirmation in some scenarios
    - No automatic policy validation against current router state
 
-### Performance Considerations
-
-1. **Memory Usage**:
+3. **Memory Usage**:
    - Large policy sets are loaded into memory during generation
    - RPKI VRP validation supports streaming and lazy caching to reduce memory usage
    - Policy generation itself does not stream; memory scales with AS set size
+
+### Performance Considerations
 
 2. **Network Dependencies**:
    - All operations require network connectivity to target devices
