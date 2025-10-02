@@ -74,6 +74,8 @@ export interface NetconfConfig {
 
 export interface SMTPConfig {
   enabled: boolean
+  delivery_method?: 'sendmail' | 'smtp'
+  sendmail_path?: string
   host?: string
   port?: number
   username?: string

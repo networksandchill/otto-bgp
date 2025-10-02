@@ -224,6 +224,8 @@ class EmailNotificationConfig:
     subject_prefix: str = "[Otto BGP Autonomous]"
     send_on_success: bool = True
     send_on_failure: bool = True
+    delivery_method: str = "sendmail"  # 'sendmail' | 'smtp'
+    sendmail_path: Optional[str] = "/usr/sbin/sendmail"
     
     def __post_init__(self):
         """Set default values and load from environment"""
@@ -231,7 +233,7 @@ class EmailNotificationConfig:
             self.to_addresses = ["network-engineers@company.com"]
         if self.cc_addresses is None:
             self.cc_addresses = []
-        
+
         # Load from environment variables
         if os.getenv('OTTO_BGP_SMTP_SERVER'):
             self.smtp_server = os.getenv('OTTO_BGP_SMTP_SERVER')
@@ -246,6 +248,10 @@ class EmailNotificationConfig:
             self.smtp_password = os.getenv('OTTO_BGP_SMTP_PASSWORD')
         if os.getenv('OTTO_BGP_FROM_ADDRESS'):
             self.from_address = os.getenv('OTTO_BGP_FROM_ADDRESS')
+        if os.getenv('OTTO_BGP_EMAIL_DELIVERY_METHOD') in ['sendmail', 'smtp']:
+            self.delivery_method = os.getenv('OTTO_BGP_EMAIL_DELIVERY_METHOD')
+        if os.getenv('OTTO_BGP_SENDMAIL_PATH'):
+            self.sendmail_path = os.getenv('OTTO_BGP_SENDMAIL_PATH')
 
 
 @dataclass
@@ -374,7 +380,9 @@ AUTONOMOUS_MODE_SCHEMA = {
     "notifications": {
         "email": {
             "enabled": {"type": bool, "default": True},
-            "smtp_server": {"type": str, "required": True},
+            "delivery_method": {"valid_values": ["sendmail", "smtp"], "default": "sendmail"},
+            "sendmail_path": {"type": str, "default": "/usr/sbin/sendmail"},
+            "smtp_server": {"type": str},
             "smtp_port": {"type": int, "min": 1, "max": 65535, "default": 587},
             "smtp_use_tls": {"type": bool, "default": True},
             "from_address": {"type": str, "required": True},
@@ -796,29 +804,41 @@ class ConfigManager:
             # Validate email notification configuration
             if autonomous.notifications and autonomous.notifications.email and autonomous.notifications.email.enabled:
                 email = autonomous.notifications.email
-                
-                if not email.smtp_server:
-                    issues.append("Email notifications enabled but smtp_server not configured")
-                
+                method = getattr(email, 'delivery_method', 'sendmail')
+
+                # Common requirements
                 if not email.from_address:
                     issues.append("Email notifications enabled but from_address not configured")
-                
+
                 if not email.to_addresses:
                     issues.append("Email notifications enabled but to_addresses not configured")
-                
-                if not 1 <= email.smtp_port <= 65535:
-                    issues.append(f"Invalid SMTP port: {email.smtp_port}")
-                
+
                 # Validate email addresses format (basic validation)
                 import re
                 email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-                
+
                 if not re.match(email_pattern, email.from_address):
                     issues.append(f"Invalid from_address format: {email.from_address}")
-                
+
                 for addr in email.to_addresses:
                     if not re.match(email_pattern, addr):
                         issues.append(f"Invalid to_address format: {addr}")
+
+                # Method-specific validation
+                if method == 'smtp':
+                    if not email.smtp_server:
+                        issues.append("SMTP selected but smtp_server not configured")
+                    if not 1 <= email.smtp_port <= 65535:
+                        issues.append(f"Invalid SMTP port: {email.smtp_port}")
+                elif method == 'sendmail':
+                    if not email.sendmail_path:
+                        issues.append("sendmail selected but sendmail_path not configured")
+                    elif not Path(email.sendmail_path).is_absolute():
+                        issues.append(f"sendmail_path must be absolute: {email.sendmail_path}")
+                    elif not Path(email.sendmail_path).is_file():
+                        issues.append(f"sendmail_path does not exist: {email.sendmail_path}")
+                    elif not os.access(email.sendmail_path, os.X_OK):
+                        issues.append(f"sendmail_path is not executable: {email.sendmail_path}")
         
         # Validate installation and autonomous mode compatibility
         if (self.config.autonomous_mode and self.config.autonomous_mode.enabled and 

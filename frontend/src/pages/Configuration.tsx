@@ -855,64 +855,101 @@ const Configuration: React.FC = () => {
             {config.smtp?.enabled && (
               <>
                 <Grid container spacing={2}>
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="SMTP Host"
-                      value={config.smtp?.host || ''}
-                      onChange={(e) => handleConfigChange('smtp', 'host', e.target.value)}
-                      margin="normal"
-                    />
+                  <Grid item xs={12}>
+                    <FormControl fullWidth margin="normal">
+                      <InputLabel>Delivery Method</InputLabel>
+                      <Select
+                        value={config.smtp?.delivery_method || 'sendmail'}
+                        onChange={(e) => handleConfigChange('smtp', 'delivery_method', e.target.value)}
+                        label="Delivery Method"
+                      >
+                        <MenuItem value="sendmail">Sendmail (Local MTA)</MenuItem>
+                        <MenuItem value="smtp">SMTP (External Server)</MenuItem>
+                      </Select>
+                      <FormHelperText>
+                        {config.smtp?.delivery_method === 'smtp'
+                          ? 'Send via external SMTP server'
+                          : 'Send via local sendmail command (requires MTA installed)'}
+                      </FormHelperText>
+                    </FormControl>
                   </Grid>
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="Port"
-                      type="number"
-                      value={config.smtp?.port || 587}
-                      onChange={(e) => handleConfigChange('smtp', 'port', parseInt(e.target.value))}
-                      margin="normal"
-                    />
-                  </Grid>
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="Username"
-                      value={config.smtp?.username || ''}
-                      onChange={(e) => handleConfigChange('smtp', 'username', e.target.value)}
-                      margin="normal"
-                    />
-                  </Grid>
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth
-                      label="Password"
-                      type="password"
-                      value={config.smtp?.password || ''}
-                      onChange={(e) => handleConfigChange('smtp', 'password', e.target.value)}
-                      margin="normal"
-                      helperText="Leave as ***** to keep current password"
-                    />
-                  </Grid>
-                  <Grid item xs={12} md={6}>
+
+                  {config.smtp?.delivery_method === 'sendmail' && (
+                    <Grid item xs={12}>
+                      <TextField
+                        fullWidth
+                        label="Sendmail Path"
+                        value={config.smtp?.sendmail_path || '/usr/sbin/sendmail'}
+                        onChange={(e) => handleConfigChange('smtp', 'sendmail_path', e.target.value)}
+                        margin="normal"
+                        helperText="Absolute path to sendmail binary"
+                      />
+                    </Grid>
+                  )}
+
+                  {config.smtp?.delivery_method === 'smtp' && (
+                    <>
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          label="SMTP Host"
+                          value={config.smtp?.host || ''}
+                          onChange={(e) => handleConfigChange('smtp', 'host', e.target.value)}
+                          margin="normal"
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          label="Port"
+                          type="number"
+                          value={config.smtp?.port || 587}
+                          onChange={(e) => handleConfigChange('smtp', 'port', parseInt(e.target.value))}
+                          margin="normal"
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          label="Username"
+                          value={config.smtp?.username || ''}
+                          onChange={(e) => handleConfigChange('smtp', 'username', e.target.value)}
+                          margin="normal"
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          label="Password"
+                          type="password"
+                          value={config.smtp?.password || ''}
+                          onChange={(e) => handleConfigChange('smtp', 'password', e.target.value)}
+                          margin="normal"
+                          helperText="Leave as ***** to keep current password"
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={config.smtp?.use_tls || false}
+                              onChange={(e) => handleConfigChange('smtp', 'use_tls', e.target.checked)}
+                            />
+                          }
+                          label="Use TLS"
+                          sx={{ mt: 2 }}
+                        />
+                      </Grid>
+                    </>
+                  )}
+
+                  <Grid item xs={12}>
                     <TextField
                       fullWidth
                       label="From Address"
                       value={config.smtp?.from_address || ''}
                       onChange={(e) => handleConfigChange('smtp', 'from_address', e.target.value)}
                       margin="normal"
-                    />
-                  </Grid>
-                  <Grid item xs={12} md={6}>
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={config.smtp?.use_tls || false}
-                          onChange={(e) => handleConfigChange('smtp', 'use_tls', e.target.checked)}
-                        />
-                      }
-                      label="Use TLS"
-                      sx={{ mt: 2 }}
                     />
                   </Grid>
                   <Grid item xs={12}>

@@ -117,6 +117,10 @@ def update_core_email_config(ui_smtp: Dict[str, Any]) -> Dict[str, Any]:
         email_config['to_addresses'] = normalize_email_addresses(ui_smtp['to_addresses'])
     if 'enabled' in ui_smtp:
         email_config['enabled'] = bool(ui_smtp['enabled'])
+    if 'delivery_method' in ui_smtp:
+        email_config['delivery_method'] = ui_smtp['delivery_method']
+    if 'sendmail_path' in ui_smtp:
+        email_config['sendmail_path'] = ui_smtp['sendmail_path']
 
     # Set default subject prefix if not present
     if 'subject_prefix' not in email_config:
@@ -128,14 +132,32 @@ def update_core_email_config(ui_smtp: Dict[str, Any]) -> Dict[str, Any]:
     return email_config
 
 
-def validate_smtp_config(smtp_dict: Dict) -> List[str]:
-    """Validate SMTP configuration"""
-    issues = []
-    if not smtp_dict.get('host'):
-        issues.append("SMTP host required")
+def validate_email_config(smtp_dict: Dict) -> List[str]:
+    """Validate email configuration (sendmail or SMTP)"""
+    issues: List[str] = []
+    method = (smtp_dict.get('delivery_method') or 'sendmail').lower()
+    if method not in ('sendmail', 'smtp'):
+        issues.append("delivery_method must be 'sendmail' or 'smtp'")
+        return issues
+    # Common fields
     if not smtp_dict.get('from_address'):
-        issues.append("From address required")
+        issues.append('From address required')
+    if not smtp_dict.get('to_addresses'):
+        issues.append('At least one recipient required')
+    # Method-specific fields
+    if method == 'sendmail':
+        if not smtp_dict.get('sendmail_path'):
+            issues.append('sendmail_path required for sendmail method')
+    else:  # smtp
+        # Only check canonical backend field after mapping
+        if not smtp_dict.get('smtp_server'):
+            issues.append('SMTP server required when delivery_method=smtp')
     return issues
+
+
+def validate_smtp_config(smtp_dict: Dict) -> List[str]:
+    """Deprecated: Use validate_email_config instead"""
+    return validate_email_config(smtp_dict)
 
 
 def load_config_from_otto_env() -> Dict[str, Any]:

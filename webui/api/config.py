@@ -198,9 +198,9 @@ async def validate_config(request: Request,
 @router.post("/test-smtp")
 async def test_smtp(config: SMTPTest,
                     user: dict = Depends(require_role("admin"))):
-    """Validate SMTP configuration schema"""
+    """Validate email configuration schema"""
     smtp_dict = config.dict()
-    from webui.core.config_io import validate_smtp_config as _v
+    from webui.core.config_io import validate_email_config as _v
     issues = _v(smtp_dict)
 
     # Additional validation for email addresses
@@ -239,6 +239,12 @@ async def send_test_email(request: Request,
            .get('email', {}))
     if payload:
         # Map UI fields to backend fields
+        if 'delivery_method' in payload:
+            cfg['delivery_method'] = payload['delivery_method']
+        else:
+            cfg['delivery_method'] = cfg.get('delivery_method', 'sendmail')
+        if 'sendmail_path' in payload:
+            cfg['sendmail_path'] = payload['sendmail_path']
         if 'host' in payload:
             cfg['smtp_server'] = payload['host']
         if 'port' in payload:
@@ -269,10 +275,14 @@ async def send_test_email(request: Request,
             )
         )
     # Validate configuration
-    if not cfg.get('smtp_server'):
-        raise HTTPException(
-            status_code=400, detail='SMTP server not configured'
-        )
+    method = cfg.get('delivery_method', 'sendmail')
+    if method == 'sendmail':
+        if not cfg.get('sendmail_path'):
+            raise HTTPException(status_code=400, detail='sendmail_path not configured')
+    elif method == 'smtp':
+        if not cfg.get('smtp_server'):
+            raise HTTPException(status_code=400, detail='SMTP server not configured')
+
     if not cfg.get('to_addresses'):
         raise HTTPException(
             status_code=400, detail='No recipient addresses configured'
@@ -327,24 +337,25 @@ Otto BGP WebUI
         )
 
         msg.attach(MIMEText(body, 'plain'))
-        # Send email
-        context = ssl.create_default_context()
-
-        with smtplib.SMTP(
-            cfg['smtp_server'],
-            cfg.get('smtp_port', 587),
-            timeout=10
-        ) as server:
-            if cfg.get('smtp_use_tls', True):
-                server.starttls(context=context)
-
-            if cfg.get('smtp_username'):
-                server.login(
-                    cfg['smtp_username'],
-                    cfg.get('smtp_password', '')
-                )
-
-            server.send_message(msg)
+        # Send email via selected method
+        method = cfg.get('delivery_method', 'sendmail')
+        if method == 'sendmail':
+            import subprocess
+            proc = subprocess.run(
+                [cfg.get('sendmail_path', '/usr/sbin/sendmail'), '-t', '-i', f"-f{cfg['from_address']}"],
+                input=msg.as_bytes(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
+            )
+            if proc.returncode != 0:
+                raise HTTPException(status_code=400, detail=f"sendmail failed: {proc.stderr.decode(errors='ignore')}")
+        else:  # smtp
+            # Ensure SSL context is defined for STARTTLS
+            context = ssl.create_default_context()
+            with smtplib.SMTP(cfg['smtp_server'], cfg.get('smtp_port', 587), timeout=10) as server:
+                if cfg.get('smtp_use_tls', True):
+                    server.starttls(context=context)
+                if cfg.get('smtp_username'):
+                    server.login(cfg['smtp_username'], cfg.get('smtp_password', ''))
+                server.send_message(msg)
         # Update rate limit
         RATE_LIMITS[key] = now
 

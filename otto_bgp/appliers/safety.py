@@ -13,10 +13,15 @@ import logging
 import os
 import re
 import signal
+import subprocess
+import smtplib
+import ssl
 import threading
 from typing import List, Dict, Optional, Set, Tuple, Any
 from dataclasses import dataclass
 from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import time
 
 # Configuration imports for autonomous mode
@@ -852,37 +857,54 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
     
     def _send_email(self, email_cfg, subject: str, body: str) -> bool:
         """
-        Send email using Python standard library
-        
+        Send email using sendmail or SMTP
+
         Args:
             email_cfg: Email configuration object
             subject: Email subject
             body: Email body
-            
+
         Returns:
             True if email sent successfully
         """
         try:
-            import smtplib
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
-            
             msg = MIMEMultipart()
             msg['From'] = email_cfg.from_address
             msg['To'] = ', '.join(email_cfg.to_addresses)
+            if getattr(email_cfg, 'cc_addresses', None):
+                msg['Cc'] = ', '.join(email_cfg.cc_addresses)
             msg['Subject'] = f"{email_cfg.subject_prefix} {subject}"
             msg.attach(MIMEText(body, 'plain'))
-            
-            with smtplib.SMTP(email_cfg.smtp_server, email_cfg.smtp_port) as server:
+
+            if getattr(email_cfg, 'delivery_method', 'sendmail') == 'sendmail':
+                sendmail_path = getattr(email_cfg, 'sendmail_path', '/usr/sbin/sendmail')
+                # Use -t to read recipients from headers; -i ignores lone '.' lines; -f sets envelope sender
+                proc = subprocess.run(
+                    [sendmail_path, '-t', '-i', f"-f{email_cfg.from_address}"],
+                    input=msg.as_bytes(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    self.logger.error(
+                        f"sendmail failed rc={proc.returncode}: {proc.stderr.decode(errors='ignore')}"
+                    )
+                    return False
+                self.logger.info(f"Notification sent via sendmail: {subject}")
+                return True
+
+            # SMTP best-effort
+            context = ssl.create_default_context()
+            with smtplib.SMTP(email_cfg.smtp_server, email_cfg.smtp_port, timeout=10) as server:
                 if email_cfg.smtp_use_tls:
-                    server.starttls()
-                if hasattr(email_cfg, 'smtp_username') and email_cfg.smtp_username:
-                    server.login(email_cfg.smtp_username, email_cfg.smtp_password)
+                    server.starttls(context=context)
+                if getattr(email_cfg, 'smtp_username', None):
+                    server.login(email_cfg.smtp_username, getattr(email_cfg, 'smtp_password', ''))
                 server.send_message(msg)
-            
-            self.logger.info(f"NETCONF event notification sent: {subject}")
+            self.logger.info(f"Notification sent via SMTP: {subject}")
             return True
-            
         except Exception as e:
             self.logger.error(f"Failed to send email notification: {e}")
             return False  # Best-effort, don't break autonomous operation
