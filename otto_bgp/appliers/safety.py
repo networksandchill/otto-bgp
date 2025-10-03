@@ -20,6 +20,7 @@ import threading
 from typing import List, Dict, Optional, Set, Tuple, Any
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import time
@@ -169,7 +170,13 @@ class UnifiedSafetyManager:
         if config and config.rpki and config.rpki.enabled:
             try:
                 from otto_bgp.validators.rpki import RPKIGuardrail, RPKIValidator
-                rpki_validator = RPKIValidator(logger=self.logger)
+                rpki_validator = RPKIValidator(
+                    vrp_cache_path=Path(config.rpki.vrp_cache_path) if config.rpki.vrp_cache_path else None,
+                    allowlist_path=Path(config.rpki.allowlist_path) if config.rpki.allowlist_path else None,
+                    fail_closed=bool(config.rpki.fail_closed),
+                    max_vrp_age_hours=int(config.rpki.max_vrp_age_hours),
+                    logger=self.logger
+                )
                 rpki_guardrail = RPKIGuardrail(rpki_validator=rpki_validator, logger=self.logger)
                 self.guardrails[rpki_guardrail.name] = rpki_guardrail
             except Exception as e:
@@ -1036,14 +1043,15 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
                     self.logger.info(f"Exclusive lock acquired with verified host key: {hostname}")
                     
                     # GUARDRAIL 1.5: RPKI validation (if enabled)
-                    if 'rpki_guardrail' in self.guardrails:
-                        rpki_result = self.guardrails['rpki_guardrail'].execute_rpki_validation(policies)
-                        if not rpki_result.success:
-                            self.logger.error(f"RPKI validation failed: {rpki_result.error_message}")
+                    if 'rpki_validation' in self.guardrails:
+                        guardrail = self.guardrails['rpki_validation']
+                        rpki_result = guardrail.check({'policies': policies, 'operation': 'pipeline'})
+                        if not rpki_result.passed:
+                            self.logger.error(f"RPKI validation failed: {rpki_result.message}")
                             return ApplicationResult(
                                 success=False,
                                 exit_code=OttoExitCodes.VALIDATION_FAILED,
-                                error_message=rpki_result.error_message
+                                error_message=rpki_result.message
                             )
                     
                     # GUARDRAIL 2: Pre-commit validation (always active)
