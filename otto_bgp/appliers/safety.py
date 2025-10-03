@@ -729,32 +729,33 @@ class UnifiedSafetyManager:
     
     def _check_duplicates(self, policies: List[Dict]) -> List[str]:
         """Check for duplicate policies"""
+        # Duplicate detection by resource-aware key
         warnings = []
-        seen_as = set()
-        
+        seen = set()
         for policy in policies:
-            as_number = policy.get('as_number', 0)
-            if as_number in seen_as:
-                warnings.append(f"Duplicate policy for AS{as_number}")
-            seen_as.add(as_number)
-        
+            asn = policy.get('as_number')
+            key = policy.get('resource') or (f"AS{asn}" if asn else None)
+            if key:
+                if key in seen:
+                    warnings.append(f"Duplicate policy for {key}")
+                seen.add(key)
         return warnings
     
     def _validate_as_numbers(self, policies: List[Dict]) -> List[str]:
         """Validate AS number ranges"""
         warnings = []
-        
+
         for policy in policies:
-            as_number = policy.get('as_number', 0)
-            
-            # Check for reserved AS numbers
-            if 64496 <= as_number <= 64511:
-                warnings.append(f"AS{as_number} is reserved for documentation")
-            elif 65535 <= as_number <= 65551:
-                warnings.append(f"AS{as_number} is reserved")
-            elif as_number > 4294967295:
-                warnings.append(f"AS{as_number} exceeds maximum 32-bit AS number")
-        
+            as_number = policy.get('as_number')
+            res = policy.get('resource') or (f"AS{as_number}" if as_number else "unknown")
+            if isinstance(as_number, int) and as_number > 0:
+                if 64496 <= as_number <= 64511:
+                    warnings.append(f"{res} is reserved for documentation")
+                elif 65535 <= as_number <= 65551:
+                    warnings.append(f"{res} is reserved")
+                elif as_number > 4294967295:
+                    warnings.append(f"{res} exceeds maximum 32-bit AS number")
+
         return warnings
     
     def _calculate_risk_level(self, errors: List[str], warnings: List[str]) -> str:
@@ -829,10 +830,13 @@ Timestamp: {timestamp}\n"""
         elif event_type == 'commit':
             if success:
                 policies = details.get('policies', [])
+                # Prefer resources for summary if available
                 as_numbers = [p.get('as_number') for p in policies if p.get('as_number')]
+                resources = [p.get('resource') for p in policies if p.get('resource')]
+                summary_list = [f'AS{n}' for n in as_numbers] + resources
                 body = base_info + f"""\nCommit ID: {details.get('commit_id', 'N/A')}
 Policies Applied: {len(policies)}
-AS Numbers: {', '.join(f'AS{n}' for n in as_numbers)}
+AS Numbers: {', '.join(summary_list)}
 
 Configuration Diff:
 {details.get('diff', 'Not available')}"""

@@ -60,83 +60,89 @@ class PolicyCache:
         # Load existing cache from disk
         self._load_disk_cache()
     
-    def get_policy(self, as_number: int, policy_name: str = None) -> Optional[str]:
+    def get_policy(self, as_number: Optional[int] = None, policy_name: str = None, *, resource: Optional[str] = None) -> Optional[str]:
         """
-        Get cached policy for AS number
-        
+        Get cached policy for AS number or IRR object
+
         Args:
-            as_number: AS number
+            as_number: AS number (optional)
             policy_name: Policy name (optional)
-            
+            resource: IRR object name (optional)
+
         Returns:
             Cached policy content or None if not found/expired
         """
-        cache_key = self._generate_policy_key(as_number, policy_name)
-        
+        cache_key = self._generate_policy_key(as_number, policy_name, resource)
+
         # Check memory cache first
         if cache_key in self._memory_cache:
             entry = self._memory_cache[cache_key]
             if not entry.is_expired:
-                self.logger.debug(f"Policy cache hit for AS{as_number} (age: {entry.age_seconds}s)")
+                resource_id = resource or f"AS{as_number}" if as_number else "unknown"
+                self.logger.debug(f"Policy cache hit for {resource_id} (age: {entry.age_seconds}s)")
                 return entry.data
             else:
                 # Remove expired entry
                 del self._memory_cache[cache_key]
                 self._remove_disk_entry(cache_key)
-        
-        self.logger.debug(f"Policy cache miss for AS{as_number}")
+
+        resource_id = resource or f"AS{as_number}" if as_number else "unknown"
+        self.logger.debug(f"Policy cache miss for {resource_id}")
         return None
     
-    def put_policy(self, as_number: int, policy_content: str, 
-                   policy_name: str = None, ttl: int = None) -> None:
+    def put_policy(self, as_number: Optional[int] = None, policy_content: str = '', policy_name: str = None, ttl: int = None, *, resource: Optional[str] = None) -> None:
         """
-        Cache policy for AS number
-        
+        Cache policy for AS number or IRR object
+
         Args:
-            as_number: AS number
+            as_number: AS number (optional)
             policy_content: Policy content to cache
             policy_name: Policy name (optional)
             ttl: Time to live in seconds (optional)
+            resource: IRR object name (optional)
         """
         if not policy_content.strip():
             return  # Don't cache empty policies
-        
-        cache_key = self._generate_policy_key(as_number, policy_name)
+
+        cache_key = self._generate_policy_key(as_number, policy_name, resource)
         ttl = ttl or self.default_ttl
-        
+
         entry = CacheEntry(
             data=policy_content,
             timestamp=time.time(),
             ttl_seconds=ttl,
             key_hash=self._hash_key(cache_key)
         )
-        
+
         # Store in memory
         self._memory_cache[cache_key] = entry
-        
+
         # Store on disk
         self._save_disk_entry(cache_key, entry)
-        
-        self.logger.debug(f"Cached policy for AS{as_number} (TTL: {ttl}s)")
+
+        resource_id = resource or f"AS{as_number}" if as_number else "unknown"
+        self.logger.debug(f"Cached policy for {resource_id} (TTL: {ttl}s)")
     
-    def invalidate_policy(self, as_number: int, policy_name: str = None) -> None:
+    def invalidate_policy(self, as_number: Optional[int] = None, policy_name: str = None, *, resource: Optional[str] = None) -> None:
         """
         Invalidate cached policy
-        
+
         Args:
-            as_number: AS number
+            as_number: AS number (optional)
             policy_name: Policy name (optional)
+            resource: IRR object name (optional)
         """
-        cache_key = self._generate_policy_key(as_number, policy_name)
-        
+        cache_key = self._generate_policy_key(as_number, policy_name, resource)
+
         # Remove from memory
         if cache_key in self._memory_cache:
             del self._memory_cache[cache_key]
-        
+
         # Remove from disk
         self._remove_disk_entry(cache_key)
-        
-        self.logger.debug(f"Invalidated cache for AS{as_number}")
+
+        resource_id = resource or f"AS{as_number}" if as_number else "unknown"
+        self.logger.debug(f"Invalidated cache for {resource_id}")
     
     def clear_expired(self) -> int:
         """
@@ -182,12 +188,21 @@ class PolicyCache:
             'default_ttl': self.default_ttl
         }
     
-    def _generate_policy_key(self, as_number: int, policy_name: str = None) -> str:
+    def _generate_policy_key(
+        self,
+        as_number: Optional[int] = None,
+        policy_name: Optional[str] = None,
+        resource: Optional[str] = None
+    ) -> str:
         """Generate cache key for policy"""
-        if policy_name:
-            return f"policy_AS{as_number}_{policy_name}"
+        # Namespace by type to prevent collisions between ASN and IRR resources
+        if resource:
+            base = f"irr_{resource}"
+        elif as_number is not None:
+            base = f"asn_{as_number}"
         else:
-            return f"policy_AS{as_number}"
+            raise ValueError("Either resource or as_number must be provided")
+        return f"policy_{base}_{policy_name}" if policy_name else f"policy_{base}"
     
     def _hash_key(self, key: str) -> str:
         """Generate hash for cache key"""

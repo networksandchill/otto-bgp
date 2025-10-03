@@ -208,19 +208,30 @@ class JuniperPolicyApplier:
             self.logger.warning(f"Policies directory not found: {policies_dir}")
             return policies
         
-        # Load all policy files
-        policy_files = sorted(policies_dir.glob("AS*_policy.txt"))
-        
+        # Load all Otto-generated policy files (ASN or IRR object)
+        # Pattern matches: AS<number>_policy.txt and IRR_<object>_policy.txt
+        policy_files = sorted([
+            *policies_dir.glob("AS*_policy.txt"),
+            *policies_dir.glob("IRR_*_policy.txt"),
+        ])
+
         for policy_file in policy_files:
             try:
                 content = policy_file.read_text()
                 as_number = self._extract_as_number(policy_file.name)
-                
+
+                # Derive resource from filename stem
+                stem = policy_file.stem  # e.g., "AS13335_policy" or "IRR_RS-FOO_policy"
+                if stem.endswith('_policy'):
+                    resource = stem[:-7]  # Strip "_policy" suffix -> "AS13335" or "IRR_RS-FOO"
+                else:
+                    resource = stem
                 policies.append({
                     'as_number': as_number,
                     'filename': policy_file.name,
                     'content': content,
-                    'path': str(policy_file)
+                    'path': str(policy_file),
+                    'resource': resource,
                 })
                 
                 self.logger.debug(f"Loaded policy: {policy_file.name}")

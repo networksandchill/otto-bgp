@@ -260,7 +260,7 @@ class ParameterValidator:
             logger.warning(f"AS{as_num} is reserved (RFC 7607)")
         elif 64512 <= as_num <= 65534:
             logger = logging.getLogger('otto-bgp.validation')
-            logger.warning(f"AS{as_num} is in private use range (RFC 6996)")
+            logger.info(f"AS{as_num} is in private use range (RFC 6996)")
         elif 65535 <= as_num <= 65551:
             logger = logging.getLogger('otto-bgp.validation')
             logger.warning(f"AS{as_num} is reserved for documentation (RFC 5398)")

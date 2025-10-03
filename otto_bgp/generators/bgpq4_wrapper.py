@@ -44,7 +44,7 @@ class BGPq4Mode(Enum):
 @dataclass
 class PolicyGenerationResult:
     """Result of policy generation for a single AS"""
-    as_number: int
+    as_number: Optional[int]  # None for IRR objects, int for ASNs
     policy_name: str
     policy_content: str
     success: bool
@@ -52,6 +52,7 @@ class PolicyGenerationResult:
     error_message: Optional[str] = None
     bgpq4_mode: Optional[str] = None
     router_context: Optional[str] = None  # Router association
+    resource: Optional[str] = None  # NEW: canonical target id (e.g., "AS13335" or "RS-RACKDOG6079")
 
 
 @dataclass
@@ -410,6 +411,44 @@ def validate_policy_name(policy_name: str) -> str:
     return policy_name
 
 
+FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def sanitize_filename_component(value: str) -> str:
+    """Return a filesystem-safe component by replacing disallowed chars with '_'."""
+    if not isinstance(value, str):
+        value = str(value)
+    # Collapse disallowed characters to '_'
+    return FILENAME_SAFE.sub('_', value).strip('_') or 'policy'
+
+
+VALID_IRR_OBJECT = re.compile(r"^[A-Za-z0-9_:\-\.\/]+$")
+
+
+def validate_irr_object_name(name: str) -> str:
+    """
+    Validate IRR object name for safe processing.
+
+    Args:
+        name: IRR object name to validate (e.g., AS-SET, RS-*, FLTR-*)
+
+    Returns:
+        Validated IRR object name
+
+    Raises:
+        ValueError: If IRR object name is invalid
+    """
+    if not isinstance(name, str) or not name or len(name) > 128:
+        raise ValueError(f"Invalid IRR object name length: {name!r}")
+    if not VALID_IRR_OBJECT.match(name):
+        raise ValueError(f"Invalid IRR object characters: {name!r}")
+    # Validate known IRR object types (permissive - support multiple registries)
+    upper_name = name.upper()
+    if not any(upper_name.startswith(prefix) for prefix in ('AS-', 'RS-', 'FLTR-', 'FS-', 'AS')):
+        raise ValueError(f"Unknown IRR object type: {name!r} (expected AS-SET, RS-*, FLTR-*, or FS-*)")
+    return name
+
+
 class BGPq4Wrapper:
     """Wrapper for bgpq4 BGP policy generation tool"""
     
@@ -660,7 +699,8 @@ class BGPq4Wrapper:
                         success=True,
                         execution_time=0.0,
                         bgpq4_mode=self.detected_mode.value,
-                        router_context=None
+                        router_context=None,
+                        resource=f"AS{validated_as}"
                     )
             
             self.logger.info(f"Generating policy for AS{validated_as} (policy: {policy_name})")
@@ -706,7 +746,8 @@ class BGPq4Wrapper:
                     policy_content=result.stdout,
                     success=True,
                     execution_time=result.execution_time,
-                    bgpq4_mode=self.detected_mode.value
+                    bgpq4_mode=self.detected_mode.value,
+                    resource=f"AS{validated_as}"
                 )
             
             elif result.state == ProcessState.TIMEOUT:
@@ -719,7 +760,8 @@ class BGPq4Wrapper:
                     success=False,
                     execution_time=result.execution_time,
                     error_message=result.error_message,
-                    bgpq4_mode=self.detected_mode.value
+                    bgpq4_mode=self.detected_mode.value,
+                    resource=f"AS{validated_as}"
                 )
             
             else:  # FAILED state
@@ -733,7 +775,8 @@ class BGPq4Wrapper:
                     success=False,
                     execution_time=result.execution_time,
                     error_message=error_msg,
-                    bgpq4_mode=self.detected_mode.value
+                    bgpq4_mode=self.detected_mode.value,
+                    resource=f"AS{validated_as}"
                 )
                 
         except Exception as e:
@@ -748,9 +791,77 @@ class BGPq4Wrapper:
                 success=False,
                 execution_time=execution_time,
                 error_message=error_msg,
-                bgpq4_mode=self.detected_mode.value
+                bgpq4_mode=self.detected_mode.value,
+                resource=f"AS{validated_as}"
             )
-    
+
+    def _build_bgpq4_command_for_object(self, object_name: str, policy_name: Optional[str] = None) -> List[str]:
+        """
+        Build bgpq4 command for IRR object generation.
+
+        Args:
+            object_name: IRR object name (AS-SET, RS-*, etc.)
+            policy_name: Optional custom policy name
+
+        Returns:
+            Command as list of strings
+        """
+        obj = validate_irr_object_name(object_name)
+        # Sanitize policy name (no '.', '/', ':')
+        name = validate_policy_name((policy_name or obj).replace(':', '_').replace('/', '_').replace('.', '_'))
+        cmd = self.bgpq4_command.copy()
+        if self.proxy_manager:
+            cmd = self.proxy_manager.wrap_bgpq4_command(cmd, None)
+        # Proxy tunnel injection parity with ASN path
+        if not self.proxy_manager and getattr(self, 'proxy_tunnels', None):
+            if isinstance(self.proxy_tunnels, dict) and self.proxy_tunnels:
+                name_ep, endpoint = sorted(self.proxy_tunnels.items())[0]
+                host, port = endpoint
+                if '-h' not in cmd:
+                    cmd.extend(['-h', host, '-p', str(port)])
+        if self.irr_source:
+            cmd.extend(["-S", self.irr_source])
+        if self.aggregate_prefixes:
+            cmd.append("-A")
+        cmd.append("-J")
+        if self.ipv4_enabled and self.ipv6_enabled:
+            pass
+        elif self.ipv4_enabled:
+            cmd.append("-4")
+        elif self.ipv6_enabled:
+            cmd.append("-6")
+        else:
+            cmd.append("-4")
+        cmd.extend(["-l", name])
+        cmd.append(obj)
+        return cmd
+
+    def generate_policy_for_object(self, object_name: str, policy_name: Optional[str] = None, timeout: Optional[int] = None) -> PolicyGenerationResult:
+        """
+        Generate BGP policy for IRR object (AS-SET, route-set, etc.).
+
+        Args:
+            object_name: IRR object name
+            policy_name: Optional custom policy name
+            timeout: Custom timeout in seconds
+
+        Returns:
+            PolicyGenerationResult with policy content and metadata
+        """
+        try:
+            obj = validate_irr_object_name(object_name)
+            name = validate_policy_name((policy_name or obj).replace(':', '_').replace('/', '_').replace('.', '_'))
+            command = self._build_bgpq4_command_for_object(obj, name)
+            result = run_with_resource_management(command=command, timeout=timeout or self.command_timeout, capture_output=True, text=True)
+            if result.state == ProcessState.COMPLETED and result.stdout.strip():
+                return PolicyGenerationResult(as_number=None, policy_name=name, policy_content=result.stdout, success=True, execution_time=result.execution_time, bgpq4_mode=self.detected_mode.value, resource=obj)
+            error_msg = result.error_message or (f"bgpq4 error (code {result.returncode}): {result.stderr.strip()}" if hasattr(result, 'returncode') else "bgpq4 error")
+            return PolicyGenerationResult(as_number=None, policy_name=name, policy_content="", success=False, execution_time=getattr(result, 'execution_time', 0.0), error_message=error_msg, bgpq4_mode=self.detected_mode.value, resource=obj)
+        except Exception as e:
+            error_msg = f"IRR object generation failed: {str(e)}"
+            self.logger.error(f"Failed to generate policy for object {object_name}: {error_msg}")
+            return PolicyGenerationResult(as_number=None, policy_name=policy_name or object_name, policy_content="", success=False, execution_time=0.0, error_message=error_msg, bgpq4_mode=self.detected_mode.value if self.detected_mode else "unknown", resource=object_name)
+
     def generate_policies_parallel(self, 
                                   as_numbers: Union[List[int], Set[int]],
                                   custom_policy_names: Dict[int, str] = None,
@@ -1143,26 +1254,41 @@ class BGPq4Wrapper:
         rpki_status = rpki_status or {}
         
         if separate_files:
-            # Create separate file for each successful AS
+            # Create separate file for each successful AS or IRR object
             for result in batch_result.results:
                 if result.success and result.policy_content:
-                    filename = f"AS{result.as_number}_policy.txt"
-                    file_path = output_dir / filename
-                    
+                    # Compute unified filename
+                    if result.resource and not result.as_number:
+                        # IRR object - prefix with IRR_ and sanitize
+                        base = f"IRR_{sanitize_filename_component(result.resource)}"
+                    elif isinstance(result.as_number, int) and result.as_number > 0:
+                        # ASN - use current format (no underscore before number)
+                        base = f"AS{result.as_number}"
+                    else:
+                        # Fallback - should not happen if validation is correct
+                        base = sanitize_filename_component(result.policy_name)
+                    file_path = output_dir / f"{base}_policy.txt"
                     with open(file_path, 'w') as f:
                         f.write(result.policy_content)
-                    
+
                     created_files.append(str(file_path))
                     self.logger.debug(f"Written policy file: {file_path}")
-        
+
         else:
             # Create combined file with all successful policies
             combined_path = output_dir / combined_filename
-            
+
             with open(combined_path, 'w') as f:
                 for result in batch_result.results:
                     if result.success and result.policy_content:
-                        f.write(f"# AS{result.as_number}\n")
+                        # In combined output, prefer resource header when present
+                        if result.resource:
+                            header = result.resource
+                        elif result.as_number is not None:
+                            header = f"AS{result.as_number}"
+                        else:
+                            header = result.policy_name or "UNKNOWN"
+                        f.write(f"# {header}\n")
                         
                         # Add RPKI status if available
                         rpki_info = rpki_status.get(result.as_number, {})

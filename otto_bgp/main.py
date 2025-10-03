@@ -279,18 +279,37 @@ def cmd_policy(args):
                        "Check network connectivity and bgpq4 installation")
         return 0 if success else 1
     
-    # Extract AS numbers from input file
-    logger.info(f"Extracting AS numbers from {args.input_file}")
-    as_extractor = ASNumberExtractor()
-    as_result = as_extractor.extract_as_numbers_from_file(args.input_file)
-    
-    if not as_result.as_numbers:
-        print_error("No AS numbers found in input file",
-                   "Check that the input file contains valid AS numbers (e.g., AS12345 or 12345)")
+    # Extract AS numbers from input file (if provided)
+    as_list = []
+    as_result = None
+    if args.input_file:
+        logger.info(f"Extracting AS numbers from {args.input_file}")
+        as_extractor = ASNumberExtractor()
+        as_result = as_extractor.extract_as_numbers_from_file(args.input_file)
+        if as_result.as_numbers:
+            as_list = sorted(as_result.as_numbers)
+            print(f"Found {len(as_list)} AS numbers: {as_list}")
+    else:
+        # Create empty result when no input file
+        from otto_bgp.processors.as_extractor import ASExtractionResult
+        as_result = ASExtractionResult(as_numbers=set(), validation_errors=[])
+
+    # NEW: collect IRR objects
+    irr_objects = []
+    if getattr(args, 'objects', None):
+        irr_objects.extend(args.objects)
+    if getattr(args, 'objects_file', None):
+        with open(args.objects_file, 'r') as f:
+            irr_objects.extend([line.strip() for line in f if line.strip() and not line.startswith('#')])
+
+    if irr_objects:
+        print(f"Found {len(irr_objects)} IRR objects: {irr_objects}")
+
+    # Fail only if both ASN list and IRR object list are empty
+    if not as_result.as_numbers and not irr_objects:
+        print_error("No inputs found",
+                   "Provide ASNs (file) and/or IRR objects (--object/--objects-file)")
         return 1
-    
-    as_list = sorted(as_result.as_numbers)
-    print(f"Found {len(as_list)} AS numbers: {as_list}")
     
     # RPKI validation for extracted AS numbers (unless explicitly disabled)
     rpki_status = {}
@@ -329,11 +348,37 @@ def cmd_policy(args):
     
     # Generate policies
     try:
-        logger.info(f"Generating policies for {len(as_list)} AS numbers")
-        batch_result = bgpq4.generate_policies_batch(
-            as_list,
-            rpki_status=rpki_status
-        )
+        # Generate for AS numbers
+        if as_list:
+            logger.info(f"Generating policies for {len(as_list)} AS numbers")
+            batch_result = bgpq4.generate_policies_batch(
+                as_list,
+                rpki_status=rpki_status
+            )
+        else:
+            # Create empty batch result if no ASNs
+            from otto_bgp.generators.bgpq4_wrapper import PolicyBatchResult
+            batch_result = PolicyBatchResult(results=[], total_as_count=0, successful_count=0, failed_count=0, total_execution_time=0.0)
+
+        # Generate for IRR objects
+        obj_results = []
+        if irr_objects:
+            logger.info(f"Generating policies for {len(irr_objects)} IRR objects")
+            for obj in irr_objects:
+                try:
+                    r = bgpq4.generate_policy_for_object(obj)
+                    obj_results.append(r)
+                    if r.success:
+                        batch_result.successful_count += 1
+                    else:
+                        batch_result.failed_count += 1
+                except Exception as e:
+                    logger.error(f"Object generation failed for {obj}: {e}")
+                    batch_result.failed_count += 1
+
+        # Merge with ASN batch results before writing
+        if obj_results:
+            batch_result.results.extend(obj_results)
         
         # Write output files
         output_dir = args.output_dir or "policies"
@@ -347,17 +392,19 @@ def cmd_policy(args):
         
         # Report results
         print_success("Policy generation complete:")
-        print(f"  AS numbers processed: {batch_result.total_as_count}")
+        total_resources = len(as_list) + len(irr_objects)
+        print(f"  Resources processed: {total_resources} ({len(as_list)} ASNs, {len(irr_objects)} IRR objects)")
         print(f"  Successful: {batch_result.successful_count}")
         print(f"  Failed: {batch_result.failed_count}")
         print(f"  Execution time: {batch_result.total_execution_time:.2f}s")
         print(f"  Output files: {len(created_files)} files in {output_dir}/")
-        
+
         if batch_result.failed_count > 0:
-            print_warning("Some AS numbers failed to generate policies:")
+            print_warning("Some resources failed to generate policies:")
             for result in batch_result.results:
                 if not result.success:
-                    print(f"  AS{result.as_number}: {result.error_message}")
+                    resource_id = result.resource or (f"AS{result.as_number}" if result.as_number else "UNKNOWN")
+                    print(f"  {resource_id}: {result.error_message}")
         
         return 0 if batch_result.successful_count > 0 else 1
     finally:
@@ -1911,8 +1958,14 @@ def create_parser():
     policy_parser = subparsers.add_parser('policy',
                                          help='Generate BGP policies using bgpq4',
                                          parents=[common_flags_parent])
-    policy_parser.add_argument('input_file',
-                              help='Input file containing AS numbers')
+    # Make input_file optional to support object-only runs
+    policy_parser.add_argument('input_file', nargs='?',
+                              help='Optional input file containing AS numbers')
+    # Add object arguments
+    policy_parser.add_argument('--object', dest='objects', action='append', default=[],
+                              help='IRR object (AS-SET/route-set/filter-set); repeatable')
+    policy_parser.add_argument('--objects-file', dest='objects_file',
+                              help='File with IRR objects, one per line')
     policy_parser.add_argument('-o', '--output', default='bgpq4_output.txt',
                               help='Output file name (default: bgpq4_output.txt)')
     policy_parser.add_argument('-s', '--separate', action='store_true',
