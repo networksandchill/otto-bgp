@@ -11,7 +11,7 @@ Performance: Optimized timeout values based on operation type
 import os
 import logging
 import time
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 
@@ -36,27 +36,36 @@ class TimeoutConfig:
     max_value: float
     env_var: str
     description: str
-    
+
     def get_value(self) -> float:
         """Get the configured timeout value from environment or default"""
         try:
             value = float(os.environ.get(self.env_var, self.default))
             # Validate bounds
             if value < self.min_value:
-                logging.warning(f"Timeout {self.env_var}={value} below minimum {self.min_value}, using minimum")
+                logging.warning(
+                    f"Timeout {self.env_var}={value} below minimum "
+                    f"{self.min_value}, using minimum"
+                )
                 return self.min_value
             if value > self.max_value:
-                logging.warning(f"Timeout {self.env_var}={value} above maximum {self.max_value}, using maximum")
+                logging.warning(
+                    f"Timeout {self.env_var}={value} above maximum "
+                    f"{self.max_value}, using maximum"
+                )
                 return self.max_value
             return value
         except (ValueError, TypeError):
-            logging.warning(f"Invalid timeout value for {self.env_var}, using default {self.default}")
+            logging.warning(
+                f"Invalid timeout value for {self.env_var}, using "
+                f"default {self.default}"
+            )
             return self.default
 
 
 class TimeoutManager:
     """Centralized timeout management for Otto BGP"""
-    
+
     # Timeout configurations for different operation types
     _TIMEOUT_CONFIGS = {
         TimeoutType.PROCESS_EXECUTION: TimeoutConfig(
@@ -64,7 +73,7 @@ class TimeoutManager:
             min_value=5.0,
             max_value=300.0,
             env_var="OTTO_BGP_PROCESS_TIMEOUT",
-            description="Timeout for individual process execution (bgpq4, etc.)"
+            description="Timeout for individual process execution"
         ),
         TimeoutType.THREAD_POOL: TimeoutConfig(
             default=60.0,
@@ -116,52 +125,59 @@ class TimeoutManager:
             description="Timeout for NETCONF operations"
         )
     }
-    
+
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self._cached_values: Dict[TimeoutType, float] = {}
         self._last_cache_time = 0
         self._cache_ttl = 300  # 5 minutes
-    
+
     def get_timeout(self, timeout_type: TimeoutType) -> float:
         """
         Get timeout value for specified operation type
-        
+
         Args:
             timeout_type: Type of operation needing timeout
-            
+
         Returns:
             Timeout value in seconds
         """
         current_time = time.time()
-        
+
         # Refresh cache periodically to pick up environment changes
         if current_time - self._last_cache_time > self._cache_ttl:
             self._cached_values.clear()
             self._last_cache_time = current_time
-        
+
         if timeout_type not in self._cached_values:
             config = self._TIMEOUT_CONFIGS.get(timeout_type)
             if not config:
-                self.logger.warning(f"Unknown timeout type {timeout_type}, using default 30s")
+                msg = (
+                    f"Unknown timeout type {timeout_type}, using "
+                    f"default 30s"
+                )
+                self.logger.warning(msg)
                 return 30.0
-            
+
             self._cached_values[timeout_type] = config.get_value()
-            self.logger.debug(f"Loaded timeout {timeout_type.value}: {self._cached_values[timeout_type]}s")
-        
+            timeout_val = self._cached_values[timeout_type]
+            self.logger.debug(
+                f"Loaded timeout {timeout_type.value}: {timeout_val}s"
+            )
+
         return self._cached_values[timeout_type]
-    
+
     def get_all_timeouts(self) -> Dict[str, float]:
         """Get all configured timeout values for monitoring/debugging"""
         return {
             timeout_type.value: self.get_timeout(timeout_type)
             for timeout_type in TimeoutType
         }
-    
+
     def validate_environment(self) -> Dict[str, Any]:
         """
         Validate all timeout environment variables
-        
+
         Returns:
             Dictionary with validation results
         """
@@ -171,11 +187,11 @@ class TimeoutManager:
             "errors": [],
             "timeouts": {}
         }
-        
+
         for timeout_type, config in self._TIMEOUT_CONFIGS.items():
             env_value = os.environ.get(config.env_var)
             actual_value = self.get_timeout(timeout_type)
-            
+
             results["timeouts"][timeout_type.value] = {
                 "env_var": config.env_var,
                 "env_value": env_value,
@@ -183,26 +199,37 @@ class TimeoutManager:
                 "default": config.default,
                 "description": config.description
             }
-            
+
             if env_value:
                 try:
                     parsed_value = float(env_value)
-                    if parsed_value < config.min_value or parsed_value > config.max_value:
-                        results["warnings"].append(
-                            f"{config.env_var}={env_value} outside recommended range "
+                    out_of_range = (
+                        parsed_value < config.min_value or
+                        parsed_value > config.max_value
+                    )
+                    if out_of_range:
+                        msg = (
+                            f"{config.env_var}={env_value} outside "
+                            f"recommended range "
                             f"[{config.min_value}, {config.max_value}]"
                         )
+                        results["warnings"].append(msg)
                 except (ValueError, TypeError):
-                    results["errors"].append(f"Invalid value for {config.env_var}: {env_value}")
+                    msg = f"Invalid value for {config.env_var}: {env_value}"
+                    results["errors"].append(msg)
                     results["valid"] = False
-        
+
         return results
 
 
 class TimeoutContext:
     """Context manager for timeout-aware operations"""
-    
-    def __init__(self, timeout_type: TimeoutType, operation_name: str = None, custom_timeout: float = None):
+
+    def __init__(
+            self,
+            timeout_type: TimeoutType,
+            operation_name: str = None,
+            custom_timeout: float = None):
         self.timeout_type = timeout_type
         self.operation_name = operation_name or timeout_type.value
         self.custom_timeout = custom_timeout
@@ -210,36 +237,52 @@ class TimeoutContext:
         self.logger = logging.getLogger(__name__)
         self.start_time = None
         self.timeout_value = None
-    
+
     def __enter__(self):
         self.start_time = time.time()
-        self.timeout_value = self.custom_timeout or self.manager.get_timeout(self.timeout_type)
-        self.logger.debug(f"Starting {self.operation_name} with {self.timeout_value}s timeout")
+        timeout_val = self.custom_timeout or self.manager.get_timeout(
+            self.timeout_type
+        )
+        self.timeout_value = timeout_val
+        msg = (
+            f"Starting {self.operation_name} with "
+            f"{self.timeout_value}s timeout"
+        )
+        self.logger.debug(msg)
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.start_time:
             elapsed = time.time() - self.start_time
-            if elapsed > self.timeout_value * 0.8:  # Warn if using >80% of timeout
-                self.logger.warning(
+            # Warn if using >80% of timeout
+            if elapsed > self.timeout_value * 0.8:
+                msg = (
                     f"{self.operation_name} took {elapsed:.2f}s "
                     f"(timeout: {self.timeout_value}s)"
                 )
+                self.logger.warning(msg)
             else:
-                self.logger.debug(f"{self.operation_name} completed in {elapsed:.2f}s")
-    
+                msg = (
+                    f"{self.operation_name} completed in "
+                    f"{elapsed:.2f}s"
+                )
+                self.logger.debug(msg)
+
     @property
     def timeout(self) -> float:
         """Get the timeout value for this context"""
-        return self.timeout_value or self.manager.get_timeout(self.timeout_type)
-    
+        return (
+            self.timeout_value or
+            self.manager.get_timeout(self.timeout_type)
+        )
+
     def check_timeout(self) -> bool:
         """Check if operation has timed out"""
         if not self.start_time:
             return False
         elapsed = time.time() - self.start_time
         return elapsed > self.timeout
-    
+
     def remaining_time(self) -> float:
         """Get remaining time before timeout"""
         if not self.start_time:
@@ -250,8 +293,8 @@ class TimeoutContext:
 
 class ExponentialBackoff:
     """Exponential backoff for retry operations with timeout awareness"""
-    
-    def __init__(self, initial_delay: float = 1.0, max_delay: float = 60.0, 
+
+    def __init__(self, initial_delay: float = 1.0, max_delay: float = 60.0,
                  backoff_factor: float = 2.0, max_retries: int = 5):
         self.initial_delay = initial_delay
         self.max_delay = max_delay
@@ -259,33 +302,43 @@ class ExponentialBackoff:
         self.max_retries = max_retries
         self.attempt = 0
         self.logger = logging.getLogger(__name__)
-    
+
     def delay(self, timeout_context: Optional[TimeoutContext] = None) -> bool:
         """
         Calculate and apply backoff delay
-        
+
         Args:
             timeout_context: Optional timeout context to respect
-            
+
         Returns:
-            True if delay was applied, False if max retries reached or timeout exceeded
+            True if delay was applied, False if max retries reached or
+            timeout exceeded
         """
         if self.attempt >= self.max_retries:
             self.logger.debug(f"Max retries ({self.max_retries}) reached")
             return False
-        
-        delay_time = min(self.initial_delay * (self.backoff_factor ** self.attempt), self.max_delay)
-        
+
+        calculated = self.initial_delay * (self.backoff_factor ** self.attempt)
+        delay_time = min(calculated, self.max_delay)
+
         # Check if delay would exceed timeout
         if timeout_context and timeout_context.remaining_time() < delay_time:
-            self.logger.debug(f"Delay {delay_time}s would exceed timeout, aborting retry")
+            msg = (
+                f"Delay {delay_time}s would exceed timeout, "
+                f"aborting retry"
+            )
+            self.logger.debug(msg)
             return False
-        
-        self.logger.debug(f"Retry {self.attempt + 1}/{self.max_retries} after {delay_time}s delay")
+
+        retry_msg = (
+            f"Retry {self.attempt + 1}/{self.max_retries} after "
+            f"{delay_time}s delay"
+        )
+        self.logger.debug(retry_msg)
         time.sleep(delay_time)
         self.attempt += 1
         return True
-    
+
     def reset(self):
         """Reset backoff state"""
         self.attempt = 0
@@ -301,8 +354,10 @@ def get_timeout(timeout_type: TimeoutType) -> float:
     return timeout_manager.get_timeout(timeout_type)
 
 
-def timeout_context(timeout_type: TimeoutType, operation_name: str = None, 
-                   custom_timeout: float = None) -> TimeoutContext:
+def timeout_context(
+        timeout_type: TimeoutType,
+        operation_name: str = None,
+        custom_timeout: float = None) -> TimeoutContext:
     """Create timeout context for operation"""
     return TimeoutContext(timeout_type, operation_name, custom_timeout)
 
