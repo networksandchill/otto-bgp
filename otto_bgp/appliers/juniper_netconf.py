@@ -281,6 +281,31 @@ class JuniperPolicyApplier:
                 f"{operation_name} failed after {attempt_count} attempts "
                 f"({total_duration:.2f}s): {last_exception}"
             )
+            # Send notification with complete retry summary
+            try:
+                event_type = (
+                    'commit' if operation_name == 'netconf_commit'
+                    else 'connect'
+                )
+                hostname = getattr(
+                    getattr(self, 'device', None),
+                    'hostname',
+                    'unknown'
+                )
+                notification_data = {
+                    'attempt_count': attempt_count,
+                    'total_duration': total_duration,
+                    'last_error': str(last_exception),
+                    'final_failure': True
+                }
+                self.safety_manager.send_netconf_event_notification(
+                    event_type,
+                    hostname,
+                    False,
+                    notification_data
+                )
+            except Exception:
+                pass
 
         raise last_exception
 
@@ -693,6 +718,44 @@ class JuniperPolicyApplier:
             mode_desc = mode_manager.get_mode_description()
             self.logger.info(f"Using {mode_desc} mode")
 
+            # Optional: Detect no-op by comparing with current state
+            # This saves RPC churn for redundant commits
+            try:
+                current_state = self._fetch_current_state()
+                combined_config = self._combine_policies_for_load(policies)
+
+                # Simple comparison - check if new config is subset
+                # of current state
+                config_lines = set(
+                    line.strip()
+                    for line in combined_config.splitlines()
+                    if line.strip() and not line.strip().startswith('#')
+                )
+                current_lines = set(
+                    line.strip()
+                    for line in current_state.splitlines()
+                    if line.strip()
+                )
+
+                if config_lines.issubset(current_lines):
+                    no_op_msg = (
+                        "No changes required - policies already configured "
+                        "(detected via state comparison)"
+                    )
+                    self.logger.info(no_op_msg)
+                    return ApplicationResult(
+                        success=True,
+                        hostname=hostname,
+                        policies_applied=0,
+                        diff_preview=no_op_msg,
+                        timestamp=datetime.now().isoformat()
+                    )
+            except Exception as e:
+                # If pre-check fails, fall back to normal diff generation
+                self.logger.debug(
+                    f"No-op detection failed, proceeding with diff: {e}"
+                )
+
             # Generate diff first
             diff = self.preview_changes(policies)
 
@@ -856,12 +919,22 @@ class JuniperPolicyApplier:
                             # Check if candidate config still exists
                             diff = self.config.diff()
                             if diff:
-                                # Reattempt commit once
+                                # Validate with commit_check before retry
+                                self.logger.debug(
+                                    "Running commit_check before retry"
+                                )
+                                self.config.commit_check()
+
+                                # Reattempt commit with backoff wrapper
                                 retry_msg = "Retrying commit after reconnect"
                                 self.logger.info(retry_msg)
-                                commit_result = self.config.commit(
-                                    comment=comment,
-                                    confirm=confirm_timeout
+                                commit_result = self._with_backoff(
+                                    lambda: self.config.commit(
+                                        comment=comment,
+                                        confirm=confirm_timeout
+                                    ),
+                                    max_retries=1,
+                                    operation_name='netconf_commit_retry'
                                 )
 
                                 # Success after retry
@@ -897,12 +970,35 @@ class JuniperPolicyApplier:
                                     timestamp=datetime.now().isoformat()
                                 )
                             else:
-                                # No diff - commit may have succeeded
+                                # No diff - commit likely succeeded
                                 no_diff_msg = (
                                     "No candidate diff after reconnect - "
-                                    "commit may have succeeded"
+                                    "commit likely succeeded, proceeding to "
+                                    "finalization"
                                 )
                                 self.logger.info(no_diff_msg)
+
+                                # Apply finalization strategy
+                                commit_info = CommitInfo(
+                                    commit_id="recovered",
+                                    timestamp=datetime.now().isoformat(),
+                                    success=True
+                                )
+                                health_result = self._run_health_checks()
+                                strategy.execute(
+                                    self.config,
+                                    commit_info,
+                                    health_result
+                                )
+
+                                return ApplicationResult(
+                                    success=True,
+                                    hostname=hostname,
+                                    policies_applied=len(policies),
+                                    diff_preview=None,
+                                    commit_id="recovered",
+                                    timestamp=datetime.now().isoformat()
+                                )
 
                         except Exception as retry_error:
                             recovery_msg = (
