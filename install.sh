@@ -645,7 +645,8 @@ CPUQuota=50%
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+    sudo chmod 644 /etc/systemd/system/otto-bgp.service
+
     # Create RPKI cache update service
     sudo tee /etc/systemd/system/otto-bgp-rpki-update.service > /dev/null << EOF
 [Unit]
@@ -672,7 +673,8 @@ Environment="RPKI_TRUST_ANCHOR_DIR=/var/lib/rpki-client/ta"
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+    sudo chmod 644 /etc/systemd/system/otto-bgp-rpki-update.service
+
     # Create RPKI cache update timer
     sudo tee /etc/systemd/system/otto-bgp-rpki-update.timer > /dev/null << EOF
 [Unit]
@@ -687,6 +689,7 @@ RandomizedDelaySec=300
 [Install]
 WantedBy=timers.target
 EOF
+    sudo chmod 644 /etc/systemd/system/otto-bgp-rpki-update.timer
 
     # Create alert email service (template unit)
     sudo tee /etc/systemd/system/otto-bgp-alert@.service > /dev/null << EOF
@@ -708,6 +711,7 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+    sudo chmod 644 /etc/systemd/system/otto-bgp-alert@.service
 
     # Create RPKI preflight service
     sudo tee /etc/systemd/system/otto-bgp-rpki-preflight.service > /dev/null << EOF
@@ -792,6 +796,7 @@ SuccessExitStatus=0
 [Install]
 WantedBy=multi-user.target
 EOF
+    sudo chmod 644 /etc/systemd/system/otto-bgp-rpki-preflight.service
 
     # Create timer for scheduled execution (if not autonomous mode)
     if [[ "$AUTONOMOUS_MODE" != true ]]; then
@@ -809,6 +814,7 @@ RandomizedDelaySec=300
 [Install]
 WantedBy=timers.target
 EOF
+        sudo chmod 644 /etc/systemd/system/otto-bgp.timer
         log_success "SystemD service and timer created"
     else
         log_success "SystemD service created (autonomous mode - no timer)"
@@ -1087,7 +1093,8 @@ SyslogIdentifier=otto-bgp-webui
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+    sudo chmod 644 /etc/systemd/system/otto-bgp-webui-adapter.service
+
     log_success "WebUI systemd service created"
 }
 
