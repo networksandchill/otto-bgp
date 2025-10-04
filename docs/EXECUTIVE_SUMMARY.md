@@ -195,9 +195,9 @@ All guardrail outputs aggregate into a unified risk level (LOW/MEDIUM/HIGH/CRITI
 
 ## Known Gaps and Limitations
 
-**RPKI Implementation Gaps:**
-- **Configuration-dependent validation:** RPKI checks only run when VRP cache paths and settings are provided in configuration
-- **Limited VRP sources:** Currently supports rpki-client and routinator JSON formats; other RPKI validators require format conversion
+**RPKI Behavior:**
+- **Fail-closed enforcement:** When configured (default), VRP cache staleness or absence blocks operations; preflight and guardrail checks enforce freshness
+- **VRP sources:** Supports rpki-client and routinator JSON formats; other validators may require format conversion
 
 **IPv6 Support Limitations:**
 - **Prefix counting accuracy:** Guardrail prefix counters use IPv4-optimized patterns that may undercount IPv6 prefixes in risk calculations

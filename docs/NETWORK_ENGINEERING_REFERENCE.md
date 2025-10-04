@@ -531,9 +531,9 @@ Otto BGP implements comprehensive RPKI validation with tri-state logic:
 #### Fail-Closed Design
 
 - **Stale VRP Data**: Validation fails if cache is older than configured threshold (default 24 hours)
-- **Missing Cache**: System operates without RPKI validation if no cache present
-- **Autonomous Mode**: RPKI validation required and enforced
-- **System Mode**: RPKI validation optional but recommended
+- **Missing Cache**: Behavior is configuration-driven — with `fail_closed` enabled (default), operations are blocked; if disabled, processing continues with warnings
+- **Autonomous Mode**: RPKI validation required and enforced (preflight + guardrail)
+- **System Mode**: RPKI validation optional but recommended; guardrail still honors `fail_closed` when enabled
 
 ## Safety and Guardrails System (v0.3.2)
 

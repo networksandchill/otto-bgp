@@ -698,7 +698,7 @@ def cmd_apply(args):
             return 1
         
         # Apply policies with mode-aware finalization
-        confirm_timeout = args.confirm_timeout if args.confirm else 120  # Default timeout
+        confirm_timeout = args.confirm_timeout if args.confirm else 10  # Default timeout
         print(f"\nApplying policies using mode-aware finalization...")
         
         result = applier.apply_with_confirmation(
@@ -2013,8 +2013,8 @@ def create_parser():
                              help='Preview changes without applying')
     apply_parser.add_argument('--confirm', action='store_true',
                              help='Use confirmed commit with automatic rollback')
-    apply_parser.add_argument('--confirm-timeout', type=int, default=120,
-                             help='Confirmation timeout in seconds (default: 120)')
+    apply_parser.add_argument('--confirm-timeout', type=int, default=10,
+                             help='Confirmation timeout in minutes (default: 10)')
     apply_parser.add_argument('--diff-format', choices=['text', 'set', 'xml'], default='text',
                              help='Format for configuration diff (default: text)')
     apply_parser.add_argument('--skip-safety', action='store_true',

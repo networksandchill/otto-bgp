@@ -25,7 +25,9 @@ from .exit_codes import OttoExitCodes
 
 
 # Critical guardrails that cannot be disabled
-CRITICAL_GUARDRAILS = {'bogon_prefix', 'signal_handling', 'concurrent_operation'}
+CRITICAL_GUARDRAILS = {
+    'bogon_prefix', 'signal_handling', 'concurrent_operation', 'commit_retry'
+}
 
 
 @dataclass
@@ -791,15 +793,197 @@ def list_guardrails() -> List[str]:
 def validate_guardrail_health() -> Dict[str, bool]:
     """Lightweight health checks for guardrail components"""
     health_status = {}
-    
+
     for name, guardrail in _GUARDRAIL_REGISTRY.items():
         try:
             # Basic health check - ensure guardrail can be instantiated
             health_status[name] = hasattr(guardrail, 'check') and callable(guardrail.check)
         except Exception:
             health_status[name] = False
-    
+
     return health_status
+
+
+class CommitRetryGuardrail(GuardrailComponent):
+    """
+    Circuit breaker for repeated commit failures
+
+    Tracks commit failure history per hostname and blocks operations
+    when failure rate exceeds threshold within time window.
+    """
+
+    def __init__(
+        self,
+        config: Optional[GuardrailConfig] = None,
+        logger: Optional[logging.Logger] = None
+    ):
+        super().__init__("commit_retry", config, logger)
+        self._lock = threading.Lock()
+        self._failure_history: Dict[str, List[Tuple[float, str]]] = {}
+        self._max_failures = 3
+        self._window_seconds = 300
+        self._persistence_paths = [
+            Path("/var/lib/otto-bgp/guardrails/commit_retry.json"),
+            Path.home() / ".local/share/otto-bgp/guardrails/commit_retry.json"
+        ]
+        self._load_state()
+
+    def _load_state(self) -> None:
+        """Load failure history from persistent storage"""
+        import json
+
+        for path in self._persistence_paths:
+            try:
+                if path.exists():
+                    with open(path, 'r') as f:
+                        data = json.load(f)
+                        # Convert timestamps back to floats
+                        self._failure_history = {
+                            hostname: [(float(ts), error_type) for ts, error_type in failures]
+                            for hostname, failures in data.items()
+                        }
+                    self.logger.debug(f"Loaded commit retry state from {path}")
+                    return
+            except Exception as e:
+                self.logger.warning(f"Could not load state from {path}: {e}")
+
+        # No persistent state found, using in-memory only
+        self.logger.debug("No persistent state found, using in-memory tracking")
+
+    def _save_state(self) -> None:
+        """Save failure history to persistent storage"""
+        import json
+
+        # Clean stale entries before saving
+        self._clean_stale_entries()
+
+        data = {
+            hostname: [(ts, error_type) for ts, error_type in failures]
+            for hostname, failures in self._failure_history.items()
+        }
+
+        for path in self._persistence_paths:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, 'w') as f:
+                    json.dump(data, f, indent=2)
+                self.logger.debug(f"Saved commit retry state to {path}")
+                return
+            except Exception as e:
+                self.logger.warning(f"Could not save state to {path}: {e}")
+
+        # If all paths fail, log warning but continue (in-memory only)
+        self.logger.warning("Could not persist commit retry state to disk")
+
+    def _clean_stale_entries(self) -> None:
+        """Remove entries older than window_seconds"""
+        now = time.time()
+        cutoff = now - self._window_seconds
+
+        for hostname in list(self._failure_history.keys()):
+            self._failure_history[hostname] = [
+                (ts, error_type)
+                for ts, error_type in self._failure_history[hostname]
+                if ts >= cutoff
+            ]
+            # Remove hostname if no recent failures
+            if not self._failure_history[hostname]:
+                del self._failure_history[hostname]
+
+    def check(self, context: Dict[str, Any]) -> GuardrailResult:
+        """
+        Check if commit retry circuit breaker should trigger
+
+        Args:
+            context: Must contain 'hostname' key
+
+        Returns:
+            GuardrailResult indicating if operation should proceed
+        """
+        self._check_count += 1
+        self._last_check_time = datetime.now()
+
+        hostname = context.get('hostname')
+        if not hostname:
+            return GuardrailResult(
+                passed=True,
+                guardrail_name=self.name,
+                risk_level="low",
+                message="No hostname provided, allowing operation",
+                details={},
+                recommended_action="Provide hostname in context",
+                timestamp=self._last_check_time
+            )
+
+        # Thread-safe access to failure history
+        with self._lock:
+            self._clean_stale_entries()
+            recent_failures = self._failure_history.get(hostname, [])
+
+        failure_count = len(recent_failures)
+
+        if failure_count >= self._max_failures:
+            return GuardrailResult(
+                passed=False,
+                guardrail_name=self.name,
+                risk_level="high",
+                message=(
+                    f"Circuit breaker triggered: {failure_count} failures "
+                    f"in {self._window_seconds}s"
+                ),
+                details={
+                    'hostname': hostname,
+                    'failure_count': failure_count,
+                    'max_failures': self._max_failures,
+                    'window_seconds': self._window_seconds,
+                    'recent_failures': [
+                        {'timestamp': ts, 'error_type': error_type}
+                        for ts, error_type in recent_failures
+                    ]
+                },
+                recommended_action=(
+                    f"Wait {self._window_seconds}s or investigate "
+                    f"repeated failures on {hostname}"
+                ),
+                timestamp=self._last_check_time
+            )
+
+        return GuardrailResult(
+            passed=True,
+            guardrail_name=self.name,
+            risk_level="low",
+            message=(
+                f"Commit retry allowed "
+                f"({failure_count}/{self._max_failures})"
+            ),
+            details={
+                'hostname': hostname,
+                'failure_count': failure_count,
+                'max_failures': self._max_failures
+            },
+            recommended_action="Continue with operation",
+            timestamp=self._last_check_time
+        )
+
+    def record_failure(self, hostname: str, error_type: str) -> None:
+        """
+        Record a commit failure for circuit breaking
+
+        Args:
+            hostname: Router hostname
+            error_type: Type of error that occurred
+        """
+        with self._lock:
+            if hostname not in self._failure_history:
+                self._failure_history[hostname] = []
+
+            self._failure_history[hostname].append((time.time(), error_type))
+            self._clean_stale_entries()
+            self._save_state()
+
+        self.logger.warning(
+            f"Recorded commit failure for {hostname}: {error_type}"
+        )
 
 
 def initialize_default_guardrails(logger: Optional[logging.Logger] = None) -> List[GuardrailComponent]:
@@ -816,7 +1000,8 @@ def initialize_default_guardrails(logger: Optional[logging.Logger] = None) -> Li
         PrefixCountGuardrail(logger=logger),
         BogonPrefixGuardrail(logger=logger),
         ConcurrentOperationGuardrail(logger=logger),
-        SignalHandlingGuardrail(logger=logger)
+        SignalHandlingGuardrail(logger=logger),
+        CommitRetryGuardrail(logger=logger)
     ]
     
     # Register guardrails
