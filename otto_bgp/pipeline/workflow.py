@@ -337,7 +337,7 @@ class BGPPolicyPipeline:
                 if result.success:
                     filename = f"AS{result.as_number}_policy.txt"
                     output_path = output_dir / filename
-                    output_path.write_text(result.policy_config)
+                    output_path.write_text(result.policy_content)
                     output_files.append(str(output_path))
                     self.logger.debug(f"Created policy file: {output_path}")
         else:
@@ -349,7 +349,7 @@ class BGPPolicyPipeline:
             for result in self.policy_results:
                 if result.success:
                     combined_content += f"\n# AS{result.as_number}\n"
-                    combined_content += result.policy_config + "\n"
+                    combined_content += result.policy_content + "\n"
             
             output_path.write_text(combined_content)
             output_files.append(str(output_path))
@@ -762,7 +762,7 @@ class BGPPolicyPipeline:
                         policy_content += f"# INFO: Origin validation passed\n"
                     elif state == 'notfound':
                         policy_content += f"# INFO: No ROA found for this origin\n"
-                    policy_content += result.policy_config
+                    policy_content += result.policy_content
                     
                     # Save policy to router's directory
                     policy_file = output_dir / f"AS{as_number}_policy.txt"
