@@ -14,11 +14,12 @@ from typing import Optional
 # PyEZ imports with fallback for environments without PyEZ
 try:
     from jnpr.junos.utils.config import Config
+
     PYEZ_AVAILABLE = True
 except ImportError:
     PYEZ_AVAILABLE = False
     # Create dummy class for type hints
-    Config = type('Config', (), {})
+    Config = type("Config", (), {})
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +27,17 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CommitInfo:
     """Information about a committed configuration"""
+
     commit_id: str
     timestamp: str
     success: bool
     error_message: Optional[str] = None
 
 
-@dataclass 
+@dataclass
 class HealthResult:
     """Health check result data"""
+
     success: bool
     details: list
     error: Optional[str] = None
@@ -42,17 +45,21 @@ class HealthResult:
 
 class FinalizationStrategy(ABC):
     """Abstract base for mode-specific finalization strategies"""
-    
+
     @abstractmethod
-    def execute(self, cu: Config, commit_info: CommitInfo, health_result: HealthResult) -> None:
+    def execute(
+        self, cu: Config, commit_info: CommitInfo, health_result: HealthResult
+    ) -> None:
         """Execute the finalization strategy"""
         pass
 
 
 class AutoFinalizationStrategy(FinalizationStrategy):
     """Autonomous mode: auto-finalize after health checks"""
-    
-    def execute(self, cu: Config, commit_info: CommitInfo, health_result: HealthResult) -> None:
+
+    def execute(
+        self, cu: Config, commit_info: CommitInfo, health_result: HealthResult
+    ) -> None:
         """
         HEALTH CHECK DECISION MATRIX - Autonomous Mode:
         - Health checks PASS → Auto-finalize commit
@@ -67,15 +74,19 @@ class AutoFinalizationStrategy(FinalizationStrategy):
                 logger.error(f"Auto-finalization failed: {e}")
                 # Don't raise - let rollback timer handle it
         else:
-            logger.warning("Health checks failed - allowing rollback timer to handle (auto-rollback)")
+            logger.warning(
+                "Health checks failed - allowing rollback timer to handle (auto-rollback)"
+            )
             logger.warning(f"Health check failure details: {health_result.error}")
             # Do NOT call cu.rollback() here - let confirmed commit timer handle it
 
 
 class ManualFinalizationStrategy(FinalizationStrategy):
     """System mode: await manual confirmation"""
-    
-    def execute(self, cu: Config, commit_info: CommitInfo, health_result: HealthResult) -> None:
+
+    def execute(
+        self, cu: Config, commit_info: CommitInfo, health_result: HealthResult
+    ) -> None:
         """
         HEALTH CHECK DECISION MATRIX - System Mode:
         - Health checks PASS → NEVER auto-finalize; operator must confirm manually
@@ -84,20 +95,22 @@ class ManualFinalizationStrategy(FinalizationStrategy):
         """
         # Extract hold window from commit info (default 5 minutes)
         hold_window = 5  # This should come from SafetyConfiguration
-        
+
         logger.info(f"Changes committed with {hold_window}min rollback window")
         logger.info(f"Commit ID: {commit_info.commit_id}")
         logger.info("Manual confirmation required within rollback window")
-        
+
         print("\n🔔 MANUAL CONFIRMATION REQUIRED")
         print(f"Commit ID: {commit_info.commit_id}")
         print(f"Rollback window: {hold_window} minutes")
         print("To confirm: juniper-cli commit")
         print("To rollback: juniper-cli rollback")
-        
+
         if not health_result.success:
             logger.warning(f"Health check issues detected: {health_result.details}")
-            logger.info("Manual intervention required - system mode never auto-finalizes")
+            logger.info(
+                "Manual intervention required - system mode never auto-finalizes"
+            )
             print("\n⚠️  HEALTH CHECK ISSUES DETECTED:")
             if health_result.error:
                 print(f"   Error: {health_result.error}")
@@ -107,7 +120,7 @@ class ManualFinalizationStrategy(FinalizationStrategy):
 
 class SchedulingBehavior(ABC):
     """Abstract base for scheduling behavior"""
-    
+
     @abstractmethod
     def should_execute(self) -> bool:
         """Determine if execution should proceed"""
@@ -116,7 +129,7 @@ class SchedulingBehavior(ABC):
 
 class ScheduledBehavior(SchedulingBehavior):
     """Autonomous mode: scheduled execution"""
-    
+
     def should_execute(self) -> bool:
         """Always execute when scheduled (systemd timer controls timing)"""
         return True
@@ -124,7 +137,7 @@ class ScheduledBehavior(SchedulingBehavior):
 
 class InteractiveBehavior(SchedulingBehavior):
     """System mode: interactive execution"""
-    
+
     def should_execute(self) -> bool:
         """Always execute when manually invoked"""
         return True
@@ -132,30 +145,30 @@ class InteractiveBehavior(SchedulingBehavior):
 
 class ModeManager:
     """Manages mode-specific behavior without duplicating guardrails"""
-    
+
     def __init__(self, mode: str):
         self.mode = mode
-        self.is_autonomous = (mode == "autonomous")
+        self.is_autonomous = mode == "autonomous"
         logger.info(f"Mode manager initialized for {mode} mode")
-    
+
     def get_finalization_strategy(self) -> FinalizationStrategy:
         """Return appropriate finalization strategy"""
         if self.is_autonomous:
             return AutoFinalizationStrategy()
         else:
             return ManualFinalizationStrategy()
-    
+
     def get_scheduling_behavior(self) -> SchedulingBehavior:
         """Return appropriate scheduling behavior"""
         if self.is_autonomous:
             return ScheduledBehavior()
         else:
             return InteractiveBehavior()
-    
+
     def should_auto_finalize(self) -> bool:
         """Check if this mode should auto-finalize commits"""
         return self.is_autonomous
-    
+
     def get_mode_description(self) -> str:
         """Get human-readable mode description"""
         if self.is_autonomous:

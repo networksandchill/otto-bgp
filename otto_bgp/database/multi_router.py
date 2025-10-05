@@ -241,8 +241,11 @@ class MultiRouterDAO:
 
     # Rollout Target Operations
 
-    def enqueue_targets(self, stage_id: str,
-                       targets: List[Dict[str, Any]]) -> List[RolloutTarget]:
+    def enqueue_targets(
+        self,
+        stage_id: str,
+        targets: List[Dict[str, Any]],
+    ) -> List[RolloutTarget]:
         """Enqueue multiple targets for a stage"""
         result_targets = []
 
@@ -283,8 +286,12 @@ class MultiRouterDAO:
             logger.error(f"Failed to enqueue targets: {e}")
             raise DatabaseError(f"Failed to enqueue targets: {e}")
 
-    def update_target_state(self, target_id: str, state: str,
-                           last_error: Optional[str] = None) -> None:
+    def update_target_state(
+        self,
+        target_id: str,
+        state: str,
+        last_error: Optional[str] = None,
+    ) -> None:
         """Update target state and error message"""
         valid_states = {'pending', 'in_progress', 'completed', 'failed', 'skipped'}
         if state not in valid_states:
@@ -331,8 +338,11 @@ class MultiRouterDAO:
             logger.error(f"Failed to get pending targets: {e}")
             raise DatabaseError(f"Failed to get pending targets: {e}")
 
-    def get_targets(self, stage_id: str,
-                   state: Optional[str] = None) -> List[RolloutTarget]:
+    def get_targets(
+        self,
+        stage_id: str,
+        state: Optional[str] = None,
+    ) -> List[RolloutTarget]:
         """Get all targets for a stage, optionally filtered by state"""
         try:
             if state:
@@ -368,8 +378,12 @@ class MultiRouterDAO:
 
     # Rollout Event Operations
 
-    def record_event(self, run_id: str, event_type: str,
-                    payload: Optional[Dict[str, Any]] = None) -> RolloutEvent:
+    def record_event(
+        self,
+        run_id: str,
+        event_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> RolloutEvent:
         """Record an event for a rollout run"""
         payload_json = json.dumps(payload) if payload else None
 
@@ -401,8 +415,12 @@ class MultiRouterDAO:
             logger.error(f"Failed to record event: {e}")
             raise DatabaseError(f"Failed to record event: {e}")
 
-    def get_events(self, run_id: str, event_type: Optional[str] = None,
-                  limit: int = 100) -> List[RolloutEvent]:
+    def get_events(
+        self,
+        run_id: str,
+        event_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[RolloutEvent]:
         """Get events for a rollout run"""
         try:
             if event_type:

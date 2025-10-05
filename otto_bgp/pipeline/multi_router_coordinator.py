@@ -19,8 +19,11 @@ logger = logging.getLogger('otto_bgp.pipeline.multi_router_coordinator')
 class RolloutStrategy(Protocol):
     """Protocol for rollout strategy implementations"""
 
-    def plan_stages(self, devices: List[Dict[str, Any]],
-                   policies: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def plan_stages(
+        self,
+        devices: List[Dict[str, Any]],
+        policies: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
         """Plan rollout stages based on devices and policies
 
         Returns list of stage configurations with:
@@ -50,8 +53,11 @@ class BlastStrategy:
     def __init__(self, concurrency: int = 5):
         self.concurrency = concurrency
 
-    def plan_stages(self, devices: List[Dict[str, Any]],
-                   policies: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def plan_stages(
+        self,
+        devices: List[Dict[str, Any]],
+        policies: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
         """Create single stage with all devices"""
         targets = []
         for device in devices:
@@ -101,8 +107,11 @@ class PhasedStrategy:
         self.group_by = group_by
         self.concurrency = concurrency
 
-    def plan_stages(self, devices: List[Dict[str, Any]],
-                   policies: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def plan_stages(
+        self,
+        devices: List[Dict[str, Any]],
+        policies: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
         """Create stages grouped by specified attribute"""
         groups: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -155,8 +164,11 @@ class CanaryStrategy:
         self.canary_hostname = canary_hostname
         self.concurrency = concurrency
 
-    def plan_stages(self, devices: List[Dict[str, Any]],
-                   policies: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def plan_stages(
+        self,
+        devices: List[Dict[str, Any]],
+        policies: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
         """Create canary stage + main rollout stage"""
         canary_targets = []
         main_targets = []
@@ -214,8 +226,11 @@ class BatchResult:
 class MultiRouterCoordinator:
     """Orchestrates multi-router policy rollouts with staged execution"""
 
-    def __init__(self, dao: Optional[MultiRouterDAO] = None,
-                 config: Optional[CoordinatorConfig] = None):
+    def __init__(
+        self,
+        dao: Optional[MultiRouterDAO] = None,
+        config: Optional[CoordinatorConfig] = None,
+    ):
         """Initialize coordinator with DAO and configuration"""
         self.dao = dao or MultiRouterDAO()
         self.config = config or CoordinatorConfig()
@@ -258,10 +273,13 @@ class MultiRouterCoordinator:
             logger.error(f"Failed to hydrate run {run_id}: {e}")
             raise
 
-    def plan_run(self, devices: List[Dict[str, Any]],
-                policies: Dict[str, Any],
-                strategy: Optional[RolloutStrategy] = None,
-                initiated_by: Optional[str] = None) -> str:
+    def plan_run(
+        self,
+        devices: List[Dict[str, Any]],
+        policies: Dict[str, Any],
+        strategy: Optional[RolloutStrategy] = None,
+        initiated_by: Optional[str] = None,
+    ) -> str:
         """Plan a new rollout run with specified strategy
 
         Args:

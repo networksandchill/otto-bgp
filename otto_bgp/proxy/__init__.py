@@ -12,8 +12,4 @@ Components:
 
 from .irr_tunnel import IRRProxyManager, ProxyConfig, TunnelStatus
 
-__all__ = [
-    'IRRProxyManager',
-    'ProxyConfig', 
-    'TunnelStatus'
-]
+__all__ = ["IRRProxyManager", "ProxyConfig", "TunnelStatus"]

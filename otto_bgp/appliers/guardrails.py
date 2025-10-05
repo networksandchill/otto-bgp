@@ -23,13 +23,17 @@ from pathlib import Path
 
 # Critical guardrails that cannot be disabled
 CRITICAL_GUARDRAILS = {
-    'bogon_prefix', 'signal_handling', 'concurrent_operation', 'commit_retry'
+    "bogon_prefix",
+    "signal_handling",
+    "concurrent_operation",
+    "commit_retry",
 }
 
 
 @dataclass
 class GuardrailResult:
     """Result of a guardrail check"""
+
     passed: bool
     guardrail_name: str
     risk_level: str  # low, medium, high, critical
@@ -42,6 +46,7 @@ class GuardrailResult:
 @dataclass
 class GuardrailConfig:
     """Configuration for a guardrail component"""
+
     enabled: bool = True
     strictness_level: str = "medium"  # low, medium, high, strict
     custom_thresholds: Dict[str, Any] = None
@@ -57,8 +62,12 @@ class GuardrailComponent(ABC):
     are ALWAYS ACTIVE by default regardless of operational mode.
     """
 
-    def __init__(self, name: str, config: Optional[GuardrailConfig] = None,
-                 logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        name: str,
+        config: Optional[GuardrailConfig] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
         """
         Initialize guardrail component
 
@@ -109,11 +118,14 @@ class PrefixCountGuardrail(GuardrailComponent):
         "max_prefixes_per_as": 100000,
         "max_total_prefixes": 500000,
         "warning_threshold": 0.8,
-        "critical_threshold": 0.95
+        "critical_threshold": 0.95,
     }
 
-    def __init__(self, config: Optional[GuardrailConfig] = None,
-                 logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        config: Optional[GuardrailConfig] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
         super().__init__("prefix_count", config, logger)
 
     def check(self, context: Dict[str, Any]) -> GuardrailResult:
@@ -129,7 +141,7 @@ class PrefixCountGuardrail(GuardrailComponent):
         self._check_count += 1
         self._last_check_time = datetime.now()
 
-        policies = context.get('policies', [])
+        policies = context.get("policies", [])
         thresholds = self._get_thresholds()
 
         issues = []
@@ -142,7 +154,7 @@ class PrefixCountGuardrail(GuardrailComponent):
             total_prefixes += prefix_count
 
             # Check per-AS limits
-            if prefix_count > thresholds['max_prefixes_per_as']:
+            if prefix_count > thresholds["max_prefixes_per_as"]:
                 issues.append(
                     f"AS{policy.get('as_number', '?')} has "
                     f"{prefix_count} prefixes "
@@ -151,9 +163,9 @@ class PrefixCountGuardrail(GuardrailComponent):
                 risk_level = "critical"
 
         # Check total prefix count
-        max_total = thresholds['max_total_prefixes']
-        warning_level = int(max_total * thresholds['warning_threshold'])
-        critical_level = int(max_total * thresholds['critical_threshold'])
+        max_total = thresholds["max_total_prefixes"]
+        warning_level = int(max_total * thresholds["warning_threshold"])
+        critical_level = int(max_total * thresholds["critical_threshold"])
 
         if total_prefixes > max_total:
             issues.append(
@@ -175,12 +187,15 @@ class PrefixCountGuardrail(GuardrailComponent):
             if risk_level == "low":
                 risk_level = "medium"
 
-        passed = (len(issues) == 0 or
-                  (risk_level in ["low", "medium"] and
-                   self.config.strictness_level == "low"))
+        passed = len(issues) == 0 or (
+            risk_level in ["low", "medium"] and self.config.strictness_level == "low"
+        )
 
-        message = ("Prefix count validation passed" if passed else
-                   f"Prefix count issues: {'; '.join(issues)}")
+        message = (
+            "Prefix count validation passed"
+            if passed
+            else f"Prefix count issues: {'; '.join(issues)}"
+        )
         recommended_action = self._get_recommended_action(passed, risk_level)
 
         return GuardrailResult(
@@ -189,20 +204,21 @@ class PrefixCountGuardrail(GuardrailComponent):
             risk_level=risk_level,
             message=message,
             details={
-                'total_prefixes': total_prefixes,
-                'policy_count': len(policies),
-                'thresholds': thresholds,
-                'issues': issues
+                "total_prefixes": total_prefixes,
+                "policy_count": len(policies),
+                "thresholds": thresholds,
+                "issues": issues,
             },
             recommended_action=recommended_action,
-            timestamp=self._last_check_time
+            timestamp=self._last_check_time,
         )
 
     def _count_prefixes_in_policy(self, policy: Dict[str, Any]) -> int:
         """Count prefixes in a policy"""
         import re
-        content = policy.get('content', '')
-        prefixes = re.findall(r'(\d+\.\d+\.\d+\.\d+/\d+)', content)
+
+        content = policy.get("content", "")
+        prefixes = re.findall(r"(\d+\.\d+\.\d+\.\d+/\d+)", content)
         return len(prefixes)
 
     def _get_thresholds(self) -> Dict[str, Any]:
@@ -249,8 +265,11 @@ class BogonPrefixGuardrail(GuardrailComponent):
         "240.0.0.0/4",  # Reserved (RFC 1112)
     ]
 
-    def __init__(self, config: Optional[GuardrailConfig] = None,
-                 logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        config: Optional[GuardrailConfig] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
         super().__init__("bogon_prefix", config, logger)
 
     def check(self, context: Dict[str, Any]) -> GuardrailResult:
@@ -266,24 +285,27 @@ class BogonPrefixGuardrail(GuardrailComponent):
         self._check_count += 1
         self._last_check_time = datetime.now()
 
-        policies = context.get('policies', [])
+        policies = context.get("policies", [])
         bogon_detections = []
 
         for policy in policies:
-            as_number = policy.get('as_number', '?')
-            content = policy.get('content', '')
+            as_number = policy.get("as_number", "?")
+            content = policy.get("content", "")
 
             # Extract all prefixes from policy
             import re
-            prefixes = re.findall(r'(\d+\.\d+\.\d+\.\d+/\d+)', content)
+
+            prefixes = re.findall(r"(\d+\.\d+\.\d+\.\d+/\d+)", content)
 
             for prefix in prefixes:
                 if self._is_bogon_prefix(prefix):
-                    bogon_detections.append({
-                        'as_number': as_number,
-                        'prefix': prefix,
-                        'type': self._classify_bogon_type(prefix)
-                    })
+                    bogon_detections.append(
+                        {
+                            "as_number": as_number,
+                            "prefix": prefix,
+                            "type": self._classify_bogon_type(prefix),
+                        }
+                    )
 
         # Determine risk level and pass/fail
         if not bogon_detections:
@@ -295,8 +317,7 @@ class BogonPrefixGuardrail(GuardrailComponent):
             if self.config.strictness_level in ["high", "strict"]:
                 risk_level = "high"
                 passed = False
-            elif any(d['type'] in ['reserved', 'multicast']
-                     for d in bogon_detections):
+            elif any(d["type"] in ["reserved", "multicast"] for d in bogon_detections):
                 risk_level = "critical"
                 passed = False
             else:
@@ -307,8 +328,7 @@ class BogonPrefixGuardrail(GuardrailComponent):
                 f"AS{d['as_number']}:{d['prefix']} ({d['type']})"
                 for d in bogon_detections
             ]
-            message = (f"Bogon prefixes detected: "
-                       f"{'; '.join(detected_prefixes)}")
+            message = f"Bogon prefixes detected: {'; '.join(detected_prefixes)}"
 
         recommended_action = self._get_bogon_action(
             passed, risk_level, bogon_detections
@@ -320,12 +340,12 @@ class BogonPrefixGuardrail(GuardrailComponent):
             risk_level=risk_level,
             message=message,
             details={
-                'bogon_count': len(bogon_detections),
-                'detections': bogon_detections,
-                'policy_count': len(policies)
+                "bogon_count": len(bogon_detections),
+                "detections": bogon_detections,
+                "policy_count": len(policies),
             },
             recommended_action=recommended_action,
-            timestamp=self._last_check_time
+            timestamp=self._last_check_time,
         )
 
     def _is_bogon_prefix(self, prefix: str) -> bool:
@@ -342,9 +362,9 @@ class BogonPrefixGuardrail(GuardrailComponent):
         """Simple prefix overlap check"""
         # Simplified implementation - production would use ipaddress module
         try:
-            prefix_net = prefix.split('/')[0].split('.')
-            range_net = range_prefix.split('/')[0].split('.')
-            range_len = int(range_prefix.split('/')[1])
+            prefix_net = prefix.split("/")[0].split(".")
+            range_net = range_prefix.split("/")[0].split(".")
+            range_len = int(range_prefix.split("/")[1])
 
             # Compare octets based on prefix length
             octets_to_check = (range_len + 7) // 8
@@ -357,30 +377,32 @@ class BogonPrefixGuardrail(GuardrailComponent):
 
     def _classify_bogon_type(self, prefix: str) -> str:
         """Classify type of bogon prefix"""
-        prefix_net = prefix.split('/')[0]
+        prefix_net = prefix.split("/")[0]
 
-        if (prefix_net.startswith('10.') or
-                prefix_net.startswith('192.168.') or
-                prefix_net.startswith('172.')):
+        if (
+            prefix_net.startswith("10.")
+            or prefix_net.startswith("192.168.")
+            or prefix_net.startswith("172.")
+        ):
             return "private"
-        elif prefix_net.startswith('224.'):
+        elif prefix_net.startswith("224."):
             return "multicast"
-        elif prefix_net.startswith('127.'):
+        elif prefix_net.startswith("127."):
             return "loopback"
-        elif prefix_net.startswith('169.254.'):
+        elif prefix_net.startswith("169.254."):
             return "link-local"
         else:
             return "reserved"
 
     def _get_bogon_action(
-            self, passed: bool, risk_level: str,
-            detections: List[Dict]) -> str:
+        self, passed: bool, risk_level: str, detections: List[Dict]
+    ) -> str:
         """Get recommended action for bogon detections"""
         if passed:
             return "Safe to proceed - no bogon prefixes detected"
         elif risk_level == "critical":
             return "DO NOT PROCEED - Remove reserved/multicast prefixes"
-        elif any(d['type'] == 'private' for d in detections):
+        elif any(d["type"] == "private" for d in detections):
             return "Review private prefix announcements - may be intentional"
         else:
             return "Review detected prefixes before proceeding"
@@ -394,8 +416,11 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
     at a time to prevent conflicts and ensure consistent state.
     """
 
-    def __init__(self, config: Optional[GuardrailConfig] = None,
-                 logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        config: Optional[GuardrailConfig] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
         super().__init__("concurrent_operation", config, logger)
         self.lock_file_path = Path("/tmp/otto-bgp.lock")
         self._lock_acquired = False
@@ -417,7 +442,7 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
         self._check_count += 1
         self._last_check_time = datetime.now()
 
-        operation = context.get('operation', 'unknown')
+        operation = context.get("operation", "unknown")
 
         # Check for existing lock file
         concurrent_process = self._check_concurrent_process()
@@ -425,16 +450,16 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
         if concurrent_process:
             risk_level = "high"
             passed = False
-            message = (f"Concurrent Otto BGP operation detected: "
-                       f"PID {concurrent_process}")
+            message = (
+                f"Concurrent Otto BGP operation detected: PID {concurrent_process}"
+            )
             details = {
-                'concurrent_pid': concurrent_process,
-                'lock_file': str(self.lock_file_path),
-                'current_operation': operation
+                "concurrent_pid": concurrent_process,
+                "lock_file": str(self.lock_file_path),
+                "current_operation": operation,
             }
             recommended_action = (
-                "Wait for concurrent operation to complete or "
-                "terminate it if stale"
+                "Wait for concurrent operation to complete or terminate it if stale"
             )
         else:
             # Try to acquire lock
@@ -444,9 +469,9 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
                 passed = True
                 message = "No concurrent operations detected - lock acquired"
                 details = {
-                    'lock_acquired': True,
-                    'lock_file': str(self.lock_file_path),
-                    'current_operation': operation
+                    "lock_acquired": True,
+                    "lock_file": str(self.lock_file_path),
+                    "current_operation": operation,
                 }
                 recommended_action = "Safe to proceed with operation"
             else:
@@ -454,13 +479,11 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
                 passed = False
                 message = "Failed to acquire operation lock"
                 details = {
-                    'lock_acquired': False,
-                    'lock_file': str(self.lock_file_path),
-                    'current_operation': operation
+                    "lock_acquired": False,
+                    "lock_file": str(self.lock_file_path),
+                    "current_operation": operation,
                 }
-                recommended_action = (
-                    "Retry operation or check for stale lock file"
-                )
+                recommended_action = "Retry operation or check for stale lock file"
 
         return GuardrailResult(
             passed=passed,
@@ -469,7 +492,7 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
             message=message,
             details=details,
             recommended_action=recommended_action,
-            timestamp=self._last_check_time
+            timestamp=self._last_check_time,
         )
 
     def _check_concurrent_process(self) -> Optional[int]:
@@ -484,6 +507,7 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
 
             # Check if process is still running
             import os
+
             try:
                 os.kill(pid, 0)  # Signal 0 just checks if process exists
                 return pid
@@ -508,12 +532,10 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
         """
         try:
             # Create or open lock file (race is handled by fcntl)
-            self._lock_fd = open(self.lock_file_path, 'w')
+            self._lock_fd = open(self.lock_file_path, "w")
 
             # Atomic exclusive lock - fails if another process has it
-            fcntl.flock(
-                self._lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB
-            )
+            fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
             # Lock acquired successfully - write PID and metadata
             self._lock_fd.write(f"{os.getpid()}\n")
@@ -527,8 +549,7 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
 
             thread_id = threading.current_thread().ident
             self.logger.debug(
-                f"Acquired exclusive lock (PID {os.getpid()}, "
-                f"thread {thread_id})"
+                f"Acquired exclusive lock (PID {os.getpid()}, thread {thread_id})"
             )
             return True
 
@@ -543,14 +564,10 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
 
             # Check if lock is held (EAGAIN/EACCES) vs other errors
             if e.errno in (11, 13):  # EAGAIN or EACCES
-                self.logger.debug(
-                    f"Lock held by another process (errno {e.errno})"
-                )
+                self.logger.debug(f"Lock held by another process (errno {e.errno})")
                 return False
             else:
-                self.logger.error(
-                    f"Failed to acquire lock due to system error: {e}"
-                )
+                self.logger.error(f"Failed to acquire lock due to system error: {e}")
                 return False
 
         except Exception as e:
@@ -586,12 +603,8 @@ class ConcurrentOperationGuardrail(GuardrailComponent):
 
                 # Log lock release with timing info
                 if self._lock_creation_time:
-                    lock_duration = (
-                        time.time() - self._lock_creation_time
-                    )
-                    self.logger.debug(
-                        f"Released lock after {lock_duration:.2f}s"
-                    )
+                    lock_duration = time.time() - self._lock_creation_time
+                    self.logger.debug(f"Released lock after {lock_duration:.2f}s")
 
             # Clean up lock file
             if self.lock_file_path.exists():
@@ -621,8 +634,11 @@ class SignalHandlingGuardrail(GuardrailComponent):
     rollback and cleanup before termination.
     """
 
-    def __init__(self, config: Optional[GuardrailConfig] = None,
-                 logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        config: Optional[GuardrailConfig] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
         super().__init__("signal_handling", config, logger)
         self._rollback_callbacks: List[callable] = []
         self._signal_handlers_installed = False
@@ -668,16 +684,14 @@ class SignalHandlingGuardrail(GuardrailComponent):
         if not self._signal_handlers_installed:
             self.install_signal_handlers()
 
-        passed = (self._signal_handlers_installed and
-                  not self._shutdown_event.is_set())
+        passed = self._signal_handlers_installed and not self._shutdown_event.is_set()
         risk_level = "low" if passed else "medium"
-        message = ("Signal handlers ready" if passed else
-                   "Signal handling not ready")
+        message = "Signal handlers ready" if passed else "Signal handling not ready"
 
         details = {
-            'handlers_installed': self._signal_handlers_installed,
-            'rollback_callbacks': len(self._rollback_callbacks),
-            'shutdown_initiated': self._shutdown_event.is_set()
+            "handlers_installed": self._signal_handlers_installed,
+            "rollback_callbacks": len(self._rollback_callbacks),
+            "shutdown_initiated": self._shutdown_event.is_set(),
         }
 
         recommended_action = (
@@ -693,7 +707,7 @@ class SignalHandlingGuardrail(GuardrailComponent):
             message=message,
             details=details,
             recommended_action=recommended_action,
-            timestamp=self._last_check_time
+            timestamp=self._last_check_time,
         )
 
     def _signal_handler(self, signum: int, frame):
@@ -710,13 +724,12 @@ class SignalHandlingGuardrail(GuardrailComponent):
         import threading
         import time
 
-        signal_name = (signal.Signals(signum).name
-                       if hasattr(signal, 'Signals') else str(signum))
+        signal_name = (
+            signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+        )
         thread_id = threading.current_thread().ident
 
-        self.logger.debug(
-            f"Signal {signal_name} received by thread {thread_id}"
-        )
+        self.logger.debug(f"Signal {signal_name} received by thread {thread_id}")
 
         # Thread-safe shutdown coordination with atomic check-and-set
         with self._shutdown_lock:
@@ -728,9 +741,7 @@ class SignalHandlingGuardrail(GuardrailComponent):
                     f"(thread {thread_id}) - "
                     f"shutdown already in progress"
                 )
-                raise KeyboardInterrupt(
-                    f"Force exit on repeated {signal_name}"
-                )
+                raise KeyboardInterrupt(f"Force exit on repeated {signal_name}")
 
             # Atomically set shutdown state - first signal wins
             self._shutdown_event.set()
@@ -746,7 +757,7 @@ class SignalHandlingGuardrail(GuardrailComponent):
         rollback_thread = threading.Thread(
             target=self._perform_graceful_rollback,
             args=(signum, shutdown_start_time, thread_id),
-            name=f"otto-rollback-{signal_name}-{thread_id}"
+            name=f"otto-rollback-{signal_name}-{thread_id}",
         )
         rollback_thread.daemon = True
         rollback_thread.start()
@@ -760,9 +771,7 @@ class SignalHandlingGuardrail(GuardrailComponent):
             )
 
         # Signal cleanup complete - let main handle exit
-        self.logger.info(
-            f"Signal handler cleanup complete for {signal_name}"
-        )
+        self.logger.info(f"Signal handler cleanup complete for {signal_name}")
         raise KeyboardInterrupt(f"Terminated by {signal_name}")
 
     def _reload_handler(self, signum: int, frame):
@@ -772,8 +781,11 @@ class SignalHandlingGuardrail(GuardrailComponent):
         # For now, just log the event
 
     def _perform_graceful_rollback(
-            self, signum: int, shutdown_start_time: float = None,
-            initiating_thread_id: int = None):
+        self,
+        signum: int,
+        shutdown_start_time: float = None,
+        initiating_thread_id: int = None,
+    ):
         """
         Perform graceful rollback with enhanced logging for debugging.
 
@@ -807,12 +819,10 @@ class SignalHandlingGuardrail(GuardrailComponent):
             try:
                 callback_num = i + 1
                 total = len(self._rollback_callbacks)
-                self.logger.info(
-                    f"Executing rollback callback {callback_num}/{total}"
-                )
+                self.logger.info(f"Executing rollback callback {callback_num}/{total}")
                 callback()
             except Exception as e:
-                self.logger.error(f"Rollback callback {i+1} failed: {e}")
+                self.logger.error(f"Rollback callback {i + 1} failed: {e}")
                 rollback_success = False
 
         if rollback_success:
@@ -836,9 +846,7 @@ def get_guardrail(name: str) -> Optional[GuardrailComponent]:
     """Get guardrail by name with validation"""
     if name not in _GUARDRAIL_REGISTRY:
         available = list(_GUARDRAIL_REGISTRY.keys())
-        raise ValueError(
-            f"Unknown guardrail name: {name}. Available: {available}"
-        )
+        raise ValueError(f"Unknown guardrail name: {name}. Available: {available}")
     return _GUARDRAIL_REGISTRY[name]
 
 
@@ -859,9 +867,8 @@ def validate_guardrail_health() -> Dict[str, bool]:
     for name, guardrail in _GUARDRAIL_REGISTRY.items():
         try:
             # Basic health check - ensure guardrail can be instantiated
-            health_status[name] = (
-                hasattr(guardrail, 'check') and
-                callable(guardrail.check)
+            health_status[name] = hasattr(guardrail, "check") and callable(
+                guardrail.check
             )
         except Exception:
             health_status[name] = False
@@ -880,7 +887,7 @@ class CommitRetryGuardrail(GuardrailComponent):
     def __init__(
         self,
         config: Optional[GuardrailConfig] = None,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
     ):
         super().__init__("commit_retry", config, logger)
         self._lock = threading.Lock()
@@ -889,7 +896,7 @@ class CommitRetryGuardrail(GuardrailComponent):
         self._window_seconds = 300
         self._persistence_paths = [
             Path("/var/lib/otto-bgp/guardrails/commit_retry.json"),
-            Path.home() / ".local/share/otto-bgp/guardrails/commit_retry.json"
+            Path.home() / ".local/share/otto-bgp/guardrails/commit_retry.json",
         ]
         self._load_state()
 
@@ -900,27 +907,22 @@ class CommitRetryGuardrail(GuardrailComponent):
         for path in self._persistence_paths:
             try:
                 if path.exists():
-                    with open(path, 'r') as f:
+                    with open(path, "r") as f:
                         data = json.load(f)
                         # Convert timestamps back to floats
                         self._failure_history = {
                             hostname: [
-                                (float(ts), error_type)
-                                for ts, error_type in failures
+                                (float(ts), error_type) for ts, error_type in failures
                             ]
                             for hostname, failures in data.items()
                         }
                     self.logger.debug(f"Loaded commit retry state from {path}")
                     return
             except Exception as e:
-                self.logger.warning(
-                    f"Could not load state from {path}: {e}"
-                )
+                self.logger.warning(f"Could not load state from {path}: {e}")
 
         # No persistent state found, using in-memory only
-        self.logger.debug(
-            "No persistent state found, using in-memory tracking"
-        )
+        self.logger.debug("No persistent state found, using in-memory tracking")
 
     def _save_state(self) -> None:
         """Save failure history to persistent storage"""
@@ -937,7 +939,7 @@ class CommitRetryGuardrail(GuardrailComponent):
         for path in self._persistence_paths:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                with open(path, 'w') as f:
+                with open(path, "w") as f:
                     json.dump(data, f, indent=2)
                 self.logger.debug(f"Saved commit retry state to {path}")
                 return
@@ -975,7 +977,7 @@ class CommitRetryGuardrail(GuardrailComponent):
         self._check_count += 1
         self._last_check_time = datetime.now()
 
-        hostname = context.get('hostname')
+        hostname = context.get("hostname")
         if not hostname:
             return GuardrailResult(
                 passed=True,
@@ -984,7 +986,7 @@ class CommitRetryGuardrail(GuardrailComponent):
                 message="No hostname provided, allowing operation",
                 details={},
                 recommended_action="Provide hostname in context",
-                timestamp=self._last_check_time
+                timestamp=self._last_check_time,
             )
 
         # Thread-safe access to failure history
@@ -1004,37 +1006,34 @@ class CommitRetryGuardrail(GuardrailComponent):
                     f"in {self._window_seconds}s"
                 ),
                 details={
-                    'hostname': hostname,
-                    'failure_count': failure_count,
-                    'max_failures': self._max_failures,
-                    'window_seconds': self._window_seconds,
-                    'recent_failures': [
-                        {'timestamp': ts, 'error_type': error_type}
+                    "hostname": hostname,
+                    "failure_count": failure_count,
+                    "max_failures": self._max_failures,
+                    "window_seconds": self._window_seconds,
+                    "recent_failures": [
+                        {"timestamp": ts, "error_type": error_type}
                         for ts, error_type in recent_failures
-                    ]
+                    ],
                 },
                 recommended_action=(
                     f"Wait {self._window_seconds}s or investigate "
                     f"repeated failures on {hostname}"
                 ),
-                timestamp=self._last_check_time
+                timestamp=self._last_check_time,
             )
 
         return GuardrailResult(
             passed=True,
             guardrail_name=self.name,
             risk_level="low",
-            message=(
-                f"Commit retry allowed "
-                f"({failure_count}/{self._max_failures})"
-            ),
+            message=(f"Commit retry allowed ({failure_count}/{self._max_failures})"),
             details={
-                'hostname': hostname,
-                'failure_count': failure_count,
-                'max_failures': self._max_failures
+                "hostname": hostname,
+                "failure_count": failure_count,
+                "max_failures": self._max_failures,
             },
             recommended_action="Continue with operation",
-            timestamp=self._last_check_time
+            timestamp=self._last_check_time,
         )
 
     def record_failure(self, hostname: str, error_type: str) -> None:
@@ -1053,14 +1052,12 @@ class CommitRetryGuardrail(GuardrailComponent):
             self._clean_stale_entries()
             self._save_state()
 
-        self.logger.warning(
-            f"Recorded commit failure for {hostname}: {error_type}"
-        )
+        self.logger.warning(f"Recorded commit failure for {hostname}: {error_type}")
 
 
 def initialize_default_guardrails(
-        logger: Optional[logging.Logger] = None
-        ) -> List[GuardrailComponent]:
+    logger: Optional[logging.Logger] = None,
+) -> List[GuardrailComponent]:
     """
     Initialize default guardrail components
 
@@ -1075,7 +1072,7 @@ def initialize_default_guardrails(
         BogonPrefixGuardrail(logger=logger),
         ConcurrentOperationGuardrail(logger=logger),
         SignalHandlingGuardrail(logger=logger),
-        CommitRetryGuardrail(logger=logger)
+        CommitRetryGuardrail(logger=logger),
     ]
 
     # Register guardrails
@@ -1086,34 +1083,30 @@ def initialize_default_guardrails(
 
 
 def validate_guardrail_config(
-        enabled_names: List[str],
-        env_overrides: Optional[Dict[str, Any]] = None
-        ) -> List[str]:
+    enabled_names: List[str], env_overrides: Optional[Dict[str, Any]] = None
+) -> List[str]:
     """Validate guardrail configuration: names and parameter ranges"""
     errors = []
     # 1) Critical guardrails present
     for critical in CRITICAL_GUARDRAILS:
         if critical not in enabled_names:
-            errors.append(
-                f"Critical guardrail '{critical}' missing from "
-                f"configuration"
-            )
+            errors.append(f"Critical guardrail '{critical}' missing from configuration")
     # 2) Names exist in registry
     for name in enabled_names:
         if name not in _GUARDRAIL_REGISTRY:
-            errors.append(
-                f"Unknown guardrail '{name}' in configuration"
-            )
+            errors.append(f"Unknown guardrail '{name}' in configuration")
     # 3) Parameter ranges for prefix_count overrides
     if env_overrides:
-        pco = (env_overrides.get('prefix_count') or {}
-               if isinstance(env_overrides, dict) else {})
-        th = (pco.get('custom_thresholds') or {}
-              if isinstance(pco, dict) else {})
-        warn = th.get('warning_threshold')
-        crit = th.get('critical_threshold')
-        mtotal = th.get('max_total_prefixes')
-        per_as = th.get('max_prefixes_per_as')
+        pco = (
+            env_overrides.get("prefix_count") or {}
+            if isinstance(env_overrides, dict)
+            else {}
+        )
+        th = pco.get("custom_thresholds") or {} if isinstance(pco, dict) else {}
+        warn = th.get("warning_threshold")
+        crit = th.get("critical_threshold")
+        mtotal = th.get("max_total_prefixes")
+        per_as = th.get("max_prefixes_per_as")
 
         def _bad_ratio(v):
             return v is not None and not (
@@ -1122,16 +1115,13 @@ def validate_guardrail_config(
 
         def _bad_posint(v):
             return v is not None and not (isinstance(v, int) and v > 0)
+
         if _bad_ratio(warn):
             errors.append("warning_threshold must be in (0.0, 1.0]")
         if _bad_ratio(crit):
             errors.append("critical_threshold must be in (0.0, 1.0]")
-        if (warn is not None and crit is not None and
-                float(warn) >= float(crit)):
-            errors.append(
-                "warning_threshold must be less than "
-                "critical_threshold"
-            )
+        if warn is not None and crit is not None and float(warn) >= float(crit):
+            errors.append("warning_threshold must be less than critical_threshold")
         if _bad_posint(mtotal):
             errors.append("max_total_prefixes must be a positive integer")
         if _bad_posint(per_as):

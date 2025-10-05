@@ -16,6 +16,7 @@ from dataclasses import dataclass
 @dataclass
 class AdaptationResult:
     """Result of policy adaptation"""
+
     success: bool
     router_hostname: str
     policies_adapted: int
@@ -42,11 +43,12 @@ class PolicyAdapter:
         self.logger = logger or logging.getLogger(__name__)
 
     def adapt_policies_for_router(
-            self,
-            router_hostname: str,
-            policies: List[Dict[str, str]],
-            bgp_groups: Dict[str, List[int]],
-            policy_style: str = "prefix-list") -> AdaptationResult:
+        self,
+        router_hostname: str,
+        policies: List[Dict[str, str]],
+        bgp_groups: Dict[str, List[int]],
+        policy_style: str = "prefix-list",
+    ) -> AdaptationResult:
         """
         Adapt policies for specific router and BGP groups
 
@@ -59,19 +61,13 @@ class PolicyAdapter:
         Returns:
             AdaptationResult with adapted configuration
         """
-        self.logger.info(
-            f"Adapting {len(policies)} policies for {router_hostname}"
-        )
+        self.logger.info(f"Adapting {len(policies)} policies for {router_hostname}")
 
         try:
             if policy_style == "prefix-list":
-                config = self._generate_prefix_list_config(
-                    policies, bgp_groups
-                )
+                config = self._generate_prefix_list_config(policies, bgp_groups)
             elif policy_style == "policy-statement":
-                config = self._generate_policy_statement_config(
-                    policies, bgp_groups
-                )
+                config = self._generate_policy_statement_config(policies, bgp_groups)
             else:
                 raise ValueError(f"Unsupported policy style: {policy_style}")
 
@@ -85,7 +81,7 @@ class PolicyAdapter:
                 router_hostname=router_hostname,
                 policies_adapted=len(policies),
                 bgp_groups_configured=groups_configured,
-                configuration=config
+                configuration=config,
             )
 
             groups_count = len(bgp_groups)
@@ -101,13 +97,12 @@ class PolicyAdapter:
                 router_hostname=router_hostname,
                 policies_adapted=0,
                 bgp_groups_configured={},
-                error_message=str(e)
+                error_message=str(e),
             )
 
     def _generate_prefix_list_config(
-            self,
-            policies: List[Dict[str, str]],
-            bgp_groups: Dict[str, List[int]]) -> str:
+        self, policies: List[Dict[str, str]], bgp_groups: Dict[str, List[int]]
+    ) -> str:
         """
         Generate prefix-list based configuration
 
@@ -124,18 +119,19 @@ class PolicyAdapter:
         lines.append("policy-options {")
 
         for policy in policies:
-            content = policy.get('content', '')
+            content = policy.get("content", "")
 
             # Extract prefix-list content
             import re
-            pattern = r'prefix-list\s+(\S+)\s*{([^}]*)}'
+
+            pattern = r"prefix-list\s+(\S+)\s*{([^}]*)}"
             match = re.search(pattern, content, re.DOTALL)
             if match:
                 list_name = match.group(1)
                 list_content = match.group(2)
 
                 lines.append(f"    prefix-list {list_name} {{")
-                for line in list_content.strip().split('\n'):
+                for line in list_content.strip().split("\n"):
                     if line.strip():
                         lines.append(f"        {line.strip()}")
                 lines.append("    }")
@@ -154,11 +150,11 @@ class PolicyAdapter:
             import_policies = []
             for as_num in as_numbers:
                 # Check if we have a policy for this AS
-                if any(p.get('as_number') == as_num for p in policies):
+                if any(p.get("as_number") == as_num for p in policies):
                     import_policies.append(f"AS{as_num}")
 
             if import_policies:
-                policy_list = ' '.join(import_policies)
+                policy_list = " ".join(import_policies)
                 lines.append(f"            import [ {policy_list} ];")
 
             lines.append("        }")
@@ -166,12 +162,11 @@ class PolicyAdapter:
         lines.append("    }")
         lines.append("}")
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def _generate_policy_statement_config(
-            self,
-            policies: List[Dict[str, str]],
-            bgp_groups: Dict[str, List[int]]) -> str:
+        self, policies: List[Dict[str, str]], bgp_groups: Dict[str, List[int]]
+    ) -> str:
         """
         Generate policy-statement based configuration
 
@@ -188,25 +183,26 @@ class PolicyAdapter:
 
         # First, create prefix-lists
         for policy in policies:
-            content = policy.get('content', '')
+            content = policy.get("content", "")
 
             # Extract prefix-list
             import re
-            pattern = r'prefix-list\s+(\S+)\s*{([^}]*)}'
+
+            pattern = r"prefix-list\s+(\S+)\s*{([^}]*)}"
             match = re.search(pattern, content, re.DOTALL)
             if match:
                 list_name = match.group(1)
                 list_content = match.group(2)
 
                 lines.append(f"    prefix-list {list_name} {{")
-                for line in list_content.strip().split('\n'):
+                for line in list_content.strip().split("\n"):
                     if line.strip():
                         lines.append(f"        {line.strip()}")
                 lines.append("    }")
 
         # Create policy-statements
         for policy in policies:
-            as_number = policy.get('as_number', 0)
+            as_number = policy.get("as_number", 0)
 
             lines.append(f"    policy-statement IMPORT-AS{as_number} {{")
             lines.append("        term accept-prefixes {")
@@ -222,13 +218,14 @@ class PolicyAdapter:
 
         lines.append("}")
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def create_bgp_import_chain(
-            self,
-            group_name: str,
-            as_numbers: List[int],
-            existing_policies: List[str] = None) -> str:
+        self,
+        group_name: str,
+        as_numbers: List[int],
+        existing_policies: List[str] = None,
+    ) -> str:
         """
         Create BGP import policy chain for a group
 
@@ -267,29 +264,27 @@ class PolicyAdapter:
 
         # Check for empty prefix-lists
         import re
-        empty_pattern = r'prefix-list\s+(\S+)\s*{\s*}'
+
+        empty_pattern = r"prefix-list\s+(\S+)\s*{\s*}"
         prefix_lists = re.findall(empty_pattern, configuration)
         for empty_list in prefix_lists:
             issues.append(f"Empty prefix-list: {empty_list}")
 
         # Check for duplicate prefix-lists
-        all_lists = re.findall(r'prefix-list\s+(\S+)', configuration)
-        duplicates = [
-            pl for pl in set(all_lists) if all_lists.count(pl) > 1
-        ]
+        all_lists = re.findall(r"prefix-list\s+(\S+)", configuration)
+        duplicates = [pl for pl in set(all_lists) if all_lists.count(pl) > 1]
         for dup in duplicates:
             issues.append(f"Duplicate prefix-list definition: {dup}")
 
         # Check for missing policy-statements referenced in import
-        imports = re.findall(r'import\s+\[([^\]]+)\]', configuration)
+        imports = re.findall(r"import\s+\[([^\]]+)\]", configuration)
         for import_line in imports:
             policies = import_line.split()
             for policy in policies:
                 if f"policy-statement {policy}" not in configuration:
                     # Only warn if it looks like an AS policy
-                    is_as_policy = (
-                        policy.startswith("AS") or
-                        policy.startswith("IMPORT-AS")
+                    is_as_policy = policy.startswith("AS") or policy.startswith(
+                        "IMPORT-AS"
                     )
                     if is_as_policy:
                         msg = f"Referenced policy not defined: {policy}"
@@ -298,10 +293,8 @@ class PolicyAdapter:
         return issues
 
     def merge_with_existing(
-            self,
-            new_config: str,
-            existing_config: str,
-            merge_strategy: str = "replace") -> str:
+        self, new_config: str, existing_config: str, merge_strategy: str = "replace"
+    ) -> str:
         """
         Merge new configuration with existing router config
 
@@ -346,7 +339,7 @@ class PolicyAdapter:
 
         # Get existing prefix-lists
         existing_lists = {}
-        pattern = r'prefix-list\s+(\S+)\s*{([^}]*)}'
+        pattern = r"prefix-list\s+(\S+)\s*{([^}]*)}"
         for match in re.finditer(pattern, existing_config, re.DOTALL):
             list_name = match.group(1)
             existing_lists[list_name] = match.group(2)
@@ -364,14 +357,12 @@ class PolicyAdapter:
         merged_lines.append("policy-options {")
 
         for list_name, content in all_lists.items():
-            merged_lines.append(
-                f"    replace: prefix-list {list_name} {{"
-            )
-            for line in content.strip().split('\n'):
+            merged_lines.append(f"    replace: prefix-list {list_name} {{")
+            for line in content.strip().split("\n"):
                 if line.strip():
                     merged_lines.append(f"        {line.strip()}")
             merged_lines.append("    }")
 
         merged_lines.append("}")
 
-        return '\n'.join(merged_lines)
+        return "\n".join(merged_lines)

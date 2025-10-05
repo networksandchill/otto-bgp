@@ -16,22 +16,22 @@ import logging
 class OttoExitCodes(IntEnum):
     """
     Standardized exit codes for Otto BGP operations
-    
+
     Exit codes follow UNIX conventions:
     - 0: Success
-    - 1-2: User/configuration errors  
+    - 1-2: User/configuration errors
     - 3-63: Application-specific errors
     - 64-113: System errors (sysexits.h convention)
     - 128+: Signal termination
     """
-    
+
     # Success
     SUCCESS = 0
-    
+
     # User/Configuration Errors (1-2)
     GENERAL_ERROR = 1
     INVALID_USAGE = 2
-    
+
     # Otto BGP Application Errors (3-63)
     SAFETY_CHECK_FAILED = 3
     NETCONF_CONNECTION_FAILED = 4
@@ -53,27 +53,27 @@ class OttoExitCodes(IntEnum):
     CONCURRENT_OPERATION_CONFLICT = 20
     VALIDATION_FAILED = 21
     UNEXPECTED_ERROR = 22
-    
+
     # System Errors (64-113, following sysexits.h)
-    USAGE_ERROR = 64           # Command line usage error
-    DATA_ERROR = 65            # Data format error
-    NO_INPUT = 66              # Cannot open input
-    NO_USER = 67               # Addressee unknown
-    NO_HOST = 68               # Host name unknown
-    UNAVAILABLE = 69           # Service unavailable
-    SOFTWARE_ERROR = 70        # Internal software error
-    OS_ERROR = 71              # System error (e.g., can't fork)
-    OS_FILE = 72               # Critical OS file missing
-    CANT_CREATE = 73           # Can't create (user) output file
-    IO_ERROR = 74              # Input/output error
-    TEMP_FAIL = 75             # Temp failure; user is invited to retry
-    PROTOCOL_ERROR = 76        # Remote error in protocol
-    NO_PERMISSION = 77         # Permission denied
-    CONFIG_ERROR = 78          # Configuration error
-    
+    USAGE_ERROR = 64  # Command line usage error
+    DATA_ERROR = 65  # Data format error
+    NO_INPUT = 66  # Cannot open input
+    NO_USER = 67  # Addressee unknown
+    NO_HOST = 68  # Host name unknown
+    UNAVAILABLE = 69  # Service unavailable
+    SOFTWARE_ERROR = 70  # Internal software error
+    OS_ERROR = 71  # System error (e.g., can't fork)
+    OS_FILE = 72  # Critical OS file missing
+    CANT_CREATE = 73  # Can't create (user) output file
+    IO_ERROR = 74  # Input/output error
+    TEMP_FAIL = 75  # Temp failure; user is invited to retry
+    PROTOCOL_ERROR = 76  # Remote error in protocol
+    NO_PERMISSION = 77  # Permission denied
+    CONFIG_ERROR = 78  # Configuration error
+
     # Signal Termination (128+)
     SIGNAL_BASE = 128
-    SIGINT_TERMINATION = 130   # Ctrl+C (SIGINT = 2, 128+2)
+    SIGINT_TERMINATION = 130  # Ctrl+C (SIGINT = 2, 128+2)
     SIGTERM_TERMINATION = 143  # SIGTERM = 15, 128+15
     SIGKILL_TERMINATION = 137  # SIGKILL = 9, 128+9
 
@@ -81,35 +81,39 @@ class OttoExitCodes(IntEnum):
 class ExitCodeManager:
     """
     Manager for Otto BGP exit codes with logging and monitoring integration
-    
+
     Provides centralized exit code handling with proper logging,
     monitoring integration, and graceful shutdown procedures.
     """
-    
+
     def __init__(self, logger: Optional[logging.Logger] = None):
         """
         Initialize exit code manager
-        
+
         Args:
             logger: Optional logger instance
         """
         self.logger = logger or logging.getLogger(__name__)
         self._exit_context: Dict[str, str] = {}
-        
+
     def set_exit_context(self, **context) -> None:
         """
         Set context information for exit code reporting
-        
+
         Args:
             **context: Key-value pairs for exit context
         """
         self._exit_context.update(context)
-        
-    def exit_with_code(self, exit_code: OttoExitCodes, message: str = "", 
-                      context: Optional[Dict] = None) -> None:
+
+    def exit_with_code(
+        self,
+        exit_code: OttoExitCodes,
+        message: str = "",
+        context: Optional[Dict] = None,
+    ) -> None:
         """
         Exit with specified code and proper logging
-        
+
         Args:
             exit_code: Otto BGP exit code
             message: Optional exit message
@@ -119,34 +123,41 @@ class ExitCodeManager:
         full_context = dict(self._exit_context)
         if context:
             full_context.update(context)
-            
+
         # Log exit with appropriate level
         if exit_code == OttoExitCodes.SUCCESS:
             self.logger.info(f"Otto BGP completed successfully: {message}")
         elif exit_code.value <= 20:  # Application errors
-            self.logger.error(f"Otto BGP application error ({exit_code.value}): {message}")
+            self.logger.error(
+                f"Otto BGP application error ({exit_code.value}): {message}"
+            )
         elif exit_code.value >= 64 and exit_code.value <= 78:  # System errors
-            self.logger.critical(f"Otto BGP system error ({exit_code.value}): {message}")
+            self.logger.critical(
+                f"Otto BGP system error ({exit_code.value}): {message}"
+            )
         elif exit_code.value >= 128:  # Signal termination
-            self.logger.warning(f"Otto BGP terminated by signal ({exit_code.value}): {message}")
+            self.logger.warning(
+                f"Otto BGP terminated by signal ({exit_code.value}): {message}"
+            )
         else:
             self.logger.error(f"Otto BGP error ({exit_code.value}): {message}")
-            
+
         # Log context if available
         if full_context:
             self.logger.debug(f"Exit context: {full_context}")
-            
+
         # Send monitoring notification if configured
         self._send_monitoring_notification(exit_code, message, full_context)
-        
+
         # Store exit code for main to retrieve
         self.exit_code = exit_code.value
-        
-    def _send_monitoring_notification(self, exit_code: OttoExitCodes, 
-                                    message: str, context: Dict) -> None:
+
+    def _send_monitoring_notification(
+        self, exit_code: OttoExitCodes, message: str, context: Dict
+    ) -> None:
         """
         Send exit code notification to monitoring systems
-        
+
         Args:
             exit_code: Exit code
             message: Exit message
@@ -155,25 +166,29 @@ class ExitCodeManager:
         try:
             # Check if monitoring integration is enabled
             from otto_bgp.utils.config import get_config_manager
+
             config_manager = get_config_manager()
             config = config_manager.get_config()
-            
-            if hasattr(config, 'monitoring') and config.monitoring.enabled:
+
+            if hasattr(config, "monitoring") and config.monitoring.enabled:
                 # Send monitoring notification
-                self._send_monitoring_alert(exit_code, message, context, config.monitoring)
-                
+                self._send_monitoring_alert(
+                    exit_code, message, context, config.monitoring
+                )
+
         except Exception as e:
             # Best effort - don't let monitoring failure affect exit
             self.logger.debug(f"Failed to send monitoring notification: {e}")
-            
-    def _send_monitoring_alert(self, exit_code: OttoExitCodes, message: str, 
-                              context: Dict, monitoring_config) -> None:
+
+    def _send_monitoring_alert(
+        self, exit_code: OttoExitCodes, message: str, context: Dict, monitoring_config
+    ) -> None:
         """
         Send alert to monitoring system
-        
+
         Args:
             exit_code: Exit code
-            message: Exit message  
+            message: Exit message
             context: Exit context
             monitoring_config: Monitoring configuration
         """
@@ -183,31 +198,31 @@ class ExitCodeManager:
         # - Nagios/NRPE
         # - CloudWatch
         # - Custom webhooks
-        
+
         alert_data = {
-            'service': 'otto-bgp',
-            'exit_code': exit_code.value,
-            'exit_name': exit_code.name,
-            'message': message,
-            'context': context,
-            'timestamp': self._get_timestamp(),
-            'severity': self._get_severity(exit_code)
+            "service": "otto-bgp",
+            "exit_code": exit_code.value,
+            "exit_name": exit_code.name,
+            "message": message,
+            "context": context,
+            "timestamp": self._get_timestamp(),
+            "severity": self._get_severity(exit_code),
         }
-        
+
         self.logger.debug(f"Monitoring alert data: {alert_data}")
-        
+
         # Implementation would depend on monitoring system
         # For now, log the structured data
         if exit_code != OttoExitCodes.SUCCESS:
             self.logger.info(f"MONITORING_ALERT: {alert_data}")
-            
+
     def _get_severity(self, exit_code: OttoExitCodes) -> str:
         """
         Get severity level for monitoring systems
-        
+
         Args:
             exit_code: Exit code
-            
+
         Returns:
             Severity string
         """
@@ -223,10 +238,11 @@ class ExitCodeManager:
             return "warning"  # Signal termination is often expected
         else:
             return "error"
-            
+
     def _get_timestamp(self) -> str:
         """Get ISO timestamp for monitoring"""
         from datetime import datetime
+
         return datetime.now().isoformat()
 
 
@@ -237,7 +253,7 @@ _exit_manager: Optional[ExitCodeManager] = None
 def get_exit_manager() -> ExitCodeManager:
     """
     Get global exit code manager instance
-    
+
     Returns:
         Global ExitCodeManager instance
     """
@@ -277,7 +293,7 @@ EXIT_CODE_DESCRIPTIONS = {
     OttoExitCodes.UNEXPECTED_ERROR: "Unexpected error occurred",
     OttoExitCodes.SIGINT_TERMINATION: "Interrupted by user (Ctrl+C)",
     OttoExitCodes.SIGTERM_TERMINATION: "Terminated by system signal",
-    OttoExitCodes.SIGKILL_TERMINATION: "Killed by system signal"
+    OttoExitCodes.SIGKILL_TERMINATION: "Killed by system signal",
 }
 
 
