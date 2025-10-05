@@ -27,7 +27,7 @@ from otto_bgp.discovery import RouterInspector, YAMLGenerator
 from otto_bgp.utils.directories import DirectoryManager
 from otto_bgp.appliers import JuniperPolicyApplier, PolicyAdapter, UnifiedSafetyManager, create_safety_manager
 from otto_bgp.appliers.exit_codes import OttoExitCodes
-from otto_bgp.validators.rpki import RPKIValidator
+from otto_bgp.validators.rpki import RPKIValidator, RPKIState
 from otto_bgp.utils.error_handling import (
     handle_errors, ErrorFormatter, ParameterValidator, validate_common_args,
     print_success, print_warning, print_error, print_fatal, print_usage,
@@ -1253,14 +1253,16 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
                                 # Get RPKI result for this AS number
                                 rpki_result = rpki_status.get(policy_result.as_number, {})
                                 state = rpki_result.get('state', 'unknown')
-                                
+
                                 # Add RPKI comment to policy content
-                                policy_content = f"# RPKI Status: {state.upper()}\n"
-                                if state == 'invalid':
+                                # Handle both RPKIState enum and string values
+                                state_str = state.value.upper() if isinstance(state, RPKIState) else str(state).upper()
+                                policy_content = f"# RPKI Status: {state_str}\n"
+                                if state == 'invalid' or state == RPKIState.INVALID:
                                     policy_content += f"# WARNING: Origin validation failed\n"
-                                elif state == 'valid':
+                                elif state == 'valid' or state == RPKIState.VALID:
                                     policy_content += f"# INFO: Origin validation passed\n"
-                                elif state == 'notfound':
+                                elif state == 'notfound' or state == RPKIState.NOTFOUND:
                                     policy_content += f"# INFO: No ROA found for this origin\n"
                                 policy_content += policy_result.policy_content
                                 

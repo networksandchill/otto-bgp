@@ -15,16 +15,16 @@ legacy_scripts/show-peers-juniper.py → AS-info.py → bgpq4_processor.py
 import logging
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from dataclasses import dataclass
 
-from ..collectors.juniper_ssh import JuniperSSHCollector, BGPPeerData, DeviceInfo
-from ..processors.as_extractor import ASNumberExtractor, ASExtractionResult
-from ..generators.bgpq4_wrapper import BGPq4Wrapper, PolicyGenerationResult
-from ..utils.config import ConfigManager
+from ..collectors.juniper_ssh import JuniperSSHCollector, DeviceInfo
+from ..processors.as_extractor import ASNumberExtractor
+from ..generators.bgpq4_wrapper import BGPq4Wrapper
 from ..utils.logging import setup_logging
 from ..models import RouterProfile
 from ..discovery import RouterInspector
+from ..validators.rpki import RPKIState
 from .multi_router_coordinator import (
     MultiRouterCoordinator, RolloutStrategy,
     BlastStrategy, PhasedStrategy, CanaryStrategy
@@ -287,76 +287,9 @@ class BGPPolicyPipeline:
         as_list = list(self.as_extraction_results.as_numbers)
         self.logger.info(f"Extracted {len(as_list)} unique AS numbers")
         self.logger.debug(f"AS numbers: {sorted(as_list)}")
-        
+
         return as_list
-    
-    def _generate_policies(self, as_numbers: List[int]) -> int:
-        """
-        Generate BGP policies for all AS numbers
-        
-        Args:
-            as_numbers: List of AS numbers to generate policies for
-            
-        Returns:
-            Number of successfully generated policies
-        """
-        self.logger.info(f"Generating policies for {len(as_numbers)} AS numbers")
-        
-        # Generate policies using bgpq4
-        results = self.bgp_generator.generate_policies_batch(as_numbers)
-        self.policy_results = results
-        
-        # Count successful generations
-        success_count = sum(1 for result in results if result.success)
-        failure_count = len(results) - success_count
-        
-        if failure_count > 0:
-            self.logger.warning(f"Failed to generate {failure_count} policies")
-            for result in results:
-                if not result.success:
-                    self.logger.error(f"AS{result.as_number}: {result.error_message}")
-        
-        self.logger.info(f"Successfully generated {success_count}/{len(as_numbers)} policies")
-        return success_count
-    
-    def _manage_output_files(self) -> List[str]:
-        """
-        Manage policy output files based on configuration
-        
-        Returns:
-            List of created output files
-        """
-        output_dir = Path(self.config.output_directory)
-        output_dir.mkdir(exist_ok=True)
-        
-        output_files = []
-        
-        if self.config.separate_files:
-            # Create separate file for each AS
-            for result in self.policy_results:
-                if result.success:
-                    filename = f"AS{result.as_number}_policy.txt"
-                    output_path = output_dir / filename
-                    output_path.write_text(result.policy_content)
-                    output_files.append(str(output_path))
-                    self.logger.debug(f"Created policy file: {output_path}")
-        else:
-            # Create combined output file
-            combined_filename = "combined_bgp_policies.txt"
-            output_path = output_dir / combined_filename
-            
-            combined_content = ""
-            for result in self.policy_results:
-                if result.success:
-                    combined_content += f"\n# AS{result.as_number}\n"
-                    combined_content += result.policy_content + "\n"
-            
-            output_path.write_text(combined_content)
-            output_files.append(str(output_path))
-            self.logger.info(f"Created combined policy file: {output_path}")
-        
-        return output_files
-    
+
     def _load_devices(self) -> List[DeviceInfo]:
         """Load device information from CSV file"""
         devices_path = Path(self.config.devices_file)
@@ -456,7 +389,10 @@ class BGPPolicyPipeline:
                     discovery_result = self.router_inspector.inspect_router(profile)
                     if discovery_result.total_as_numbers > 0:
                         all_as_numbers.update(profile.discovered_as_numbers)
-                        self.logger.info(f"  Discovered {discovery_result.total_as_numbers} AS numbers for {profile.hostname}")
+                        self.logger.info(
+                            f"  Discovered {discovery_result.total_as_numbers} AS numbers "
+                            f"for {profile.hostname}"
+                        )
                     else:
                         self.logger.warning(f"  No AS numbers discovered for {profile.hostname}")
 
@@ -467,7 +403,7 @@ class BGPPolicyPipeline:
 
             # Phase 3: Generate Policies per Router (Direct execution mode)
             try:
-                self.logger.info(f"Phase 3: Generating router-specific policies")
+                self.logger.info("Phase 3: Generating router-specific policies")
                 
                 for profile in self.router_profiles:
                     if not profile.discovered_as_numbers:
@@ -490,7 +426,9 @@ class BGPPolicyPipeline:
                                 rpki_results[as_number] = result
                                 self.logger.debug(f"RPKI validation for AS{as_number}: {result['state']}")
                                 if result['state'] == "invalid":
-                                    self.logger.warning(f"  AS{as_number}: RPKI validation failed - {result['message']}")
+                                    self.logger.warning(
+                                        f"  AS{as_number}: RPKI validation failed - {result['message']}"
+                                    )
                                 elif result['state'] == "valid":
                                     self.logger.debug(f"  AS{as_number}: RPKI validation passed")
                             
@@ -502,7 +440,8 @@ class BGPPolicyPipeline:
                             profile.rpki_validation_results = {}
                     
                     # Generate policies for this router's AS numbers
-                    self.logger.info(f"Generating policies for {profile.hostname}: {len(profile.discovered_as_numbers)} AS numbers")
+                    as_count = len(profile.discovered_as_numbers)
+                    self.logger.info(f"Generating policies for {profile.hostname}: {as_count} AS numbers")
                     success_count = self._generate_router_policies(profile, router_dir)
                     total_policies += success_count
                     
@@ -527,8 +466,10 @@ class BGPPolicyPipeline:
                 rpki_results = getattr(profile, 'rpki_validation_results', {})
                 for result in rpki_results.values():
                     state = result.get('state', 'error')
-                    if state in rpki_rollup:
-                        rpki_rollup[state] += 1
+                    # Convert RPKIState enum to string value
+                    state_key = state.value if isinstance(state, RPKIState) else str(state)
+                    if state_key in rpki_rollup:
+                        rpki_rollup[state_key] += 1
                     else:
                         rpki_rollup['error'] += 1
             
@@ -551,7 +492,7 @@ class BGPPolicyPipeline:
             
             # Log RPKI summary if validation was performed
             if self.rpki_validator and sum(rpki_rollup.values()) > 0:
-                self.logger.info(f"🔒 RPKI validation summary:")
+                self.logger.info("🔒 RPKI validation summary:")
                 self.logger.info(f"  Valid: {rpki_rollup['valid']}")
                 self.logger.info(f"  Invalid: {rpki_rollup['invalid']}")
                 self.logger.info(f"  Not found: {rpki_rollup['notfound']}")
@@ -618,7 +559,8 @@ class BGPPolicyPipeline:
                         profile.rpki_validation_results = {}
 
                 # Generate policies (using existing generator, unchanged)
-                self.logger.info(f"Generating policies for {profile.hostname}: {len(profile.discovered_as_numbers)} AS numbers")
+                as_count = len(profile.discovered_as_numbers)
+                self.logger.info(f"Generating policies for {profile.hostname}: {as_count} AS numbers")
                 success_count = self._generate_router_policies(profile, router_dir)
                 total_policies += success_count
 
@@ -626,7 +568,6 @@ class BGPPolicyPipeline:
                 self._create_router_metadata(profile, router_dir, success_count)
 
                 # Build policy mapping for coordinator
-                policy_content = self._collect_router_policies(router_dir)
                 policies_map[profile.hostname] = {
                     'policy_files': list(router_dir.glob("AS*_policy.txt")),
                     'as_numbers': list(profile.discovered_as_numbers),
@@ -751,17 +692,19 @@ class BGPPolicyPipeline:
                 # Get RPKI result for this AS number
                 rpki_result = rpki_status.get(as_number, {})
                 state = rpki_result.get('state', 'unknown')
-                
-                result = self.bgp_generator.generate_policy(as_number)
+
+                result = self.bgp_generator.generate_policy_for_as(as_number)
                 if result.success:
                     # Add RPKI comment to policy
-                    policy_content = f"# RPKI Status: {state.upper()}\n"
-                    if state == 'invalid':
-                        policy_content += f"# WARNING: Origin validation failed\n"
-                    elif state == 'valid':
-                        policy_content += f"# INFO: Origin validation passed\n"
-                    elif state == 'notfound':
-                        policy_content += f"# INFO: No ROA found for this origin\n"
+                    # Handle both RPKIState enum and string values
+                    state_str = state.value.upper() if isinstance(state, RPKIState) else str(state).upper()
+                    policy_content = f"# RPKI Status: {state_str}\n"
+                    if state == RPKIState.INVALID:
+                        policy_content += "# WARNING: Origin validation failed\n"
+                    elif state == RPKIState.VALID:
+                        policy_content += "# INFO: Origin validation passed\n"
+                    elif state == RPKIState.NOTFOUND:
+                        policy_content += "# INFO: No ROA found for this origin\n"
                     policy_content += result.policy_content
                     
                     # Save policy to router's directory
@@ -786,8 +729,10 @@ class BGPPolicyPipeline:
         rpki_results = getattr(profile, 'rpki_validation_results', {})
         for result in rpki_results.values():
             state = result.get('state', 'error')
-            if state in rpki_summary:
-                rpki_summary[state] += 1
+            # Convert RPKIState enum to string value
+            state_key = state.value if isinstance(state, RPKIState) else str(state)
+            if state_key in rpki_summary:
+                rpki_summary[state_key] += 1
             else:
                 rpki_summary['error'] += 1
 
@@ -897,7 +842,10 @@ def run_pipeline(devices_file: str,
     
     # Log summary
     if result.success:
-        logger.info(f"Pipeline completed: {result.policies_generated} policies generated in {result.execution_time:.2f}s")
+        logger.info(
+            f"Pipeline completed: {result.policies_generated} policies generated "
+            f"in {result.execution_time:.2f}s"
+        )
     else:
         logger.error(f"Pipeline failed: {', '.join(result.errors)}")
     
