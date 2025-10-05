@@ -15,8 +15,7 @@ import logging.handlers
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any
-from datetime import datetime
+from typing import Dict
 import functools
 import time
 

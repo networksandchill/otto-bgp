@@ -10,20 +10,18 @@ Modern implementation of SSH-based BGP data collection with:
 """
 
 import paramiko
-import pandas as pd
 import os
 import logging
 import csv
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Optional
 from pathlib import Path
-from contextlib import contextmanager
 
 # Import secure host key verification
 from otto_bgp.utils.ssh_security import get_host_key_policy
 
 # Import models
-from otto_bgp.models import DeviceInfo, RouterProfile
+from otto_bgp.models import DeviceInfo
 
 # Import parallel execution utilities
 from otto_bgp.utils.parallel import ParallelExecutor
@@ -374,9 +372,9 @@ class JuniperSSHCollector:
         else:
             # Use sequential collection (single device or parallel disabled)
             if not use_parallel:
-                self.logger.info(f"Using sequential collection (parallel disabled)")
+                self.logger.info("Using sequential collection (parallel disabled)")
             else:
-                self.logger.info(f"Using sequential collection (single device)")
+                self.logger.info("Using sequential collection (single device)")
             
             results = []
             

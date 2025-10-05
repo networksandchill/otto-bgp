@@ -16,15 +16,12 @@ import time
 import socket
 import signal
 import atexit
-import threading
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
-from pathlib import Path
 from enum import Enum
-from contextlib import contextmanager
 
 # Import resource management
-from otto_bgp.utils.subprocess_manager import ManagedProcess, ProcessState
+from otto_bgp.utils.subprocess_manager import ManagedProcess
 
 
 class TunnelState(Enum):
@@ -382,9 +379,6 @@ class IRRProxyManager:
             return
         
         self.logger.info(f"Cleaning up {len(self.tunnels)} proxy tunnels")
-        
-        # Create thread pool for parallel cleanup to handle unresponsive processes
-        cleanup_threads = []
         
         tunnel_names = list(self.tunnels.keys())
         

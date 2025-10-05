@@ -10,8 +10,7 @@ import json
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from dataclasses import asdict
+from typing import Dict, List, Optional
 
 from ..models import RouterProfile
 

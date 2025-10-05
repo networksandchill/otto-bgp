@@ -1112,6 +1112,12 @@ class ASProcessor:
                 
                 # First pass: Clean BGP text using streaming
                 bgp_result = self.bgp_processor._process_file_streaming(file_path, temp_path)
+                self.logger.debug(
+                    "Streaming clean result: original=%d processed=%d duplicates_removed=%d",
+                    getattr(bgp_result, 'original_lines', 0),
+                    getattr(bgp_result, 'processed_lines', 0),
+                    getattr(bgp_result, 'duplicates_removed', 0),
+                )
                 
                 # Second pass: Extract AS numbers using streaming
                 as_result = self.as_extractor.extract_as_numbers_from_file_streaming(

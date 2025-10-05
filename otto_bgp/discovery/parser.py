@@ -7,7 +7,7 @@ extracting groups, AS numbers, peer relationships, and other BGP data.
 
 import re
 import logging
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Set, Optional
 from dataclasses import dataclass
 
 

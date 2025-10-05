@@ -12,18 +12,16 @@ autonomous modes. They cannot be disabled without explicit emergency override.
 import logging
 import os
 import re
-import signal
 import subprocess
 import smtplib
 import ssl
 import threading
-from typing import List, Dict, Optional, Set, Tuple, Any
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import time
 
 # Configuration imports for autonomous mode
 from otto_bgp.utils.config import get_config_manager
@@ -45,7 +43,7 @@ except ImportError:
 # Guardrail and exit code imports
 from .guardrails import (
     GuardrailComponent, GuardrailResult, GuardrailConfig,
-    initialize_default_guardrails, get_all_guardrails
+    initialize_default_guardrails
 )
 from .exit_codes import OttoExitCodes
 from .mode_manager import ModeManager, CommitInfo, HealthResult
@@ -147,10 +145,8 @@ class UnifiedSafetyManager:
     def _initialize_guardrails(self):
         """Initialize guardrails honoring OTTO_BGP_GUARDRAILS and defaults"""
         from .guardrails import (
-            initialize_default_guardrails,
             validate_guardrail_config,
             CRITICAL_GUARDRAILS,
-            GuardrailConfig,
         )
         from otto_bgp.utils.config import get_config_manager
 
@@ -685,7 +681,7 @@ class UnifiedSafetyManager:
                 errors.append(f"Unbalanced braces in AS{policy.get('as_number', '?')} policy")
 
             # Check for proper termination
-            if 'prefix-list' in content and not ';' in content:
+            if 'prefix-list' in content and ';' not in content:
                 errors.append(f"Missing semicolons in AS{policy.get('as_number', '?')} policy")
 
         return errors
@@ -1009,7 +1005,13 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
 
         # Set mode switches in safety configuration
         auto_finalize = mode_manager.should_auto_finalize()
-        self.logger.info(f"Executing pipeline in {mode_manager.get_mode_description()} mode")
+        mode_description = mode_manager.get_mode_description()
+        auto_finalize_state = 'enabled' if auto_finalize else 'disabled'
+        self.logger.info(
+            "Executing pipeline in %s mode (auto_finalize=%s)",
+            mode_description,
+            auto_finalize_state,
+        )
 
         # Record pipeline start event if coordinated
         if rollout_context:
@@ -1186,7 +1188,7 @@ Rollback Status: {details.get('rollback_status', 'N/A')}"""
         checks = []
         try:
             # Management interface check
-            mgmt_info = device.rpc.get_interface_information(interface_name='fxp0')
+            _mgmt_info = device.rpc.get_interface_information(interface_name='fxp0')
             checks.append("Management interface: OK")
 
             # BGP neighbor check

@@ -16,9 +16,8 @@ import paramiko
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional
 import json
-import hashlib
 
 
 class ProductionHostKeyPolicy(paramiko.MissingHostKeyPolicy):
@@ -142,6 +141,7 @@ class ProductionHostKeyPolicy(paramiko.MissingHostKeyPolicy):
         # Format as SHA256:base64 (like OpenSSH)
         import base64
         fingerprint_b64 = base64.b64encode(fingerprint_bytes).decode('ascii').rstrip('=')
+        self.logger.debug("Computed SSH fingerprint hex=%s", fingerprint_hex)
         return f"SHA256:{fingerprint_b64}"
 
 

@@ -9,8 +9,8 @@ import time
 import signal
 import atexit
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
-from typing import List, Callable, Any, Dict, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Callable, Any, Optional, Tuple
 from dataclasses import dataclass
 from contextlib import contextmanager
 

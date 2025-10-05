@@ -889,35 +889,35 @@ class ConfigManager:
     def print_config(self):
         """Print current configuration (sanitized)"""
         print("Otto BGP Configuration:")
-        print(f"  SSH:")
+        print("  SSH:")
         print(f"    Username: {self.config.ssh.username or 'Not set'}")
         print(f"    Key path: {self.config.ssh.key_path or 'Not set'}")
         print(f"    Password: {'Set' if self.config.ssh.password else 'Not set'}")
         print(f"    Connection timeout: {self.config.ssh.connection_timeout}s")
         print(f"    Command timeout: {self.config.ssh.command_timeout}s")
         
-        print(f"  BGPq3:")
+        print("  BGPq3:")
         print(f"    Native path: {self.config.bgpq3.native_path or 'Auto-detect'}")
         print(f"    Docker image: {self.config.bgpq3.docker_image}")
         print(f"    Use Docker: {self.config.bgpq3.use_docker}")
         print(f"    Use Podman: {self.config.bgpq3.use_podman}")
         print(f"    Command timeout: {self.config.bgpq3.command_timeout}s")
         
-        print(f"  AS Processing:")
+        print("  AS Processing:")
         print(f"    AS range: {self.config.as_processing.min_as_number}-{self.config.as_processing.max_as_number}")
         print(f"    Default pattern: {self.config.as_processing.default_pattern}")
         
-        print(f"  Output:")
+        print("  Output:")
         print(f"    Default directory: {self.config.output.default_output_dir}")
         print(f"    Policies subdirectory: {self.config.output.policies_subdir}")
         
-        print(f"  Logging:")
+        print("  Logging:")
         print(f"    Level: {self.config.logging.level}")
         print(f"    Log to file: {self.config.logging.log_to_file}")
         if self.config.logging.log_file:
             print(f"    Log file: {self.config.logging.log_file}")
         
-        print(f"  IRR Proxy:")
+        print("  IRR Proxy:")
         print(f"    Enabled: {self.config.irr_proxy.enabled}")
         if self.config.irr_proxy.enabled:
             print(f"    Jump host: {self.config.irr_proxy.jump_host}")
@@ -928,22 +928,22 @@ class ConfigManager:
             for tunnel in self.config.irr_proxy.tunnels:
                 print(f"      {tunnel.get('name', 'unnamed')}: {tunnel.get('remote_host')}:{tunnel.get('remote_port')} -> :{tunnel.get('local_port')}")
         
-        print(f"  Installation Mode:")
+        print("  Installation Mode:")
         print(f"    Type: {self.config.installation_mode.type}")
         print(f"    Service user: {self.config.installation_mode.service_user}")
         print(f"    SystemD enabled: {self.config.installation_mode.systemd_enabled}")
         print(f"    Optimization level: {self.config.installation_mode.optimization_level}")
         
-        print(f"  Autonomous Mode:")
+        print("  Autonomous Mode:")
         print(f"    Enabled: {self.config.autonomous_mode.enabled}")
         if self.config.autonomous_mode.enabled:
             print(f"    Auto-apply threshold: {self.config.autonomous_mode.auto_apply_threshold} (informational)")
             print(f"    Require confirmation: {self.config.autonomous_mode.require_confirmation}")
-            print(f"    Safety overrides:")
+            print("    Safety overrides:")
             print(f"      Max session loss: {self.config.autonomous_mode.safety_overrides.max_session_loss_percent}%")
             print(f"      Max route loss: {self.config.autonomous_mode.safety_overrides.max_route_loss_percent}%")
             print(f"      Monitoring duration: {self.config.autonomous_mode.safety_overrides.monitoring_duration_seconds}s")
-            print(f"    Email notifications:")
+            print("    Email notifications:")
             email = self.config.autonomous_mode.notifications.email
             print(f"      Enabled: {email.enabled}")
             if email.enabled:
@@ -954,25 +954,25 @@ class ConfigManager:
                 print(f"      Send on success: {email.send_on_success}")
                 print(f"      Send on failure: {email.send_on_failure}")
         else:
-            print(f"    Manual policy application mode")
+            print("    Manual policy application mode")
         
-        print(f"  RPKI/ROA Validation:")
+        print("  RPKI/ROA Validation:")
         print(f"    Enabled: {self.config.rpki.enabled}")
         if self.config.rpki.enabled:
             print(f"    Fail-closed: {self.config.rpki.fail_closed}")
             print(f"    Max VRP age: {self.config.rpki.max_vrp_age_hours} hours")
             print(f"    VRP cache path: {self.config.rpki.vrp_cache_path}")
             print(f"    Allowlist path: {self.config.rpki.allowlist_path}")
-            print(f"    Thresholds:")
+            print("    Thresholds:")
             print(f"      Max invalid prefixes: {self.config.rpki.max_invalid_percent}%")
             print(f"      Max NOTFOUND prefixes: {self.config.rpki.max_notfound_percent}%")
             print(f"      Require VRP data: {self.config.rpki.require_vrp_data}")
-            print(f"    Auto-update:")
+            print("    Auto-update:")
             print(f"      Enabled: {self.config.rpki.auto_update_vrp}")
             if self.config.rpki.auto_update_vrp:
                 print(f"      Update interval: {self.config.rpki.vrp_update_interval_hours} hours")
         else:
-            print(f"    RPKI validation disabled")
+            print("    RPKI validation disabled")
 
 
 # Global configuration instance with thread-safe singleton pattern

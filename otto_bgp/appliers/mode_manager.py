@@ -89,20 +89,20 @@ class ManualFinalizationStrategy(FinalizationStrategy):
         logger.info(f"Commit ID: {commit_info.commit_id}")
         logger.info("Manual confirmation required within rollback window")
         
-        print(f"\n🔔 MANUAL CONFIRMATION REQUIRED")
+        print("\n🔔 MANUAL CONFIRMATION REQUIRED")
         print(f"Commit ID: {commit_info.commit_id}")
         print(f"Rollback window: {hold_window} minutes")
-        print(f"To confirm: juniper-cli commit")
-        print(f"To rollback: juniper-cli rollback")
+        print("To confirm: juniper-cli commit")
+        print("To rollback: juniper-cli rollback")
         
         if not health_result.success:
             logger.warning(f"Health check issues detected: {health_result.details}")
             logger.info("Manual intervention required - system mode never auto-finalizes")
-            print(f"\n⚠️  HEALTH CHECK ISSUES DETECTED:")
+            print("\n⚠️  HEALTH CHECK ISSUES DETECTED:")
             if health_result.error:
                 print(f"   Error: {health_result.error}")
             print(f"   Details: {health_result.details}")
-            print(f"   Manual review recommended before confirming")
+            print("   Manual review recommended before confirming")
 
 
 class SchedulingBehavior(ABC):

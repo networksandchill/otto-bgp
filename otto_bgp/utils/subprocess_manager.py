@@ -15,7 +15,7 @@ import logging
 import time
 import threading
 from contextlib import contextmanager
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 

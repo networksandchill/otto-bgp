@@ -1,17 +1,14 @@
 """Multi-router coordination orchestrator for staged BGP policy rollouts"""
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Any, Protocol
-from pathlib import Path
 import hashlib
 
 from otto_bgp.database import (
     MultiRouterDAO,
     RolloutRun,
     RolloutStage,
-    RolloutTarget,
-    RolloutEvent
+    RolloutTarget
 )
 
 logger = logging.getLogger('otto_bgp.pipeline.multi_router_coordinator')

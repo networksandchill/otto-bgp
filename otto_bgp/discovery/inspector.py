@@ -7,7 +7,7 @@ groups, AS numbers, and peer relationships from router configurations.
 
 import re
 import logging
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Set
 from dataclasses import dataclass, field
 
 from ..models import RouterProfile

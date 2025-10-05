@@ -16,7 +16,7 @@ Error Format Standards:
 import os
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, Union
 from functools import wraps
 import subprocess
 import time
@@ -124,7 +124,7 @@ class ErrorFormatter:
             return cls.format_message("Operation interrupted by user", ErrorSeverity.WARNING)
         else:
             if hide_technical:
-                return cls.format_message(f"Unexpected error occurred", ErrorSeverity.ERROR, 
+                return cls.format_message("Unexpected error occurred", ErrorSeverity.ERROR, 
                                         "Check logs for details or run with --verbose")
             else:
                 return cls.format_message(f"Unexpected {error_type}: {message}", 
@@ -171,7 +171,7 @@ class ParameterValidator:
             raise ValidationError(
                 f"File does not exist: {path}",
                 parameter_name,
-                f"Check the file path and ensure the file exists"
+                "Check the file path and ensure the file exists"
             )
         
         if not path.is_file():

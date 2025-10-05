@@ -22,7 +22,6 @@ import csv
 import json
 import logging
 import multiprocessing
-import os
 import re
 import threading
 import time
@@ -31,15 +30,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as
 
 # Import timeout management
 from otto_bgp.utils.timeout_config import (
-    TimeoutManager, TimeoutType, TimeoutContext, ExponentialBackoff,
-    get_timeout, timeout_context
+    TimeoutType, get_timeout, timeout_context
 )
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union, Any, Iterator
-from ipaddress import ip_network, ip_address, AddressValueError, NetmaskValueError
+from ipaddress import ip_network, AddressValueError, NetmaskValueError
 
 # Otto BGP imports for integration
 from ..appliers.guardrails import (
@@ -1288,6 +1286,11 @@ class RPKIValidator:
         # Get timeout values for RPKI validation
         thread_timeout = get_timeout(TimeoutType.THREAD_POOL)
         rpki_timeout = get_timeout(TimeoutType.RPKI_VALIDATION)
+        self.logger.debug(
+            "Parallel RPKI validation timeouts: thread=%ss overall=%ss",
+            thread_timeout,
+            rpki_timeout,
+        )
         
         # Initialize health monitoring
         health_monitor = ThreadHealthMonitor(max_workers)
