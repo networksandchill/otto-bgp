@@ -1,7 +1,5 @@
 import subprocess
-import os
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 # Absolute binary paths resolved at runtime (align with adapter)
 SUDO_PATH = "/usr/bin/sudo"

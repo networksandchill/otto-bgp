@@ -1,12 +1,11 @@
 import logging
 from datetime import datetime
-from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from webui.settings import WEBUI_ROOT, OTTO_WEBUI_LOG_LEVEL
-from webui.core.audit import setup_audit_logging, audit_log
-from webui.core.security import needs_setup, _require_setup_token
+from webui.core.audit import setup_audit_logging
+from webui.core.security import needs_setup
 
 # Setup logging
 logger = logging.getLogger("otto.webui")

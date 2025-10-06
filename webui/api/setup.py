@@ -3,7 +3,6 @@ import json
 import tempfile
 import shutil
 from datetime import datetime
-from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from passlib.hash import bcrypt

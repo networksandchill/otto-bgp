@@ -1,6 +1,6 @@
 """Pipeline and rollout status API endpoints"""
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 import logging
 
 from otto_bgp.database import MultiRouterDAO, DatabaseError

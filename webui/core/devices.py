@@ -1,6 +1,5 @@
 import csv
 import io
-from pathlib import Path
 from typing import List, Dict, Optional
 from webui.settings import CONFIG_DIR
 from webui.core.fileops import atomic_write_text
