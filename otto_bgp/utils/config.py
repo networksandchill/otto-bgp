@@ -526,7 +526,10 @@ class ConfigManager:
         """Load configuration from JSON file"""
         with open(config_path, "r") as f:
             data = json.load(f)
+        self._load_from_dict(data)
 
+    def _load_from_dict(self, data: dict):
+        """Load configuration from dictionary (side-effect-free)"""
         # Update configuration sections
         if "ssh" in data:
             ssh_data = data["ssh"]
@@ -535,6 +538,10 @@ class ConfigManager:
         if "bgpq3" in data:
             bgpq3_data = data["bgpq3"]
             self.config.bgpq3 = BGPq3Config(**bgpq3_data)
+
+        if "bgpq4" in data:
+            bgpq4_data = data["bgpq4"]
+            self.config.bgpq4 = BGPQ4Config(**bgpq4_data)
 
         if "as_processing" in data:
             as_data = data["as_processing"]
@@ -722,8 +729,9 @@ class ConfigManager:
             logger = logging.getLogger("otto-bgp.config")
             total_count = len(timeout_results.get("timeouts", {}))
             valid = timeout_results.get("valid", False)
+            status = 'valid' if valid else 'issues found'
             logger.info(
-                f"Timeout validation completed: {'valid' if valid else 'issues found'} ({total_count} configurations checked)"
+                f"Timeout validation completed: {status} ({total_count} configurations checked)"
             )
 
             # Log any timeout issues
@@ -778,6 +786,32 @@ class ConfigManager:
             if hasattr(self.config.rpki, key):
                 setattr(self.config.rpki, key, value)
 
+    @classmethod
+    def validate_object(cls, data: dict) -> List[str]:
+        """
+        Validate configuration from dictionary without side effects
+
+        Args:
+            data: Configuration dictionary to validate
+
+        Returns:
+            List of validation error messages (empty if valid)
+        """
+        # Create temporary instance without loading from file
+        temp_manager = cls.__new__(cls)
+        temp_manager.logger = logging.getLogger(__name__)
+        temp_manager.config_path = None
+        temp_manager.config = BGPToolkitConfig()
+
+        # Load from dict (side-effect-free)
+        try:
+            temp_manager._load_from_dict(data)
+        except Exception as e:
+            return [f"Failed to load configuration: {e}"]
+
+        # Validate loaded configuration
+        return temp_manager.validate_config()
+
     def validate_config(self) -> List[str]:
         """
         Validate configuration and return list of issues
@@ -805,12 +839,20 @@ class ConfigManager:
         ):
             issues.append("Invalid AS number range: min >= max")
 
-        # Output validation
+        # Output validation (side-effect-free)
         output_dir = Path(self.config.output.default_output_dir)
-        try:
-            output_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            issues.append(f"Cannot create output directory {output_dir}: {e}")
+        if output_dir.exists():
+            if not output_dir.is_dir():
+                issues.append(f"Output path exists but is not a directory: {output_dir}")
+            elif not os.access(output_dir, os.W_OK):
+                issues.append(f"Output directory is not writable: {output_dir}")
+        else:
+            # Check if parent directory exists and is writable
+            parent_dir = output_dir.parent
+            if not parent_dir.exists():
+                issues.append(f"Output parent directory does not exist: {parent_dir}")
+            elif not os.access(parent_dir, os.W_OK):
+                issues.append(f"Output parent directory is not writable: {parent_dir}")
 
         # IRR proxy validation (only if enabled)
         if self.config.irr_proxy.enabled:
@@ -959,21 +1001,35 @@ class ConfigManager:
         if self.config.rpki and self.config.rpki.enabled:
             rpki = self.config.rpki
 
-            # Validate VRP cache path
+            # Validate VRP cache path (side-effect-free)
             if rpki.vrp_cache_path:
-                vrp_cache_dir = Path(rpki.vrp_cache_path).parent
-                try:
-                    vrp_cache_dir.mkdir(parents=True, exist_ok=True)
-                except Exception:
-                    issues.append(f"Cannot create VRP cache directory: {vrp_cache_dir}")
+                vrp_cache_path = Path(rpki.vrp_cache_path)
+                vrp_cache_dir = vrp_cache_path.parent
+                if vrp_cache_dir.exists():
+                    if not vrp_cache_dir.is_dir():
+                        issues.append(f"VRP cache parent path exists but is not a directory: {vrp_cache_dir}")
+                    elif not os.access(vrp_cache_dir, os.W_OK):
+                        issues.append(f"VRP cache directory is not writable: {vrp_cache_dir}")
+                else:
+                    # Check if parent's parent exists and is writable
+                    grandparent = vrp_cache_dir.parent
+                    if grandparent.exists() and not os.access(grandparent, os.W_OK):
+                        issues.append(f"Cannot create VRP cache directory (parent not writable): {vrp_cache_dir}")
 
-            # Validate allowlist path
+            # Validate allowlist path (side-effect-free)
             if rpki.allowlist_path:
-                allowlist_dir = Path(rpki.allowlist_path).parent
-                try:
-                    allowlist_dir.mkdir(parents=True, exist_ok=True)
-                except Exception:
-                    issues.append(f"Cannot create allowlist directory: {allowlist_dir}")
+                allowlist_path = Path(rpki.allowlist_path)
+                allowlist_dir = allowlist_path.parent
+                if allowlist_dir.exists():
+                    if not allowlist_dir.is_dir():
+                        issues.append(f"Allowlist parent path exists but is not a directory: {allowlist_dir}")
+                    elif not os.access(allowlist_dir, os.W_OK):
+                        issues.append(f"Allowlist directory is not writable: {allowlist_dir}")
+                else:
+                    # Check if parent's parent exists and is writable
+                    grandparent = allowlist_dir.parent
+                    if grandparent.exists() and not os.access(grandparent, os.W_OK):
+                        issues.append(f"Cannot create allowlist directory (parent not writable): {allowlist_dir}")
 
             # Validate thresholds
             if not 0.0 <= rpki.max_invalid_percent <= 100.0:
@@ -1079,9 +1135,8 @@ class ConfigManager:
             print(
                 f"      Max route loss: {self.config.autonomous_mode.safety_overrides.max_route_loss_percent}%"
             )
-            print(
-                f"      Monitoring duration: {self.config.autonomous_mode.safety_overrides.monitoring_duration_seconds}s"
-            )
+            monitoring_duration = self.config.autonomous_mode.safety_overrides.monitoring_duration_seconds
+            print(f"      Monitoring duration: {monitoring_duration}s")
             print("    Email notifications:")
             email = self.config.autonomous_mode.notifications.email
             print(f"      Enabled: {email.enabled}")

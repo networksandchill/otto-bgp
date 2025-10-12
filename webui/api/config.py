@@ -115,12 +115,13 @@ async def update_config(request: Request,
                 valid_strictness = {'low', 'medium', 'high', 'strict'}
                 for guardrail_name, strictness_value in gr['strictness'].items():
                     if strictness_value and strictness_value not in valid_strictness:
+                        valid_values = ', '.join(sorted(valid_strictness))
                         raise HTTPException(
                             status_code=400,
                             detail={
                                 "issues": [{
                                     "path": f"guardrails.strictness.{guardrail_name}",
-                                    "msg": f"Invalid strictness '{strictness_value}'. Must be one of: {', '.join(sorted(valid_strictness))}"
+                                    "msg": f"Invalid strictness '{strictness_value}'. Must be one of: {valid_values}"
                                 }]
                             }
                         )
@@ -132,6 +133,20 @@ async def update_config(request: Request,
                 status_code=500,
                 detail={"issues": [{"path": "guardrails", "msg": f"Validation error: {str(e)}"}]}
             )
+
+    # Validate entire configuration before saving
+    from otto_bgp.utils.config import ConfigManager
+    validation_issues = ConfigManager.validate_object(new_config)
+    if validation_issues:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "issues": [
+                    {"path": "config", "msg": issue}
+                    for issue in validation_issues
+                ]
+            }
+        )
 
     # Handle SMTP separately - persist to config.json nested structure
     if 'smtp' in new_config:
@@ -180,6 +195,9 @@ async def update_config(request: Request,
 @router.post("/validate")
 async def validate_config(request: Request,
                           user: dict = Depends(require_role("admin"))):
+    """Validate configuration using shared ConfigManager validation"""
+    from otto_bgp.utils.config import ConfigManager
+
     payload = await request.json()
     config_json = payload.get('config_json', '')
     try:
@@ -189,9 +207,13 @@ async def validate_config(request: Request,
             "valid": False,
             "issues": [{"path": "config", "msg": f"Invalid JSON: {e}"}]
         }
-    issues = []
-    if 'devices' in obj and not isinstance(obj['devices'], list):
-        issues.append({"path": "devices", "msg": "Devices must be a list"})
+
+    # Use shared validation logic
+    validation_issues = ConfigManager.validate_object(obj)
+
+    # Convert list of strings to structured issues
+    issues = [{"path": "config", "msg": issue} for issue in validation_issues]
+
     return {"valid": len(issues) == 0, "issues": issues}
 
 
@@ -441,20 +463,9 @@ async def import_config(
             detail='Only JSON files are allowed'
         )
 
-    # Create backup before import
-    backup_dir, backed_up_files = create_timestamped_backup(
-        [CONFIG_PATH, CONFIG_DIR / 'devices.csv', CONFIG_DIR / 'otto.env'],
-        DATA_DIR / 'backups'
-    )
-
-    audit_log(
-        'config_import_backup_created',
-        user=user.get('sub'),
-        resource=str(backup_dir)
-    )
-
+    backup_dir = None
     try:
-        # Read and validate JSON
+        # Read and parse JSON (no side effects)
         raw = await file.read()
         try:
             new_config = json.loads(raw)
@@ -463,6 +474,32 @@ async def import_config(
                 status_code=400,
                 detail=f'Invalid JSON: {str(e)}'
             )
+
+        # Validate configuration before any file operations
+        from otto_bgp.utils.config import ConfigManager
+        validation_issues = ConfigManager.validate_object(new_config)
+        if validation_issues:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "issues": [
+                        {"path": "config", "msg": issue}
+                        for issue in validation_issues
+                    ]
+                }
+            )
+
+        # Create backup only after validation passes
+        backup_dir, backed_up_files = create_timestamped_backup(
+            [CONFIG_PATH, CONFIG_DIR / 'devices.csv', CONFIG_DIR / 'otto.env'],
+            DATA_DIR / 'backups'
+        )
+
+        audit_log(
+            'config_import_backup_created',
+            user=user.get('sub'),
+            resource=str(backup_dir)
+        )
 
         # Write new config
         save_config(new_config)
@@ -487,14 +524,15 @@ async def import_config(
     except HTTPException:
         raise
     except Exception as e:
-        # Rollback on failure
+        # Rollback on failure (only if backup was created)
         try:
-            restore_backup(backup_dir, CONFIG_DIR)
-            audit_log(
-                'config_import_rollback_completed',
-                user=user.get('sub'),
-                resource=str(backup_dir)
-            )
+            if backup_dir:
+                restore_backup(backup_dir, CONFIG_DIR)
+                audit_log(
+                    'config_import_rollback_completed',
+                    user=user.get('sub'),
+                    resource=str(backup_dir)
+                )
         except Exception as rollback_error:
             audit_log(
                 'config_import_rollback_failed',
@@ -502,9 +540,10 @@ async def import_config(
                 resource=str(rollback_error)
             )
 
+        rolled_back = " and was rolled back" if backup_dir else ""
         raise HTTPException(
             status_code=500,
-            detail=f'Import failed and was rolled back: {str(e)}'
+            detail=f'Import failed{rolled_back}: {str(e)}'
         )
 
 

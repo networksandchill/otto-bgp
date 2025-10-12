@@ -367,7 +367,9 @@ def cmd_policy(args):
             # Create empty batch result if no ASNs
             from otto_bgp.generators.bgpq4_wrapper import PolicyBatchResult
 
-            batch_result = PolicyBatchResult(results=[], total_as_count=0, successful_count=0, failed_count=0, total_execution_time=0.0)
+            batch_result = PolicyBatchResult(
+                results=[], total_as_count=0, successful_count=0, failed_count=0, total_execution_time=0.0
+            )
 
         # Generate for IRR objects
         obj_results = []
@@ -715,8 +717,9 @@ def cmd_apply(args):
         confirm_timeout = args.confirm_timeout if args.confirm else 10  # Default timeout
         print("\nApplying policies using mode-aware finalization...")
 
+        comment = args.comment or f"Otto BGP policy update for {args.router}"
         result = applier.apply_with_confirmation(
-            policies=policies, confirm_timeout=confirm_timeout, comment=args.comment or f"Otto BGP policy update for {args.router}"
+            policies=policies, confirm_timeout=confirm_timeout, comment=comment
         )
 
         # Report results
@@ -906,14 +909,19 @@ def cmd_pipeline(args):
                 coordinator.hydrate_from_db(run_id)
             else:
                 # Convert devices to dict format for coordinator
-                device_list = [{"hostname": d.hostname, "address": d.address, "region": getattr(d, "region", "default")} for d in devices]
+                device_list = [
+                    {"hostname": d.hostname, "address": d.address, "region": getattr(d, "region", "default")}
+                    for d in devices
+                ]
 
                 # Convert policies to dict format (hostname -> policy content)
                 policy_dict = {p.get("device_hostname"): p for p in policies if p and p.get("device_hostname")}
 
                 # Plan new rollout run
                 initiated_by = getattr(args, "user", "cli")
-                run_id = coordinator.plan_run(devices=device_list, policies=policy_dict, strategy=strategy, initiated_by=initiated_by)
+                run_id = coordinator.plan_run(
+                    devices=device_list, policies=policy_dict, strategy=strategy, initiated_by=initiated_by
+                )
                 logger.info(f"Created rollout run: {run_id}")
                 print(f"Rollout run created: {run_id}")
 
@@ -945,11 +953,16 @@ def cmd_pipeline(args):
 
                     # Execute pipeline for this target
                     try:
+                        rollout_context = {
+                            "run_id": run_id,
+                            "stage_id": batch.stage_id,
+                            "target_id": target.target_id
+                        }
                         result = safety_manager.execute_pipeline(
                             policies=device_policies,
                             hostname=target.hostname,
                             mode=mode,
-                            rollout_context={"run_id": run_id, "stage_id": batch.stage_id, "target_id": target.target_id},
+                            rollout_context=rollout_context,
                         )
 
                         if result.success:
@@ -1352,9 +1365,14 @@ def cmd_rollout_status(args):
                 targets = dao.get_targets(stage_id)
                 print("\n    Targets:")
                 for target in targets:
-                    status_symbol = {"pending": "⏸", "in_progress": "▶", "completed": "✓", "failed": "✗", "skipped": "⊘"}.get(
-                        target.state, "?"
-                    )
+                    status_symbols = {
+                        "pending": "⏸",
+                        "in_progress": "▶",
+                        "completed": "✓",
+                        "failed": "✗",
+                        "skipped": "⊘"
+                    }
+                    status_symbol = status_symbols.get(target.state, "?")
                     print(f"      {status_symbol} {target.hostname} ({target.state})")
                     if target.last_error:
                         print(f"        Error: {target.last_error}")
@@ -1557,12 +1575,19 @@ def _try_vrp_cache_refresh(cache_path, logger) -> bool:
 
         # Prefer systemd unit if available (greenfield system install)
         result = subprocess.run(
-            ["/usr/bin/systemctl", "start", "otto-bgp-rpki-update.service"], check=False, capture_output=True, text=True, timeout=60
+            ["/usr/bin/systemctl", "start", "otto-bgp-rpki-update.service"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60
         )
         if result.returncode == 0:
             logger.info("Triggered otto-bgp-rpki-update.service for VRP refresh")
             return True
-        logger.warning(f"systemctl start otto-bgp-rpki-update.service returned {result.returncode}: {result.stderr.strip()}")
+        logger.warning(
+            f"systemctl start otto-bgp-rpki-update.service returned "
+            f"{result.returncode}: {result.stderr.strip()}"
+        )
     except Exception as e:
         logger.warning(f"Failed to trigger systemd refresh: {e}")
 
@@ -1573,7 +1598,13 @@ def _try_vrp_cache_refresh(cache_path, logger) -> bool:
         if shutil.which("rpki-client"):
             import subprocess
 
-            result = subprocess.run(["rpki-client", "-j", "-o", str(cache_path)], check=False, capture_output=True, text=True, timeout=180)
+            result = subprocess.run(
+                ["rpki-client", "-j", "-o", str(cache_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=180
+            )
             if result.returncode == 0:
                 logger.info("Refreshed VRP cache via rpki-client fallback")
                 return True
@@ -1838,6 +1869,63 @@ def cmd_notify_email(args):
         return 1
 
 
+def cmd_config_validate(args):
+    """Validate configuration file or active configuration"""
+    from otto_bgp.utils.logging import get_logger
+    from otto_bgp.utils.config import ConfigManager
+    import json
+
+    logger = get_logger("otto-bgp.config-validate")
+
+    try:
+        # Load configuration from file or use active config
+        if getattr(args, "file", None):
+            # Validate from file
+            file_path = Path(args.file)
+            if not file_path.exists():
+                print_error(f"Configuration file not found: {args.file}")
+                return 1
+
+            with open(file_path, "r") as f:
+                try:
+                    config_data = json.load(f)
+                except json.JSONDecodeError as e:
+                    print_error(f"Invalid JSON in configuration file: {e}")
+                    return 1
+
+            # Validate using shared validator
+            validation_issues = ConfigManager.validate_object(config_data)
+        else:
+            # Validate active configuration
+            config_manager = get_config_manager()
+            validation_issues = config_manager.validate_config()
+
+        # Output results
+        if getattr(args, "json", False):
+            # JSON output format
+            result = {
+                "valid": len(validation_issues) == 0,
+                "issues": [{"path": "config", "msg": issue} for issue in validation_issues]
+            }
+            print(json.dumps(result, indent=2))
+        else:
+            # Human-readable output
+            if validation_issues:
+                print_error("Configuration validation failed:", f"{len(validation_issues)} issue(s) found")
+                for i, issue in enumerate(validation_issues, 1):
+                    print(f"  {i}. {issue}")
+            else:
+                print_success("Configuration is valid")
+
+        # Exit code: 0 if valid, 1 if issues found
+        return 0 if len(validation_issues) == 0 else 1
+
+    except Exception as e:
+        logger.error(f"Configuration validation failed: {e}")
+        print_error("Configuration validation failed", str(e))
+        return 1
+
+
 def create_common_flags_parent():
     """Create a parent parser with common global flags and mutual exclusion groups"""
     parent_parser = argparse.ArgumentParser(add_help=False)
@@ -1849,7 +1937,9 @@ def create_common_flags_parent():
 
     # System/autonomous mutual exclusion
     mode_group = parent_parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--autonomous", action="store_true", help="Enable autonomous mode with automatic policy application")
+    mode_group.add_argument(
+        "--autonomous", action="store_true", help="Enable autonomous mode with automatic policy application"
+    )
     mode_group.add_argument("--system", action="store_true", help="Use system-wide configuration and resources")
 
     # Common flags (no exclusions needed)
@@ -1861,7 +1951,11 @@ def create_common_flags_parent():
         metavar="N",
         help="Reference prefix count for notification context (informational only, default: 100)",
     )
-    parent_parser.add_argument("--no-rpki", action="store_true", help="Disable RPKI validation during policy generation (not recommended)")
+    parent_parser.add_argument(
+        "--no-rpki",
+        action="store_true",
+        help="Disable RPKI validation during policy generation (not recommended)"
+    )
 
     return parent_parser
 
@@ -1886,17 +1980,29 @@ def create_parser():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # collect subcommand
-    collect_parser = subparsers.add_parser("collect", help="Collect BGP peer data from Juniper devices", parents=[common_flags_parent])
+    collect_parser = subparsers.add_parser(
+        "collect", help="Collect BGP peer data from Juniper devices", parents=[common_flags_parent]
+    )
     collect_parser.add_argument("devices_csv", help='CSV file with device addresses (must have "address" column)')
-    collect_parser.add_argument("--output-dir", default=".", help="Output directory for BGP data files (default: current directory)")
-    collect_parser.add_argument("--timeout", type=int, default=30, help="SSH connection timeout in seconds (default: 30)")
-    collect_parser.add_argument("--command-timeout", type=int, default=60, help="Command execution timeout in seconds (default: 60)")
+    collect_parser.add_argument(
+        "--output-dir", default=".", help="Output directory for BGP data files (default: current directory)"
+    )
+    collect_parser.add_argument(
+        "--timeout", type=int, default=30, help="SSH connection timeout in seconds (default: 30)"
+    )
+    collect_parser.add_argument(
+        "--command-timeout", type=int, default=60, help="Command execution timeout in seconds (default: 60)"
+    )
 
     # process subcommand
-    process_parser = subparsers.add_parser("process", help="Process BGP data and extract AS numbers", parents=[common_flags_parent])
+    process_parser = subparsers.add_parser(
+        "process", help="Process BGP data and extract AS numbers", parents=[common_flags_parent]
+    )
     process_parser.add_argument("input_file", help="Input file with BGP data or mixed text")
     process_parser.add_argument("-o", "--output", help="Output file for processed data")
-    process_parser.add_argument("--extract-as", action="store_true", help="Extract AS numbers instead of text processing")
+    process_parser.add_argument(
+        "--extract-as", action="store_true", help="Extract AS numbers instead of text processing"
+    )
     process_parser.add_argument(
         "--pattern",
         default="standard",
@@ -1905,44 +2011,77 @@ def create_parser():
     )
 
     # policy subcommand
-    policy_parser = subparsers.add_parser("policy", help="Generate BGP policies using bgpq4", parents=[common_flags_parent])
+    policy_parser = subparsers.add_parser(
+        "policy", help="Generate BGP policies using bgpq4", parents=[common_flags_parent]
+    )
     # Make input_file optional to support object-only runs
     policy_parser.add_argument("input_file", nargs="?", help="Optional input file containing AS numbers")
     # Add object arguments
     policy_parser.add_argument(
-        "--object", dest="objects", action="append", default=[], help="IRR object (AS-SET/route-set/filter-set); repeatable"
+        "--object",
+        dest="objects",
+        action="append",
+        default=[],
+        help="IRR object (AS-SET/route-set/filter-set); repeatable"
     )
     policy_parser.add_argument("--objects-file", dest="objects_file", help="File with IRR objects, one per line")
-    policy_parser.add_argument("-o", "--output", default="bgpq4_output.txt", help="Output file name (default: bgpq4_output.txt)")
+    policy_parser.add_argument(
+        "-o", "--output", default="bgpq4_output.txt", help="Output file name (default: bgpq4_output.txt)"
+    )
     policy_parser.add_argument("-s", "--separate", action="store_true", help="Create separate files for each AS")
-    policy_parser.add_argument("--output-dir", default="policies", help="Output directory for policy files (default: policies)")
-    policy_parser.add_argument("--timeout", type=int, default=30, help="bgpq4 command timeout in seconds (default: 30)")
+    policy_parser.add_argument(
+        "--output-dir", default="policies", help="Output directory for policy files (default: policies)"
+    )
+    policy_parser.add_argument(
+        "--timeout", type=int, default=30, help="bgpq4 command timeout in seconds (default: 30)"
+    )
     policy_parser.add_argument("--test", action="store_true", help="Test bgpq4 connectivity and exit")
-    policy_parser.add_argument("--test-as", type=int, default=7922, help="AS number to use for connectivity test (default: 7922)")
+    policy_parser.add_argument(
+        "--test-as", type=int, default=7922, help="AS number to use for connectivity test (default: 7922)"
+    )
 
     # discover subcommand
     discover_parser = subparsers.add_parser(
         "discover", help="Discover BGP configurations and generate mappings", parents=[common_flags_parent]
     )
     discover_parser.add_argument("devices_csv", help="CSV file with device addresses and hostnames")
-    discover_parser.add_argument("--output-dir", default="policies", help="Output directory for discovered data (default: policies)")
+    discover_parser.add_argument(
+        "--output-dir", default="policies", help="Output directory for discovered data (default: policies)"
+    )
     discover_parser.add_argument("--show-diff", action="store_true", help="Generate diff report when changes detected")
-    discover_parser.add_argument("--timeout", type=int, default=30, help="SSH connection timeout in seconds (default: 30)")
+    discover_parser.add_argument(
+        "--timeout", type=int, default=30, help="SSH connection timeout in seconds (default: 30)"
+    )
 
     # list subcommand
-    list_parser = subparsers.add_parser("list", help="List discovered routers, AS numbers, or BGP groups", parents=[common_flags_parent])
-    list_parser.add_argument("list_type", choices=["routers", "as", "groups"], help="What to list: routers, AS numbers, or BGP groups")
-    list_parser.add_argument("--output-dir", default="policies", help="Directory containing discovered data (default: policies)")
+    list_parser = subparsers.add_parser(
+        "list", help="List discovered routers, AS numbers, or BGP groups", parents=[common_flags_parent]
+    )
+    list_parser.add_argument(
+        "list_type", choices=["routers", "as", "groups"], help="What to list: routers, AS numbers, or BGP groups"
+    )
+    list_parser.add_argument(
+        "--output-dir", default="policies", help="Directory containing discovered data (default: policies)"
+    )
 
     # apply subcommand
-    apply_parser = subparsers.add_parser("apply", help="Apply BGP policies to router via NETCONF", parents=[common_flags_parent])
+    apply_parser = subparsers.add_parser(
+        "apply", help="Apply BGP policies to router via NETCONF", parents=[common_flags_parent]
+    )
     apply_parser.add_argument("--router", required=True, help="Router hostname to apply policies to")
-    apply_parser.add_argument("--policy-dir", default="policies", help="Directory containing router policies (default: policies)")
+    apply_parser.add_argument(
+        "--policy-dir", default="policies", help="Directory containing router policies (default: policies)"
+    )
     apply_parser.add_argument("--dry-run", action="store_true", help="Preview changes without applying")
     apply_parser.add_argument("--confirm", action="store_true", help="Use confirmed commit with automatic rollback")
-    apply_parser.add_argument("--confirm-timeout", type=int, default=10, help="Confirmation timeout in minutes (default: 10)")
     apply_parser.add_argument(
-        "--diff-format", choices=["text", "set", "xml"], default="text", help="Format for configuration diff (default: text)"
+        "--confirm-timeout", type=int, default=10, help="Confirmation timeout in minutes (default: 10)"
+    )
+    apply_parser.add_argument(
+        "--diff-format",
+        choices=["text", "set", "xml"],
+        default="text",
+        help="Format for configuration diff (default: text)"
     )
     apply_parser.add_argument("--skip-safety", action="store_true", help="Skip safety validation (NOT RECOMMENDED)")
     apply_parser.add_argument("--force", action="store_true", help="Force application despite high risk")
@@ -1955,19 +2094,33 @@ def create_parser():
     apply_parser.add_argument("--comment", help="Commit comment")
 
     # pipeline subcommand
-    pipeline_parser = subparsers.add_parser("pipeline", help="Run complete BGP policy generation workflow", parents=[common_flags_parent])
+    pipeline_parser = subparsers.add_parser(
+        "pipeline", help="Run complete BGP policy generation workflow", parents=[common_flags_parent]
+    )
     pipeline_parser.add_argument("devices_csv", help="CSV file with device addresses")
     pipeline_parser.add_argument(
-        "--output-dir", default="bgp_pipeline_output", help="Output directory for all pipeline results (default: bgp_pipeline_output)"
+        "--output-dir",
+        default="bgp_pipeline_output",
+        help="Output directory for all pipeline results (default: bgp_pipeline_output)"
     )
-    pipeline_parser.add_argument("--mode", choices=["system", "autonomous"], default="system", help="Execution mode (default: system)")
-    pipeline_parser.add_argument("--timeout", type=int, default=30, help="Command timeout in seconds (default: 30)")
-    pipeline_parser.add_argument("--command-timeout", type=int, default=60, help="SSH command timeout in seconds (default: 60)")
-    pipeline_parser.add_argument("--multi-router", action="store_true", help="Use multi-router coordinator for staged rollout")
+    pipeline_parser.add_argument(
+        "--mode", choices=["system", "autonomous"], default="system", help="Execution mode (default: system)"
+    )
+    pipeline_parser.add_argument(
+        "--timeout", type=int, default=30, help="Command timeout in seconds (default: 30)"
+    )
+    pipeline_parser.add_argument(
+        "--command-timeout", type=int, default=60, help="SSH command timeout in seconds (default: 60)"
+    )
+    pipeline_parser.add_argument(
+        "--multi-router", action="store_true", help="Use multi-router coordinator for staged rollout"
+    )
     pipeline_parser.add_argument(
         "--strategy", choices=["blast", "phased", "canary"], default="blast", help="Rollout strategy (default: blast)"
     )
-    pipeline_parser.add_argument("--concurrency", type=int, default=5, help="Concurrent operations per stage (default: 5)")
+    pipeline_parser.add_argument(
+        "--concurrency", type=int, default=5, help="Concurrent operations per stage (default: 5)"
+    )
     pipeline_parser.add_argument("--run-id", type=str, help="Resume existing rollout run by ID")
 
     # rollout-status subcommand
@@ -1981,8 +2134,12 @@ def create_parser():
     test_proxy_parser = subparsers.add_parser(
         "test-proxy", help="Test IRR proxy configuration and connectivity", parents=[common_flags_parent]
     )
-    test_proxy_parser.add_argument("--test-bgpq4", action="store_true", help="Test bgpq4 functionality through proxy")
-    test_proxy_parser.add_argument("--timeout", type=int, default=10, help="Connection timeout in seconds (default: 10)")
+    test_proxy_parser.add_argument(
+        "--test-bgpq4", action="store_true", help="Test bgpq4 functionality through proxy"
+    )
+    test_proxy_parser.add_argument(
+        "--timeout", type=int, default=10, help="Connection timeout in seconds (default: 10)"
+    )
 
     # RPKI Cache Check subcommand
     rpki_check_parser = subparsers.add_parser(
@@ -2018,6 +2175,15 @@ def create_parser():
     notify_parser = subparsers.add_parser("notify-email", help="Send alert/test email", parents=[common_flags_parent])
     notify_parser.add_argument("--subject", required=True, help="Email subject")
     notify_parser.add_argument("--body", required=True, help="Email body")
+
+    # config-validate subcommand
+    config_validate_parser = subparsers.add_parser(
+        "config-validate", help="Validate configuration file or active configuration", parents=[common_flags_parent]
+    )
+    config_validate_parser.add_argument(
+        "--file", help="Path to configuration file to validate (defaults to active config)"
+    )
+    config_validate_parser.add_argument("--json", action="store_true", help="Output results in JSON format")
 
     return parser
 
@@ -2106,6 +2272,7 @@ def main():
         "rpki-check": cmd_rpki_check,
         "rpki-override": cmd_rpki_override,
         "notify-email": cmd_notify_email,
+        "config-validate": cmd_config_validate,
     }
 
     try:

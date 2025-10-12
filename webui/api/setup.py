@@ -68,6 +68,21 @@ async def setup_config(request: Request):
     try:
         config_data = await request.json()
 
+        # Validate configuration before writing files
+        from otto_bgp.utils.config import ConfigManager
+        validation_issues = ConfigManager.validate_object(config_data)
+        if validation_issues:
+            return JSONResponse(
+                {
+                    'error': 'Configuration validation failed',
+                    'issues': [
+                        {"path": "config", "msg": issue}
+                        for issue in validation_issues
+                    ]
+                },
+                status_code=400
+            )
+
         # Create config file atomically
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile('w', dir=str(CONFIG_PATH.parent), delete=False) as tmp:
