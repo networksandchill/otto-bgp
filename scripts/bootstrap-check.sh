@@ -18,8 +18,20 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Configuration
-VENV_PATH="${1:-venv}"
-REQUIRED_PYTHON_VERSION="3.9"
+# Determine default venv path to match installer locations:
+# - User mode:   $HOME/.local/venv
+# - System mode: /usr/local/venv
+if [[ -n "${1:-}" ]]; then
+    VENV_PATH="$1"
+else
+    if [[ "$(id -u)" -eq 0 ]]; then
+        VENV_PATH="/usr/local/venv"
+    else
+        VENV_PATH="$HOME/.local/venv"
+    fi
+fi
+REQUIRED_PYTHON_VERSION="3.12"
+PYTHON_BIN=""  # Will be populated when probing system Python
 
 # Logging functions
 log_info() {
@@ -39,26 +51,32 @@ log_success() {
 }
 
 # Check Python version
+# Probe system Python and require 3.12+ (prefer 3.13 → 3.12 → python3)
 check_python_version() {
-    log_info "Checking Python version..."
-    
-    if ! command -v python3 >/dev/null 2>&1; then
-        log_error "Python 3 not found"
-        echo "Install Python 3.9+ and retry"
+    log_info "Checking system Python for venv creation..."
+
+    local candidates=(python3.13 python3.12 python3)
+    local found=""
+    local ver="0.0"
+
+    for cmd in "${candidates[@]}"; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            ver=$("$cmd" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || echo "0.0")
+            if [[ "${ver//.}" -ge 312 ]]; then
+                found="$cmd"
+                break
+            fi
+        fi
+    done
+
+    if [[ -z "$found" ]]; then
+        log_error "Python 3.12+ required but not found"
+        echo "Install Python 3.12+ and retry"
         exit 1
     fi
-    
-    PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    PYTHON_VERSION_NUM=$(echo "$PYTHON_VERSION" | sed 's/\.//')
-    REQUIRED_VERSION_NUM=$(echo "$REQUIRED_PYTHON_VERSION" | sed 's/\.//')
-    
-    if [[ "$PYTHON_VERSION_NUM" -lt "$REQUIRED_VERSION_NUM" ]]; then
-        log_error "Python $PYTHON_VERSION found, but $REQUIRED_PYTHON_VERSION+ required"
-        echo "Upgrade Python and retry"
-        exit 1
-    fi
-    
-    log_success "Python $PYTHON_VERSION found"
+
+    PYTHON_BIN=$(command -v "$found")
+    log_success "Using $ver ($PYTHON_BIN) for venv creation guidance"
 }
 
 # Check virtual environment exists
@@ -68,7 +86,11 @@ check_venv_exists() {
     if [[ ! -d "$VENV_PATH" ]]; then
         log_error "Virtual environment not found at $VENV_PATH"
         echo "Create virtual environment first:"
-        echo "  python3 -m venv $VENV_PATH"
+        if [[ -n "$PYTHON_BIN" ]]; then
+            echo "  $PYTHON_BIN -m venv $VENV_PATH"
+        else
+            echo "  python3 -m venv $VENV_PATH"
+        fi
         exit 1
     fi
     
@@ -140,10 +162,15 @@ main() {
     echo "========================="
     echo ""
     
-    check_python_version
-    check_venv_exists
-    check_venv_python_version
-    check_venv_imports
+    # Prefer checking an existing virtual environment; only check system Python
+    # when a venv is not present (to guide venv creation).
+    if [[ -d "$VENV_PATH" ]]; then
+        check_venv_python_version
+        check_venv_imports
+    else
+        check_python_version
+        check_venv_exists  # Will exit with guidance
+    fi
     
     echo ""
     log_success "Bootstrap check passed - Otto BGP ready to run"

@@ -110,21 +110,35 @@ command_exists() {
     timeout "$TIMEOUT" command -v "$1" >/dev/null 2>&1
 }
 
-# Check Python with timeout
+# Check Python with timeout (prefer highest available >= 3.12)
 check_python() {
     log_info "Checking Python..."
-    
-    if command_exists python3; then
-        VERSION=$(timeout "$TIMEOUT" python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || echo "0.0")
-        if [[ "${VERSION//.}" -ge 310 ]]; then
-            log_success "Found Python $VERSION"
-            return 0
+
+    # Try candidates in order of preference
+    local candidates=(python3.13 python3.12 python3)
+    local found_cmd=""
+    local version="0.0"
+
+    for cmd in "${candidates[@]}"; do
+        if command_exists "$cmd"; then
+            version=$(timeout "$TIMEOUT" "$cmd" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || echo "0.0")
+            if [[ "${version//.}" -ge 312 ]]; then
+                found_cmd="$cmd"
+                break
+            fi
         fi
+    done
+
+    if [[ -z "$found_cmd" ]]; then
+        log_error "Python 3.12+ required but not found"
+        echo "Install Python 3.12+ and retry"
+        exit 1
     fi
-    
-    log_error "Python 3.10+ required but not found"
-    echo "Install Python 3.10+ and retry"
-    exit 1
+
+    # Resolve absolute path to selected interpreter and export for later steps
+    PYTHON_BIN=$(command -v "$found_cmd")
+    export PYTHON_BIN
+    log_success "Using $("$PYTHON_BIN" -V 2>&1) at $PYTHON_BIN"
 }
 
 # Simplified requirements check with timeouts
@@ -333,7 +347,7 @@ install_python_deps() {
     log_info "Installing Python dependencies..."
     
     # Create virtual environment with timeout
-    if ! timeout 60 python3 -m venv "$VENV_DIR"; then
+    if ! timeout 60 "$PYTHON_BIN" -m venv "$VENV_DIR"; then
         log_error "Failed to create virtual environment"
         echo "Try: sudo apt-get install python3-venv  # On Ubuntu/Debian"
         exit 1
