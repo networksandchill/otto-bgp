@@ -8,11 +8,14 @@ otto-bgp pipeline devices.csv --output-dir ./policies
 
 import argparse
 import atexit
+import json
 import os
 import signal
 import sys
 from pathlib import Path
 from typing import Dict, List
+
+import yaml
 
 from otto_bgp.appliers import UnifiedSafetyManager, create_safety_manager
 from otto_bgp.appliers.exit_codes import OttoExitCodes
@@ -514,31 +517,122 @@ def cmd_list(args):
             print("No discovered data found. Run 'otto-bgp discover' first.")
             return 1
 
+        # Parse filter expressions into dict
+        filters = {}
+        if hasattr(args, 'filter') and args.filter:
+            for filter_expr in args.filter:
+                if '=' in filter_expr:
+                    key, value = filter_expr.split('=', 1)
+                    filters[key.strip()] = value.strip()
+
+        # Build typed rows based on list_type
+        rows = []
         if args.list_type == "routers":
-            print("Discovered Routers:")
-            print("-" * 50)
             for hostname, data in mappings.get("routers", {}).items():
                 as_count = len(data.get("discovered_as_numbers", []))
                 group_count = len(data.get("bgp_groups", []))
-                print(f"  {hostname:<30} AS: {as_count:3d}  Groups: {group_count:2d}")
+                row = {
+                    "hostname": hostname,
+                    "as_count": as_count,
+                    "group_count": group_count
+                }
+                rows.append(row)
 
         elif args.list_type == "as":
-            print("Discovered AS Numbers:")
-            print("-" * 50)
             as_numbers = mappings.get("as_numbers", {})
             for as_num in sorted(as_numbers.keys(), key=int):
                 data = as_numbers[as_num]
                 router_count = len(data.get("routers", []))
-                groups = ", ".join(data.get("groups", []))
-                print(f"  AS{as_num:<10} Routers: {router_count:2d}  Groups: {groups}")
+                groups = data.get("groups", [])
+                row = {
+                    "as_number": as_num,
+                    "router_count": router_count,
+                    "groups": groups
+                }
+                rows.append(row)
 
         elif args.list_type == "groups":
-            print("Discovered BGP Groups:")
-            print("-" * 50)
             for group_name, data in mappings.get("bgp_groups", {}).items():
                 as_count = len(data.get("as_numbers", []))
                 router_count = len(data.get("routers", []))
-                print(f"  {group_name:<25} AS: {as_count:3d}  Routers: {router_count:2d}")
+                row = {
+                    "group_name": group_name,
+                    "as_count": as_count,
+                    "router_count": router_count
+                }
+                rows.append(row)
+
+        # Apply filters
+        if filters:
+            filtered_rows = []
+            for row in rows:
+                match = True
+                for key, value in filters.items():
+                    if key not in row:
+                        # Gracefully ignore unknown filter keys
+                        continue
+                    row_value = str(row[key])
+                    # For numeric fields, try numeric comparison
+                    if key in ("as_count", "group_count", "router_count", "as_number"):
+                        try:
+                            if int(row_value) != int(value):
+                                match = False
+                                break
+                        except (ValueError, TypeError):
+                            if row_value != value:
+                                match = False
+                                break
+                    else:
+                        if row_value != value:
+                            match = False
+                            break
+                if match:
+                    filtered_rows.append(row)
+            rows = filtered_rows
+
+        # Output based on format
+        if args.format in ("json", "yaml"):
+            # Ensure deterministic ordering for structured outputs
+            if args.list_type == "routers":
+                emit_rows = sorted(rows, key=lambda r: r["hostname"])  # stable by hostname
+            elif args.list_type == "as":
+                # Sort groups and AS number numerically for determinism
+                emit_rows = []
+                for r in rows:
+                    r2 = dict(r)
+                    if isinstance(r2.get("groups"), list):
+                        r2["groups"] = sorted(r2["groups"])
+                    emit_rows.append(r2)
+                emit_rows.sort(key=lambda r: int(r["as_number"]))
+            elif args.list_type == "groups":
+                emit_rows = sorted(rows, key=lambda r: r["group_name"])  # stable by group name
+            else:
+                emit_rows = rows
+
+            if args.format == "json":
+                print(json.dumps(emit_rows, indent=2, sort_keys=False))
+            else:
+                print(yaml.safe_dump(emit_rows, sort_keys=False, default_flow_style=False))
+        else:
+            # Preserve exact current plain-text output
+            if args.list_type == "routers":
+                print("Discovered Routers:")
+                print("-" * 50)
+                for row in rows:
+                    print(f"  {row['hostname']:<30} AS: {row['as_count']:3d}  Groups: {row['group_count']:2d}")
+
+            elif args.list_type == "as":
+                print("Discovered AS Numbers:")
+                print("-" * 50)
+                for row in rows:
+                    groups_str = ", ".join(row["groups"])  # preserve original order
+                    print(f"  AS{row['as_number']:<10} Routers: {row['router_count']:2d}  Groups: {groups_str}")
+
+            elif args.list_type == "groups":
+                print("Discovered BGP Groups:")
+                print("-" * 50)
+                for row in rows:
+                    print(f"  {row['group_name']:<25} AS: {row['as_count']:3d}  Routers: {row['router_count']:2d}")
 
         return 0
 
@@ -2079,6 +2173,17 @@ def create_parser():
     )
     list_parser.add_argument(
         "--output-dir", default="policies", help="Directory containing discovered data (default: policies)"
+    )
+    list_parser.add_argument(
+        "--format",
+        choices=["text", "json", "yaml"],
+        default="text",
+        help="Output format: text (default), json, or yaml"
+    )
+    list_parser.add_argument(
+        "--filter",
+        action="append",
+        help="Filter results with key=value expressions (repeatable)"
     )
 
     # apply subcommand

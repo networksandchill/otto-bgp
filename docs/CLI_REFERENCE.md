@@ -321,18 +321,29 @@ groups                    # List BGP groups
 #### Options
 ```bash
 --output-dir DIR          # Directory containing discovered data (default: policies)
+--format FORMAT           # Output format: text (default), json, or yaml
+--filter KEY=VALUE        # Filter results with key=value expressions (repeatable)
 ```
 
 #### Examples
 ```bash
-# List all discovered routers
+# List all discovered routers (default text format)
 otto-bgp list routers
 
-# List AS numbers
-otto-bgp list as --output-dir ./policies
+# List AS numbers with JSON output
+otto-bgp list as --format json
 
-# List BGP groups
-otto-bgp list groups
+# List BGP groups with YAML output
+otto-bgp list groups --format yaml --output-dir ./policies
+
+# Filter routers by AS count
+otto-bgp list routers --filter as_count=5
+
+# Filter AS numbers by router count and output as JSON
+otto-bgp list as --filter router_count=2 --format json
+
+# Multiple filters (filters are AND combined)
+otto-bgp list groups --filter as_count=3 --filter router_count=1
 ```
 
 ### 8. test-proxy - Proxy Testing
@@ -541,12 +552,9 @@ Prefer the systemd timer created by install.sh for scheduled runs. For cron-like
 
 ### Monitoring and Alerting
 
-Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CLI does not emit JSON for `list`.
+Use `journalctl -u otto-bgp.service` and application logs for monitoring. The `list` command supports JSON and YAML output formats via `--format` for automation and monitoring integration.
 
 ## Known Gaps and Limitations
-
-### Command Limitations
-- **list command**: Only supports `routers|as|groups` and plain-text output. No `--format` or `--filter` options.
 
 ### Configuration and Environment
 - **BGPQ4 env vars**: `OTTO_BGP_BGPQ4_*` overrides (mode, timeout, workers, retry, IRR source, protocol toggles) are honored by the ConfigManager. CLI flags still take precedence when provided.
