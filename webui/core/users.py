@@ -2,9 +2,11 @@ import json
 import secrets
 from datetime import datetime
 from typing import Dict, Optional
+
 from passlib.hash import bcrypt
-from webui.settings import USERS_PATH
+
 from webui.core.fileops import atomic_write_json
+from webui.settings import USERS_PATH
 
 
 def generate_password() -> str:

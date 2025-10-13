@@ -4,14 +4,13 @@ Caching Utilities for Otto BGP
 Provides intelligent caching for policy generation and discovery results.
 """
 
-import json
-import time
 import hashlib
+import json
 import logging
+import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional, Dict, Any, Union
-from dataclasses import dataclass, asdict
-
+from typing import Any, Dict, Optional, Union
 
 logger = logging.getLogger(__name__)
 

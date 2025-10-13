@@ -9,17 +9,17 @@ CRITICAL: These guardrails prevent dangerous network configurations.
 They are ALWAYS ACTIVE regardless of system or autonomous mode.
 """
 
-import logging
-import signal
-import time
-import threading
 import fcntl
+import logging
 import os
+import signal
+import threading
+import time
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 # Critical guardrails that cannot be disabled
 CRITICAL_GUARDRAILS = {

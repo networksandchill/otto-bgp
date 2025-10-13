@@ -10,14 +10,14 @@ Provides standardized logging setup with:
 - systemd journal integration
 """
 
+import functools
 import logging
 import logging.handlers
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Dict
-import functools
-import time
 
 from otto_bgp.utils.config import get_config
 
@@ -331,9 +331,9 @@ def get_logger(name: str) -> BGPToolkitLogger:
 
 def log_system_info():
     """Log system information for debugging"""
+    import os
     import platform
     import sys
-    import os
     from pathlib import Path
 
     logger = logging.getLogger("bgp-toolkit.system")

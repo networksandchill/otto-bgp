@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional
-from webui.core.security import require_role
-from webui.core.systemd import systemd_units_status, control_service
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
 from webui.core.audit import audit_log
+from webui.core.security import require_role
+from webui.core.systemd import control_service, systemd_units_status
 
 router = APIRouter()
 

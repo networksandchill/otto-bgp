@@ -9,22 +9,22 @@ Modern wrapper for bgpq4 with support for:
 - Structured policy generation and output management
 """
 
-import subprocess
-import logging
-import shutil
-import re
-import os
 import fcntl
+import logging
 import multiprocessing
+import os
+import re
+import shutil
+import subprocess
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from dataclasses import dataclass
-from typing import List, Set, Optional, Dict, Union, Any, Tuple
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 # Import resource management
-from otto_bgp.utils.subprocess_manager import run_with_resource_management, ProcessState
+from otto_bgp.utils.subprocess_manager import ProcessState, run_with_resource_management
 
 # Import timeout management
 from otto_bgp.utils.timeout_config import TimeoutType, get_timeout, timeout_context
@@ -248,8 +248,8 @@ def _save_to_process_safe_cache(as_number: int, policy_content: str, policy_name
         ttl: Time to live in seconds
     """
     import json
-    import time
     import tempfile
+    import time
 
     try:
         # Get cache directory

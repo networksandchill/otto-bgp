@@ -1,0 +1,18 @@
+line-length = 140
+target-version = "py312"
+src = ["otto_bgp", "scripts"]
+
+extend-exclude = [
+  "otto_venv",
+  ".ruff_cache",
+  "output",
+  "bgp_pipeline_output",
+  "tmp",
+]
+
+[lint]
+select = ["F", "I"]
+
+[lint.isort]
+known-first-party = ["otto_bgp", "webui"]
+combine-as-imports = true

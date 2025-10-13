@@ -1,19 +1,25 @@
 import json
 import tempfile
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Optional
-from webui.core.security import require_role
-from webui.core.config_io import (
-    load_config, save_config, redact_sensitive_fields,
-    sync_config_to_otto_env, update_core_email_config,
-    normalize_email_addresses, load_config_json_only
-)
+
 from webui.core.audit import audit_log
+from webui.core.config_io import (
+    load_config,
+    load_config_json_only,
+    normalize_email_addresses,
+    redact_sensitive_fields,
+    save_config,
+    sync_config_to_otto_env,
+    update_core_email_config,
+)
 from webui.core.fileops import create_timestamped_backup, restore_backup
-from webui.settings import CONFIG_PATH, CONFIG_DIR, DATA_DIR
+from webui.core.security import require_role
+from webui.settings import CONFIG_DIR, CONFIG_PATH, DATA_DIR
 
 
 class SMTPTest(BaseModel):
@@ -59,9 +65,7 @@ async def update_config(request: Request,
     # Validate guardrails configuration
     if 'guardrails' in new_config:
         try:
-            from otto_bgp.appliers.guardrails import (
-                validate_guardrail_config, initialize_default_guardrails
-            )
+            from otto_bgp.appliers.guardrails import initialize_default_guardrails, validate_guardrail_config
 
             # Initialize guardrail registry if needed
             try:
@@ -248,9 +252,9 @@ async def send_test_email(request: Request,
     """Send a test email with rate limiting"""
     import smtplib
     import ssl
-    from time import time
-    from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from time import time
 
     payload = await request.json() if request else {}
 

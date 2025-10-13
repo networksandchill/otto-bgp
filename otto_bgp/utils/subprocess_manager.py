@@ -9,15 +9,15 @@ Provides comprehensive subprocess resource management with leak prevention:
 - Resource monitoring and leak detection
 """
 
-import subprocess
-import signal
 import logging
-import time
+import signal
+import subprocess
 import threading
+import time
 from contextlib import contextmanager
-from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class ProcessState(Enum):

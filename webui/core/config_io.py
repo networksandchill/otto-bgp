@@ -3,9 +3,10 @@ import os
 import re
 import tempfile
 from datetime import datetime
-from typing import Dict, Any, List
-from webui.settings import CONFIG_PATH, CONFIG_DIR
+from typing import Any, Dict, List
+
 from webui.core.fileops import atomic_write_json
+from webui.settings import CONFIG_DIR, CONFIG_PATH
 
 
 def redact_sensitive_fields(config: Dict[str, Any]) -> Dict[str, Any]:

@@ -5,10 +5,10 @@ This module provides specialized parsing for Juniper BGP configurations,
 extracting groups, AS numbers, peer relationships, and other BGP data.
 """
 
-import re
 import logging
-from typing import Dict, List, Set, Optional
+import re
 from dataclasses import dataclass
+from typing import Dict, List, Optional, Set
 
 
 @dataclass

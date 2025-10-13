@@ -8,12 +8,12 @@ Security: All timeout values are validated and have safe defaults
 Performance: Optimized timeout values based on operation type
 """
 
-import os
 import logging
+import os
 import time
-from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, Optional
 
 
 class TimeoutType(Enum):

@@ -5,8 +5,8 @@ This module contains the core data models for Otto BGP's router-aware architectu
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Optional
 from datetime import datetime
+from typing import Dict, List, Optional, Set
 
 
 @dataclass

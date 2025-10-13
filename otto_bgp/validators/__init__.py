@@ -10,6 +10,6 @@ Provides comprehensive validation components for BGP policy safety including:
 All validators follow Otto BGP's security-first design principles.
 """
 
-from .rpki import RPKIValidator, RPKIGuardrail
+from .rpki import RPKIGuardrail, RPKIValidator
 
 __all__ = ["RPKIValidator", "RPKIGuardrail"]

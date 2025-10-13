@@ -12,25 +12,25 @@ autonomous modes. They cannot be disabled without explicit emergency override.
 import logging
 import os
 import re
-import subprocess
 import smtplib
 import ssl
+import subprocess
 import threading
-from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Configuration imports for autonomous mode
 from otto_bgp.utils.config import get_config_manager
 
 # PyEZ imports with fallback for environments without PyEZ
 try:
-    from jnpr.junos.utils.config import Config
     from jnpr.junos import Device
-    from jnpr.junos.exception import ConnectError, CommitError
+    from jnpr.junos.exception import CommitError, ConnectError
+    from jnpr.junos.utils.config import Config
 
     PYEZ_AVAILABLE = True
 except ImportError:
@@ -42,14 +42,14 @@ except ImportError:
     CommitError = Exception
 
 # Guardrail and exit code imports
+from .exit_codes import OttoExitCodes
 from .guardrails import (
     GuardrailComponent,
-    GuardrailResult,
     GuardrailConfig,
+    GuardrailResult,
     initialize_default_guardrails,
 )
-from .exit_codes import OttoExitCodes
-from .mode_manager import ModeManager, CommitInfo, HealthResult
+from .mode_manager import CommitInfo, HealthResult, ModeManager
 
 
 @dataclass
@@ -155,11 +155,12 @@ class UnifiedSafetyManager:
 
     def _initialize_guardrails(self):
         """Initialize guardrails honoring OTTO_BGP_GUARDRAILS and defaults"""
-        from .guardrails import (
-            validate_guardrail_config,
-            CRITICAL_GUARDRAILS,
-        )
         from otto_bgp.utils.config import get_config_manager
+
+        from .guardrails import (
+            CRITICAL_GUARDRAILS,
+            validate_guardrail_config,
+        )
 
         # 1) Register defaults (prefix_count, bogon_prefix, concurrent_operation, signal_handling)
         default_guardrails = initialize_default_guardrails(self.logger)

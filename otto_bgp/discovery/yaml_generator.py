@@ -5,12 +5,13 @@ This module generates YAML files for discovered BGP configurations.
 All generated files are READ-ONLY and should never be manually edited.
 """
 
-import yaml
 import json
 import logging
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
+
+import yaml
 
 from ..models import RouterProfile
 

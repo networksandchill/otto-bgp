@@ -1,8 +1,8 @@
 """Multi-router coordination data access layer"""
-import logging
 import json
-from dataclasses import dataclass, asdict
-from typing import List, Optional, Dict, Any
+import logging
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from .core import DatabaseManager, get_db

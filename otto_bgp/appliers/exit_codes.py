@@ -8,9 +8,9 @@ IMPORTANT: These exit codes are used by monitoring systems and autonomous
 operations. Changes to exit codes must be coordinated with operations team.
 """
 
+import logging
 from enum import IntEnum
 from typing import Dict, Optional
-import logging
 
 
 class OttoExitCodes(IntEnum):

@@ -1,11 +1,13 @@
 import logging
 from datetime import datetime
+
 from fastapi import FastAPI, Request
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from webui.settings import WEBUI_ROOT, OTTO_WEBUI_LOG_LEVEL
+from fastapi.staticfiles import StaticFiles
+
 from webui.core.audit import setup_audit_logging
 from webui.core.security import needs_setup
+from webui.settings import OTTO_WEBUI_LOG_LEVEL, WEBUI_ROOT
 
 # Setup logging
 logger = logging.getLogger("otto.webui")
@@ -87,8 +89,20 @@ def create_app() -> FastAPI:
     
     # Include routers
     from webui.api import (
-        auth, setup, profile, users, devices, config, reports, systemd,
-        rpki, rpki_overrides, logs, irr_proxy, ssh, pipeline
+        auth,
+        config,
+        devices,
+        irr_proxy,
+        logs,
+        pipeline,
+        profile,
+        reports,
+        rpki,
+        rpki_overrides,
+        setup,
+        ssh,
+        systemd,
+        users,
     )
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

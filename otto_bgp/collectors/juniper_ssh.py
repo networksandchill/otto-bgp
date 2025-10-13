@@ -9,22 +9,23 @@ Modern implementation of SSH-based BGP data collection with:
 - Structured data objects for pipeline integration
 """
 
-import paramiko
-import os
-import logging
 import csv
+import logging
+import os
 from dataclasses import dataclass
-from typing import List, Optional
 from pathlib import Path
+from typing import List, Optional
 
-# Import secure host key verification
-from otto_bgp.utils.ssh_security import get_host_key_policy
+import paramiko
 
 # Import models
 from otto_bgp.models import DeviceInfo
 
 # Import parallel execution utilities
 from otto_bgp.utils.parallel import ParallelExecutor
+
+# Import secure host key verification
+from otto_bgp.utils.ssh_security import get_host_key_policy
 
 
 @dataclass

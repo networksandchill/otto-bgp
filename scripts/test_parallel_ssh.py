@@ -10,11 +10,11 @@ This script validates that:
 5. Error handling works correctly
 """
 
+import logging
 import os
 import sys
-import time
-import logging
 import tempfile
+import time
 from pathlib import Path
 
 # Add the otto_bgp module to the path

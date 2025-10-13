@@ -1,11 +1,11 @@
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
 from typing import Optional
-from webui.core.security import require_role
-from webui.core.users import (
-    load_users, create_user, update_user, delete_user
-)
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
 from webui.core.audit import audit_log
+from webui.core.security import require_role
+from webui.core.users import create_user, delete_user, load_users, update_user
 
 
 class UserCreate(BaseModel):

@@ -1,8 +1,10 @@
 """IRR Proxy API endpoints for Otto BGP WebUI"""
 import subprocess
+
 from fastapi import APIRouter, Depends, HTTPException
-from webui.core.security import require_role
+
 from webui.core.audit import audit_log
+from webui.core.security import require_role
 
 router = APIRouter()
 

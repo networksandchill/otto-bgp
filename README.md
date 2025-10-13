@@ -74,7 +74,7 @@ sudo systemctl start otto-bgp.timer
 
 ## Prerequisites
 
-- **Linux/macOS** with Python 3.10+
+- **Linux/macOS** with Python 3.12+
 - **bgpq4** for policy generation
 - **rpki-client** for RPKI validation data (optional but recommended)
 - **SSH access** to target Juniper routers

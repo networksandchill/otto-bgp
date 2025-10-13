@@ -1,12 +1,14 @@
 import json
-from fastapi import APIRouter, HTTPException, Depends, Request
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from passlib.hash import bcrypt
-from webui.core.security import get_current_user
+
 from webui.core.audit import audit_log
 from webui.core.fileops import atomic_write_json
+from webui.core.security import get_current_user
 from webui.settings import USERS_PATH
-import logging
 
 logger = logging.getLogger("otto.webui")
 router = APIRouter()

@@ -878,7 +878,17 @@ nano ~/.config/otto-bgp/config.json
 
 ### Configuration Schema Validation
 
-The CLI does not currently include `config` subcommands. Review or edit the environment file directly (`/etc/otto-bgp/otto.env` or `~/.config/otto-bgp/otto.env`). For advanced configuration, create `/etc/otto-bgp/config.json` and populate the JSON structure shown in this guide; the application will load it automatically when present.
+The CLI includes a `config-validate` subcommand to validate configuration without side effects. Use it to check the active configuration or a specific file before runtime:
+
+```bash
+# Validate active configuration
+otto-bgp config-validate
+
+# Validate a file and output JSON
+otto-bgp config-validate --file /etc/otto-bgp/config.json --json
+```
+
+For viewing/editing, use the environment file directly (`/etc/otto-bgp/otto.env` or `~/.config/otto-bgp/otto.env`). For advanced configuration, create `/etc/otto-bgp/config.json` and populate the JSON structure shown in this guide; the application will load it automatically when present.
 
 ### Environment Variable Overrides
 

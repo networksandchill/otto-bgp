@@ -7,14 +7,14 @@ Implements safety mechanisms including preview, confirmation, and rollback.
 CRITICAL: Test in lab environment before production use.
 """
 
-import logging
-import time
-import socket
 import errno
-from pathlib import Path
-from typing import List, Optional, Dict, Any, Callable
+import logging
+import socket
+import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 # Unified safety manager for NETCONF event notifications and guardrails
 from otto_bgp.appliers.safety import UnifiedSafetyManager
@@ -29,13 +29,13 @@ from otto_bgp.utils.timeout_config import (
 # PyEZ imports with fallback for environments without PyEZ
 try:
     from jnpr.junos import Device
-    from jnpr.junos.utils.config import Config
     from jnpr.junos.exception import (
-        ConnectError,
-        ConfigLoadError,
         CommitError,
+        ConfigLoadError,
+        ConnectError,
         RpcError,
     )
+    from jnpr.junos.utils.config import Config
 
     PYEZ_AVAILABLE = True
 except ImportError:
@@ -676,7 +676,8 @@ class JuniperPolicyApplier:
 
         # Import mode manager for finalization strategy
         import os
-        from otto_bgp.appliers.mode_manager import ModeManager, CommitInfo
+
+        from otto_bgp.appliers.mode_manager import CommitInfo, ModeManager
 
         try:
             # Detect mode and get finalization strategy

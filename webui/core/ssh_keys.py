@@ -1,11 +1,11 @@
 """SSH key management for Otto BGP WebUI"""
+import base64
+import hashlib
 import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict
-import hashlib
-import base64
+from typing import Dict, List, Optional, Tuple
 
 # Rate limiting storage
 RATE_LIMITS: Dict[str, float] = {}

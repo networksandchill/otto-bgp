@@ -12,18 +12,18 @@ Or with the toolkit:
     ./bgp-toolkit setup-host-keys
 """
 
-import sys
-import os
 import argparse
 import logging
+import os
 import subprocess
-from pathlib import Path
+import sys
 from datetime import datetime
+from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector, DeviceInfo
+from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
 from otto_bgp.utils.ssh_security import HostKeyManager
 
 

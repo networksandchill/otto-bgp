@@ -1,17 +1,23 @@
+import logging
 from datetime import datetime
+
+import jwt
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from passlib.hash import bcrypt
-import jwt
 from jwt import exceptions as jwt_exceptions
-from webui.core.security import (
-    get_current_user, create_access_token, create_refresh_token,
-    get_jwt_secret, JWT_ALGORITHM, REFRESH_TOKEN_EXPIRE_DAYS
-)
+from passlib.hash import bcrypt
+from pydantic import BaseModel
+
 from webui.core.audit import audit_log
+from webui.core.security import (
+    JWT_ALGORITHM,
+    REFRESH_TOKEN_EXPIRE_DAYS,
+    create_access_token,
+    create_refresh_token,
+    get_current_user,
+    get_jwt_secret,
+)
 from webui.core.users import get_user
-import logging
 
 logger = logging.getLogger("otto.webui")
 router = APIRouter()

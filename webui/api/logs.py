@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
-from webui.core.security import require_role
-from webui.core.logs import get_log_files, read_log_file, get_journalctl_logs
+from fastapi import APIRouter, Depends, HTTPException, Query
+
 from webui.core.audit import audit_log
+from webui.core.logs import get_journalctl_logs, get_log_files, read_log_file
+from webui.core.security import require_role
 
 router = APIRouter()
 

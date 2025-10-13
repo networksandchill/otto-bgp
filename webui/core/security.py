@@ -1,12 +1,12 @@
-import jwt
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import Request, HTTPException, Depends
+
+import jwt
+from fastapi import Depends, HTTPException, Request
 from jwt import exceptions as jwt_exceptions
-from webui.settings import (
-    USERS_PATH, CONFIG_PATH, SETUP_TOKEN_PATH, JWT_SECRET_PATH, OTTO_DEV_MODE
-)
+
+from webui.settings import CONFIG_PATH, JWT_SECRET_PATH, OTTO_DEV_MODE, SETUP_TOKEN_PATH, USERS_PATH
 
 # JWT Configuration
 JWT_ALGORITHM = "HS256"

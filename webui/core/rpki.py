@@ -1,7 +1,8 @@
 import json
 import subprocess
-from typing import Dict
 from datetime import datetime
+from typing import Dict
+
 from webui.settings import DATA_DIR
 
 RPKI_CACHE_PATH = DATA_DIR / "rpki" / "vrp_cache.json"

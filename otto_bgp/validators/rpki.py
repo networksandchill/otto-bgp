@@ -28,21 +28,21 @@ import time
 from collections import OrderedDict
 from concurrent.futures import (
     ThreadPoolExecutor,
-    as_completed,
     TimeoutError as FuturesTimeoutError,
+    as_completed,
 )
-
-# Import timeout management
-from otto_bgp.utils.timeout_config import TimeoutType, get_timeout, timeout_context
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from ipaddress import AddressValueError, NetmaskValueError, ip_network
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union, Any, Iterator
-from ipaddress import ip_network, AddressValueError, NetmaskValueError
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union
+
+# Import timeout management
+from otto_bgp.utils.timeout_config import TimeoutType, get_timeout, timeout_context
 
 # Otto BGP imports for integration
-from ..appliers.guardrails import GuardrailComponent, GuardrailResult, GuardrailConfig
+from ..appliers.guardrails import GuardrailComponent, GuardrailConfig, GuardrailResult
 
 # Import database override manager
 try:

@@ -2,14 +2,21 @@
 from pathlib import Path
 from time import time
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
-from webui.core.security import require_role
+
 from webui.core.audit import audit_log
+from webui.core.security import require_role
 from webui.core.ssh_keys import (
-    generate_keypair, get_public_key, get_fingerprints,
-    upload_private_key, read_known_hosts, add_known_host,
-    fetch_host_key, remove_known_host
+    add_known_host,
+    fetch_host_key,
+    generate_keypair,
+    get_fingerprints,
+    get_public_key,
+    read_known_hosts,
+    remove_known_host,
+    upload_private_key,
 )
 from webui.settings import DATA_DIR
 

@@ -6,16 +6,19 @@ This file serves as the entry point for the WebUI service.
 All application logic has been moved to webui.app and webui.core modules.
 """
 from webui.app import app
+from webui.settings import CONFIG_DIR
 
 if __name__ == "__main__":
-    import uvicorn
-    import ssl
     import os
+    import ssl
     from pathlib import Path
+
+    import uvicorn
     
-    # SSL Configuration
-    cert_path = Path("/etc/otto-bgp/certs/otto-bgp.crt")
-    key_path = Path("/etc/otto-bgp/certs/otto-bgp.key")
+    # SSL Configuration (unified with systemd service)
+    tls_dir = CONFIG_DIR / "tls"
+    cert_path = tls_dir / "cert.pem"
+    key_path = tls_dir / "key.pem"
     
     ssl_context = None
     if cert_path.exists() and key_path.exists():

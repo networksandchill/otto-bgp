@@ -7,35 +7,37 @@ otto-bgp pipeline devices.csv --output-dir ./policies
 """
 
 import argparse
-import sys
-import os
 import atexit
+import os
 import signal
+import sys
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List
+
+from otto_bgp.appliers import UnifiedSafetyManager, create_safety_manager
+from otto_bgp.appliers.exit_codes import OttoExitCodes
+from otto_bgp.appliers.safety import ApplicationResult
 
 # Import our modules
 from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
-from otto_bgp.processors.as_extractor import ASNumberExtractor, BGPTextProcessor
-from otto_bgp.generators.bgpq4_wrapper import BGPq4Wrapper
-from otto_bgp.pipeline.workflow import run_pipeline
-from otto_bgp.utils.logging import log_system_info
-from otto_bgp.utils.config import get_config_manager
-from otto_bgp.models import DeviceInfo
 from otto_bgp.discovery import YAMLGenerator
-from otto_bgp.appliers import UnifiedSafetyManager, create_safety_manager
-from otto_bgp.appliers.exit_codes import OttoExitCodes
-from otto_bgp.validators.rpki import RPKIState
+from otto_bgp.generators.bgpq4_wrapper import BGPq4Wrapper
+from otto_bgp.models import DeviceInfo
+from otto_bgp.pipeline.workflow import run_pipeline
+from otto_bgp.processors.as_extractor import ASNumberExtractor, BGPTextProcessor
+from otto_bgp.utils.config import get_config_manager
 from otto_bgp.utils.error_handling import (
-    handle_errors,
     ErrorFormatter,
     ParameterValidator,
-    validate_common_args,
+    ValidationError,
+    handle_errors,
+    print_error,
     print_success,
     print_warning,
-    print_error,
-    ValidationError,
+    validate_common_args,
 )
+from otto_bgp.utils.logging import log_system_info
+from otto_bgp.validators.rpki import RPKIState
 
 # Global resource tracking for emergency cleanup
 _active_connections = set()
@@ -433,9 +435,10 @@ def cmd_discover(args):
     logger = get_logger("otto-bgp.discover")
 
     try:
+        from pathlib import Path
+
         from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
         from otto_bgp.discovery import RouterInspector, YAMLGenerator
-        from pathlib import Path
 
         # Initialize components
         collector = JuniperSSHCollector()
@@ -585,8 +588,8 @@ def cmd_apply(args):
 
     try:
         # Import here to fail gracefully if PyEZ not installed
-        from otto_bgp.appliers.juniper_netconf import JuniperPolicyApplier
         from otto_bgp.appliers.adapter import PolicyAdapter
+        from otto_bgp.appliers.juniper_netconf import JuniperPolicyApplier
 
         # Initialize components
         safety = create_safety_manager()
@@ -873,11 +876,11 @@ def cmd_pipeline(args):
         if use_coordinator:
             # Multi-router coordinated rollout
             from otto_bgp.pipeline.multi_router_coordinator import (
-                MultiRouterCoordinator,
                 BlastStrategy,
-                PhasedStrategy,
                 CanaryStrategy,
                 CoordinatorConfig,
+                MultiRouterCoordinator,
+                PhasedStrategy,
             )
 
             logger.info("Using multi-router coordinator for staged rollout")
@@ -953,6 +956,12 @@ def cmd_pipeline(args):
 
                     # Execute pipeline for this target
                     try:
+                        if getattr(args, "dry_run", False):
+                            # Dry-run mode: skip NETCONF application
+                            coordinator.skip_target(target.target_id, "dry-run")
+                            print(f"  ⊘ {target.hostname} (dry-run)")
+                            continue
+
                         rollout_context = {
                             "run_id": run_id,
                             "stage_id": batch.stage_id,
@@ -1018,7 +1027,13 @@ def cmd_pipeline(args):
                 continue
 
             # Execute unified pipeline with mode parameter
-            result = safety_manager.execute_pipeline(policies=device_policies, hostname=device.hostname, mode=mode)
+            if getattr(args, "dry_run", False):
+                # Dry-run mode: skip NETCONF application
+                result = ApplicationResult(success=True)
+                print(f"  ⊘ {device.hostname} (dry-run)")
+                logger.info(f"Pipeline dry-run for {device.hostname}")
+            else:
+                result = safety_manager.execute_pipeline(policies=device_policies, hostname=device.hostname, mode=mode)
 
             results.append(result)
 
@@ -1322,8 +1337,8 @@ def generate_policies_for_devices(devices: List[DeviceInfo]) -> List[Dict]:
 
 def cmd_rollout_status(args):
     """Check status of multi-router rollout"""
-    from otto_bgp.utils.logging import get_logger
     from otto_bgp.database import MultiRouterDAO
+    from otto_bgp.utils.logging import get_logger
 
     logger = get_logger("otto-bgp.rollout-status")
 
@@ -1620,8 +1635,8 @@ def _try_vrp_cache_refresh(cache_path, logger) -> bool:
 
 def _wait_for_cache_ready(cache_path, logger, max_wait_seconds: int = 45) -> bool:
     """Poll for cache existence + parseable JSON to avoid partial reads."""
-    import time as _time
     import json as _json
+    import time as _time
     from pathlib import Path as _Path
 
     cache_path = _Path(cache_path)
@@ -1656,9 +1671,10 @@ def cmd_rpki_check(args):
 
     logger = get_logger("otto-bgp.rpki-check")
     try:
-        from otto_bgp.validators.rpki import RPKIValidator
         import time
         from pathlib import Path
+
+        from otto_bgp.validators.rpki import RPKIValidator
 
         # Get configuration
         config_manager = get_config_manager()
@@ -1771,9 +1787,9 @@ def cmd_rpki_check(args):
 
 def cmd_rpki_override(args):
     """Manage RPKI overrides"""
-    from otto_bgp.utils.logging import get_logger
-    from otto_bgp.database.rpki_overrides import RPKIOverrideManager
     from otto_bgp.appliers.exit_codes import OttoExitCodes
+    from otto_bgp.database.rpki_overrides import RPKIOverrideManager
+    from otto_bgp.utils.logging import get_logger
 
     logger = get_logger("otto-bgp.rpki-override")
 
@@ -1844,8 +1860,8 @@ def cmd_rpki_override(args):
 
 def cmd_notify_email(args):
     """Send an email using configured SMTP settings."""
-    from otto_bgp.utils.config import get_config_manager
     from otto_bgp.appliers.safety import UnifiedSafetyManager
+    from otto_bgp.utils.config import get_config_manager
     from otto_bgp.utils.logging import get_logger
 
     logger = get_logger("otto-bgp.notify-email")
@@ -1871,9 +1887,10 @@ def cmd_notify_email(args):
 
 def cmd_config_validate(args):
     """Validate configuration file or active configuration"""
-    from otto_bgp.utils.logging import get_logger
-    from otto_bgp.utils.config import ConfigManager
     import json
+
+    from otto_bgp.utils.config import ConfigManager
+    from otto_bgp.utils.logging import get_logger
 
     logger = get_logger("otto-bgp.config-validate")
 
@@ -2122,13 +2139,22 @@ def create_parser():
         "--concurrency", type=int, default=5, help="Concurrent operations per stage (default: 5)"
     )
     pipeline_parser.add_argument("--run-id", type=str, help="Resume existing rollout run by ID")
+    pipeline_parser.add_argument(
+        "--input-file", help="Process a file directly instead of devices.csv (bypasses SSH collection)"
+    )
+    pipeline_parser.add_argument(
+        "-s", "--separate", action="store_true", help="Generate per-resource output files"
+    )
+    pipeline_parser.add_argument(
+        "--dry-run", action="store_true", help="Skip NETCONF policy application"
+    )
 
     # rollout-status subcommand
     rollout_status_parser = subparsers.add_parser(
         "rollout-status", help="Check status of multi-router rollout", parents=[common_flags_parent]
     )
     rollout_status_parser.add_argument("run_id", help="Rollout run ID")
-    rollout_status_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed target information")
+    # Use global --verbose from common_flags_parent; avoid duplicate flag here
 
     # test-proxy subcommand
     test_proxy_parser = subparsers.add_parser(

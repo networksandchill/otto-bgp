@@ -5,10 +5,10 @@ This module provides the core inspection capabilities for discovering BGP
 groups, AS numbers, and peer relationships from router configurations.
 """
 
-import re
 import logging
-from typing import Dict, List, Set
+import re
 from dataclasses import dataclass, field
+from typing import Dict, List, Set
 
 from ..models import RouterProfile
 

@@ -6,17 +6,17 @@ file that can be applied to a router. It handles proper formatting,
 deduplication, and sectioning of Juniper policy configurations.
 """
 
-import logging
-import tempfile
-import heapq
-import os
-import gc
 import atexit
-from pathlib import Path
-from typing import List, Dict, Optional, Iterator, TextIO
+import gc
+import heapq
+import logging
+import os
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from contextlib import contextmanager
+from pathlib import Path
+from typing import Dict, Iterator, List, Optional, TextIO
 
 
 @dataclass

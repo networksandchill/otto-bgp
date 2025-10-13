@@ -14,21 +14,18 @@ legacy_scripts/show-peers-juniper.py → AS-info.py → bgpq4_processor.py
 
 import logging
 import time
-from pathlib import Path
-from typing import List, Dict, Optional
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from ..collectors.juniper_ssh import JuniperSSHCollector, DeviceInfo
-from ..processors.as_extractor import ASNumberExtractor
-from ..generators.bgpq4_wrapper import BGPq4Wrapper
-from ..utils.logging import setup_logging
-from ..models import RouterProfile
+from ..collectors.juniper_ssh import DeviceInfo, JuniperSSHCollector
 from ..discovery import RouterInspector
+from ..generators.bgpq4_wrapper import BGPq4Wrapper
+from ..models import RouterProfile
+from ..processors.as_extractor import ASNumberExtractor
+from ..utils.logging import setup_logging
 from ..validators.rpki import RPKIState
-from .multi_router_coordinator import (
-    MultiRouterCoordinator, RolloutStrategy,
-    BlastStrategy, PhasedStrategy, CanaryStrategy
-)
+from .multi_router_coordinator import BlastStrategy, CanaryStrategy, MultiRouterCoordinator, PhasedStrategy, RolloutStrategy
 
 
 @dataclass
@@ -161,15 +158,16 @@ class BGPPolicyPipeline:
     def _initialize_rpki_validator(self):
         """Initialize RPKI validator for pipeline reuse"""
         try:
-            from ..validators.rpki import RPKIValidator
             from ..utils.config import get_config_manager
+            from ..validators.rpki import RPKIValidator
 
             config_mgr = get_config_manager()
             config = config_mgr.get_config()
 
             # Use centralized RPKI config function
-            from ..main import _get_rpki_config
             import argparse
+
+            from ..main import _get_rpki_config
             empty_args = argparse.Namespace()
             rpki_settings = _get_rpki_config(config, empty_args)
 
@@ -208,10 +206,86 @@ class BGPPolicyPipeline:
         self._pipeline_used = True
 
     def run_complete_pipeline(self) -> PipelineResult:
-        """Execute the complete BGP policy generation pipeline (router-aware)"""
+        """Execute the complete BGP policy generation pipeline.
+
+        When an input file is provided (direct-file mode), process that file and
+        generate policies without SSH collection. Otherwise, run the router-aware
+        pipeline that discovers per-router contexts from the devices CSV.
+        """
         self._ensure_fresh_pipeline()  # Ensure clean state for this run
-        # Always use router-aware pipeline
+
+        # Direct-file mode: skip SSH and router discovery
+        if self.config.input_file:
+            return self.run_direct_file_pipeline()
+
+        # Router-aware (default) pipeline
         return self.run_router_aware_pipeline()
+
+    def run_direct_file_pipeline(self) -> PipelineResult:
+        """Execute the direct-file BGP policy generation pipeline.
+
+        Reads a provided input file, extracts AS numbers, optionally performs
+        RPKI validation, generates policies, and writes results to the output
+        directory. No SSH collection or router profile discovery is performed.
+        """
+        self.start_time = time.time()
+        errors: List[str] = []
+
+        try:
+            # Phase 1: Read input file
+            bgp_text = self._read_input_file()
+
+            # Phase 2: Extract AS numbers
+            as_numbers = self._extract_as_numbers(bgp_text)
+
+            # Phase 3: Optional RPKI validation per AS
+            rpki_status: Dict[int, Dict[str, Any]] = {}
+            if self.rpki_validator and as_numbers:
+                try:
+                    for asn in as_numbers:
+                        try:
+                            rpki_status[asn] = self.rpki_validator.check_as_validity(asn)
+                        except Exception as e:
+                            # Record error state but continue
+                            rpki_status[asn] = {"state": RPKIState.ERROR, "message": str(e)}
+                except Exception as e:
+                    # Do not fail pipeline if RPKI summary generation fails
+                    self.logger.warning(f"Direct-file: RPKI validation failed: {e}")
+
+            # Phase 4: Generate policies for extracted ASNs
+            batch = self.bgp_generator.generate_policies_batch(as_numbers)
+
+            # Phase 5: Write outputs honoring separate_files flag
+            created_files = self.bgp_generator.write_policies_to_files(
+                batch_result=batch,
+                output_dir=self.config.output_directory,
+                separate_files=self.config.separate_files,
+                rpki_status=rpki_status,
+            )
+
+            execution_time = time.time() - self.start_time
+
+            result = PipelineResult(
+                success=batch.successful_count > 0,
+                devices_processed=0,
+                routers_configured=0,
+                as_numbers_found=len(as_numbers),
+                policies_generated=batch.successful_count,
+                execution_time=execution_time,
+                output_files=created_files,
+                router_directories=[],
+                errors=errors,
+            )
+
+            self.logger.info(
+                f"Direct-file pipeline completed: {batch.successful_count}/{batch.total_as_count} policies in {execution_time:.2f}s"
+            )
+            return result
+
+        except Exception as e:
+            errors.append(f"Direct-file pipeline failed: {str(e)}")
+            self.logger.error(f"Direct-file pipeline failed: {str(e)}", exc_info=True)
+            return self._create_error_result(errors)
 
     def _collect_bgp_data(self) -> str:
         """
@@ -764,8 +838,8 @@ class BGPPolicyPipeline:
 
     def _generate_deployment_reports(self):
         """Generate deployment matrix and summary reports"""
-        from ..reports import generate_deployment_matrix
         from ..generators.combiner import PolicyCombiner
+        from ..reports import generate_deployment_matrix
 
         reports_dir = Path(self.config.output_directory) / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)

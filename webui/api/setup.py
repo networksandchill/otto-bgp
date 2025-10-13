@@ -1,15 +1,17 @@
-import os
 import json
-import tempfile
+import logging
+import os
 import shutil
+import tempfile
 from datetime import datetime
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from passlib.hash import bcrypt
-from webui.core.security import needs_setup, _require_setup_token
+
 from webui.core.audit import audit_log
-from webui.settings import CONFIG_DIR, CONFIG_PATH, USERS_PATH, SETUP_TOKEN_PATH
-import logging
+from webui.core.security import _require_setup_token, needs_setup
+from webui.settings import CONFIG_DIR, CONFIG_PATH, SETUP_TOKEN_PATH, USERS_PATH
 
 logger = logging.getLogger("otto.webui")
 router = APIRouter()

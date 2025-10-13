@@ -10,15 +10,15 @@ SECURITY: This module handles SSH connections and must follow strict security pr
 - Resource monitoring essential
 """
 
+import atexit
 import logging
+import signal
+import socket
 import subprocess
 import time
-import socket
-import signal
-import atexit
-from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
+from typing import Dict, List, Optional, Tuple, Union
 
 # Import resource management
 from otto_bgp.utils.subprocess_manager import ManagedProcess

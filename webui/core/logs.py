@@ -1,6 +1,7 @@
 import subprocess
-from typing import Dict, List
 from datetime import datetime
+from typing import Dict, List
+
 from webui.settings import DATA_DIR
 
 LOG_DIR = DATA_DIR / "logs"

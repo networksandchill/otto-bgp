@@ -1,9 +1,10 @@
 """Pipeline and rollout status API endpoints"""
-from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, Optional
 import logging
+from typing import Any, Dict, Optional
 
-from otto_bgp.database import MultiRouterDAO, DatabaseError
+from fastapi import APIRouter, HTTPException
+
+from otto_bgp.database import DatabaseError, MultiRouterDAO
 
 logger = logging.getLogger('webui.api.pipeline')
 router = APIRouter()

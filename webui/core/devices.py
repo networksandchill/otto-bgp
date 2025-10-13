@@ -1,8 +1,9 @@
 import csv
 import io
-from typing import List, Dict, Optional
-from webui.settings import CONFIG_DIR
+from typing import Dict, List, Optional
+
 from webui.core.fileops import atomic_write_text
+from webui.settings import CONFIG_DIR
 
 DEVICES_CSV_PATH = CONFIG_DIR / 'devices.csv'
 

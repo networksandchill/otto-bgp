@@ -1,10 +1,9 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from webui.core.security import get_current_user, require_role
-from webui.core.devices import (
-    load_devices, create_device, update_device, delete_device
-)
+
 from webui.core.audit import audit_log
+from webui.core.devices import create_device, delete_device, load_devices, update_device
+from webui.core.security import get_current_user, require_role
 
 
 class DeviceModel(BaseModel):

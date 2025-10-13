@@ -276,6 +276,9 @@ otto-bgp pipeline <devices.csv> [options]
 --timeout SECONDS         # Command timeout in seconds (default: 30)
 --command-timeout SECONDS # SSH command timeout in seconds (default: 60)
 --no-rpki                 # Disable RPKI validation during policy generation (not recommended)
+--input-file FILE         # Process a file directly (bypasses SSH collection; CSV arg is ignored)
+-s, --separate            # Generate per-resource output files
+--dry-run                 # Skip NETCONF policy application (generate and report only)
 ```
 
 Global autonomous flags apply (`--autonomous/--system/--auto-threshold`).
@@ -286,6 +289,12 @@ Global autonomous flags apply (`--autonomous/--system/--auto-threshold`).
 ```bash
 # Complete manual pipeline
 otto-bgp pipeline devices.csv --output-dir /var/lib/otto-bgp/output
+
+# Direct-file processing with separate outputs (no SSH collection)
+otto-bgp pipeline devices.csv --input-file bgp.txt --separate --output-dir ./policies
+
+# Dry-run to generate policies without applying to routers
+otto-bgp pipeline devices.csv --dry-run --output-dir ./out
 ```
 
 **Autonomous Pipeline:**
@@ -532,12 +541,11 @@ Prefer the systemd timer created by install.sh for scheduled runs. For cron-like
 
 ### Monitoring and Alerting
 
-Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CLI does not emit JSON for `list`, and `pipeline` has no `--dry-run` flag.
+Use `journalctl -u otto-bgp.service` and application logs for monitoring. The CLI does not emit JSON for `list`.
 
 ## Known Gaps and Limitations
 
 ### Command Limitations
-- **Pipeline command limitations**: No `--separate`, `--input-file`, or `--dry-run` options. Pipeline operates on device CSV files only.
 - **list command**: Only supports `routers|as|groups` and plain-text output. No `--format` or `--filter` options.
 
 ### Configuration and Environment
