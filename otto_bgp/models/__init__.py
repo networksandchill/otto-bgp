@@ -23,6 +23,8 @@ class RouterProfile:
     discovered_as_numbers: Set[int] = field(default_factory=set)  # Auto-discovered from config
     bgp_groups: Dict[str, List[int]] = field(default_factory=dict)  # BGP group -> AS numbers mapping
     metadata: Dict = field(default_factory=dict)  # Version, platform, collection timestamp, etc.
+    site: Optional[str] = None  # Router site/region (e.g., "us-east", "eu-west")
+    role: Optional[str] = None  # Router role (e.g., "edge", "core", "transit")
 
     def __post_init__(self):
         """Initialize metadata with default values if not provided."""
@@ -45,6 +47,8 @@ class RouterProfile:
         return {
             'hostname': self.hostname,
             'ip_address': self.ip_address,
+            'site': self.site,
+            'role': self.role,
             'discovered_as_numbers': sorted(list(self.discovered_as_numbers)),
             'bgp_groups': self.bgp_groups,
             'metadata': self.metadata,
@@ -57,6 +61,8 @@ class RouterProfile:
         profile = cls(
             hostname=data['hostname'],
             ip_address=data['ip_address'],
+            site=data.get('site'),
+            role=data.get('role'),
             bgp_config="",  # Config not included in serialization
             discovered_as_numbers=set(data.get('discovered_as_numbers', [])),
             bgp_groups=data.get('bgp_groups', {}),
@@ -161,9 +167,9 @@ class DeviceInfo:
         return RouterProfile(
             hostname=self.hostname,
             ip_address=self.address,
+            site=self.region,
+            role=self.role,
             metadata={
                 'port': self.port,
-                'role': self.role,
-                'region': self.region
             }
         )

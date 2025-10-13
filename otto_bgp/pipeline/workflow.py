@@ -654,8 +654,8 @@ class BGPPolicyPipeline:
                 devices_list.append({
                     'hostname': profile.hostname,
                     'address': profile.ip_address,
-                    'region': getattr(profile, 'region', 'default'),
-                    'role': getattr(profile, 'role', 'default'),
+                    'region': (profile.site or 'default'),
+                    'role': (profile.role or 'default'),
                     'policy_count': success_count
                 })
 
@@ -733,11 +733,8 @@ class BGPPolicyPipeline:
         profiles = []
 
         for device in devices:
-            profile = RouterProfile(
-                hostname=device.hostname,
-                ip_address=device.address,
-                bgp_config=""
-            )
+            profile = device.to_router_profile()
+            profile.bgp_config = ""
             profiles.append(profile)
 
         self.logger.info(f"Loaded {len(profiles)} router profiles")
