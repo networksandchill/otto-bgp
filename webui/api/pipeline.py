@@ -2,9 +2,13 @@
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 
 from otto_bgp.database import DatabaseError, MultiRouterDAO
+from otto_bgp.pipeline.workflow import run_pipeline
+from webui.core.audit import audit_log
+from webui.core.security import require_role
+from webui.settings import CONFIG_DIR, DATA_DIR
 
 logger = logging.getLogger('webui.api.pipeline')
 router = APIRouter()
@@ -215,3 +219,55 @@ async def get_rollout_events(run_id: str, event_type: Optional[str] = None,
     except Exception as e:
         logger.error(f"Failed to get events for {run_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/run")
+async def run_pipeline_endpoint(
+    payload: Dict[str, Any],
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(require_role("admin")),
+) -> Dict[str, Any]:
+    try:
+        mode = payload.get("mode", "router_aware")
+        separate_files = bool(payload.get("separate_files", False))
+        rpki_enabled = bool(payload.get("rpki_enabled", True))
+
+        if mode == "direct_file":
+            input_file = payload.get("input_file")
+            if not input_file:
+                raise HTTPException(status_code=400, detail="input_file required for direct_file mode")
+            devices_file = str(CONFIG_DIR / "devices.csv")
+        else:
+            input_file = None
+            devices_file = payload.get("devices_file") or str(CONFIG_DIR / "devices.csv")
+
+        output_dir = payload.get("output_dir") or str(DATA_DIR / "policies")
+
+        def _run() -> None:
+            try:
+                run_pipeline(
+                    devices_file=devices_file,
+                    output_dir=output_dir,
+                    separate_files=separate_files,
+                    input_file=input_file,
+                    rpki_enabled=rpki_enabled,
+                )
+                audit_log("pipeline_run_completed", user=user.get("sub"), resource=mode)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Pipeline run failed: {e}")
+                audit_log("pipeline_run_failed", user=user.get("sub"), resource=mode, result="failure")
+
+        background_tasks.add_task(_run)
+        audit_log("pipeline_run_requested", user=user.get("sub"), resource=mode)
+        return {
+            "accepted": True,
+            "mode": mode,
+            "output_dir": output_dir,
+            "separate_files": separate_files,
+            "rpki_enabled": rpki_enabled,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Failed to schedule pipeline run: {e}")
+        raise HTTPException(status_code=500, detail="Failed to schedule pipeline run")
