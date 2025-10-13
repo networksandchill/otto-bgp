@@ -1998,23 +1998,20 @@ class RPKIValidator:
         return asn
 
     def _extract_prefixes_from_policy(self, content: str) -> Set[str]:
-        """Extract IP prefixes from policy content"""
+        """Extract IP prefixes from policy content (IPv4 and IPv6 aware)"""
         prefixes = set()
 
-        # IPv4 prefix pattern
-        ipv4_pattern = (
-            r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}"
-            r"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(?:[0-9]|[1-2][0-9]|3[0-2])\b"
-        )
+        # Extract candidate prefixes (both IPv4 and IPv6)
+        candidates = re.findall(r"[0-9A-Fa-f:.]+/[0-9]{1,3}", content)
 
-        for match in re.finditer(ipv4_pattern, content):
-            prefix = match.group(0)
+        for candidate in candidates:
             try:
-                # Validate prefix
-                validated_prefix = self._sanitize_prefix(prefix)
+                # Validate and normalize prefix with ip_network(strict=True)
+                validated_prefix = self._sanitize_prefix(candidate)
                 prefixes.add(validated_prefix)
-            except ValueError:
-                self.logger.debug(f"Skipping invalid prefix: {prefix}")
+            except ValueError as e:
+                # Log debug message for invalid tokens as specified in implementation plan
+                self.logger.debug(f"Ignoring invalid prefix candidate '{candidate}': {e}")
 
         return prefixes
 

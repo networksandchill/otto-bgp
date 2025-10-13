@@ -18,6 +18,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from ipaddress import AddressValueError, NetmaskValueError, ip_network
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -214,12 +215,24 @@ class PrefixCountGuardrail(GuardrailComponent):
         )
 
     def _count_prefixes_in_policy(self, policy: Dict[str, Any]) -> int:
-        """Count prefixes in a policy"""
+        """Count prefixes in a policy (IPv4 and IPv6 aware)"""
         import re
 
         content = policy.get("content", "")
-        prefixes = re.findall(r"(\d+\.\d+\.\d+\.\d+/\d+)", content)
-        return len(prefixes)
+        # Extract candidate prefixes (both IPv4 and IPv6)
+        candidates = re.findall(r"[0-9A-Fa-f:.]+/[0-9]{1,3}", content)
+
+        # Validate each candidate with ip_network(strict=True)
+        validated_prefixes = set()
+        for candidate in candidates:
+            try:
+                validated_prefix = ip_network(candidate, strict=True)
+                validated_prefixes.add(str(validated_prefix))
+            except (AddressValueError, NetmaskValueError, ValueError):
+                # Ignore invalid candidates
+                pass
+
+        return len(validated_prefixes)
 
     def _get_thresholds(self) -> Dict[str, Any]:
         """Get thresholds with custom overrides"""

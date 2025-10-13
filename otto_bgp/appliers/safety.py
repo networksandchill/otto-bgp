@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from ipaddress import AddressValueError, NetmaskValueError, ip_network
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -769,14 +770,26 @@ class UnifiedSafetyManager:
         return warnings
 
     def _check_prefix_counts(self, policies: List[Dict]) -> List[str]:
-        """Check prefix counts against safety thresholds"""
+        """Check prefix counts against safety thresholds (IPv4 and IPv6 aware)"""
         warnings = []
         total_prefixes = 0
 
         for policy in policies:
             content = policy.get("content", "")
-            prefixes = re.findall(r"(\d+\.\d+\.\d+\.\d+/\d+)", content)
-            prefix_count = len(prefixes)
+            # Extract candidate prefixes (both IPv4 and IPv6)
+            candidates = re.findall(r"[0-9A-Fa-f:.]+/[0-9]{1,3}", content)
+
+            # Validate each candidate with ip_network(strict=True)
+            validated_prefixes = set()
+            for candidate in candidates:
+                try:
+                    validated_prefix = ip_network(candidate, strict=True)
+                    validated_prefixes.add(str(validated_prefix))
+                except (AddressValueError, NetmaskValueError, ValueError):
+                    # Ignore invalid candidates
+                    pass
+
+            prefix_count = len(validated_prefixes)
             total_prefixes += prefix_count
 
             if prefix_count > self.MAX_PREFIXES_PER_AS:
@@ -851,12 +864,24 @@ class UnifiedSafetyManager:
             return False
 
     def _count_total_prefixes(self, policies: List[Dict]) -> int:
-        """Count total prefixes across all policies"""
+        """Count total prefixes across all policies (IPv4 and IPv6 aware)"""
         total = 0
         for policy in policies:
             content = policy.get("content", "")
-            prefixes = re.findall(r"(\d+\.\d+\.\d+\.\d+/\d+)", content)
-            total += len(prefixes)
+            # Extract candidate prefixes (both IPv4 and IPv6)
+            candidates = re.findall(r"[0-9A-Fa-f:.]+/[0-9]{1,3}", content)
+
+            # Validate each candidate with ip_network(strict=True)
+            validated_prefixes = set()
+            for candidate in candidates:
+                try:
+                    validated_prefix = ip_network(candidate, strict=True)
+                    validated_prefixes.add(str(validated_prefix))
+                except (AddressValueError, NetmaskValueError, ValueError):
+                    # Ignore invalid candidates
+                    pass
+
+            total += len(validated_prefixes)
         return total
 
     def _format_netconf_event(

@@ -189,7 +189,6 @@ All guardrail outputs aggregate into a unified risk level (LOW/MEDIUM/HIGH/CRITI
 - 180-second startup timeout, 30-second shutdown timeout
 
 **Operational Risks:**
-- **IPv6 prefix handling:** Guardrail counters optimized for IPv4 patterns
 - **Large AS sets:** Memory usage scales with AS set size and bgpq4 output
 - **Network partitions:** IRR or RPKI unavailability impacts policy generation
 
@@ -199,9 +198,9 @@ All guardrail outputs aggregate into a unified risk level (LOW/MEDIUM/HIGH/CRITI
 - **Fail-closed enforcement:** When configured (default), VRP cache staleness or absence blocks operations; preflight and guardrail checks enforce freshness
 - **VRP sources:** Supports rpki-client and routinator JSON formats; other validators may require format conversion
 
-**IPv6 Support Limitations:**
-- **Prefix counting accuracy:** Guardrail prefix counters use IPv4-optimized patterns that may undercount IPv6 prefixes in risk calculations
-- **Policy generation scope:** While bgpq4 can generate IPv6 policies, guardrail thresholds should be reviewed for IPv6-heavy environments
+**IPv6 Support:**
+- **Prefix counting:** Guardrail counters are IPv4 and IPv6 aware, accurately counting both protocol families for risk calculations
+- **Policy generation scope:** bgpq4 can generate both IPv4 and IPv6 policies with consistent guardrail validation across both families
 
 **Operational Dependencies:**
 - **IRR availability requirements:** bgpq4 requires Internet Routing Registry access; network partitions impact policy generation
