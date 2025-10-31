@@ -11,7 +11,6 @@ from webui.settings import CONFIG_DIR
 if __name__ == "__main__":
     import os
     import ssl
-    from pathlib import Path
 
     import uvicorn
     

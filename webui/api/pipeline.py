@@ -2,7 +2,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from otto_bgp.database import DatabaseError, MultiRouterDAO
 from otto_bgp.pipeline.workflow import run_pipeline
