@@ -74,6 +74,7 @@ async def setup_config(request: Request):
         from otto_bgp.utils.config import ConfigManager
         validation_issues = ConfigManager.validate_object(config_data)
         if validation_issues:
+            logger.error(f"Configuration validation failed during setup: {validation_issues}")
             return JSONResponse(
                 {
                     'error': 'Configuration validation failed',
