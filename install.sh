@@ -282,9 +282,30 @@ initialize_database() {
     if [[ "$INSTALL_MODE" == "system" ]]; then
         # Run as service user for system installation
         log_info "Initializing database as user: $SERVICE_USER"
-        sudo -u "$SERVICE_USER" "$PYTHON_BIN" -c "
+
+        # Test if service user can actually write to the directory
+        log_info "Testing write permissions..."
+        if sudo -u "$SERVICE_USER" touch "$DATA_DIR/.test_write" 2>/dev/null; then
+            sudo rm -f "$DATA_DIR/.test_write"
+            log_success "Write test successful"
+        else
+            log_error "Service user cannot write to $DATA_DIR"
+            log_error "Current permissions:"
+            ls -ld "$DATA_DIR"
+            return 1
+        fi
+
+        # Initialize database with environment variables preserved
+        sudo -u "$SERVICE_USER" OTTO_BGP_MODE="system" "$PYTHON_BIN" -c "
+import os
 import sys
 sys.path.insert(0, '$LIB_DIR')
+
+print(f'Running as user: {os.getuid()}')
+print(f'OTTO_BGP_MODE: {os.environ.get(\"OTTO_BGP_MODE\", \"not set\")}')
+print(f'Working directory: {os.getcwd()}')
+print(f'DATA_DIR writable: {os.access(\"$DATA_DIR\", os.W_OK)}')
+
 from otto_bgp.database.core import DatabaseManager
 db = DatabaseManager()
 print(f'Database initialized at: {db.db_path}')
