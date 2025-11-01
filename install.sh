@@ -243,6 +243,68 @@ create_directories() {
     log_success "Directories created"
 }
 
+# Initialize SQLite database
+initialize_database() {
+    log_info "Initializing SQLite database..."
+
+    # Set database path based on installation mode
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        DB_PATH="$DATA_DIR/otto.db"
+        export OTTO_BGP_MODE="system"
+    else
+        DB_PATH="$HOME/.local/share/otto-bgp/otto.db"
+        mkdir -p "$(dirname "$DB_PATH")"
+    fi
+
+    # Initialize database by importing the core module
+    # This will create the database file and run migrations
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        # Run as service user for system installation
+        sudo -u "$SERVICE_USER" "$VENV_PYTHON" -c "
+import sys
+sys.path.insert(0, '$LIB_DIR')
+from otto_bgp.database.core import DatabaseManager
+db = DatabaseManager()
+print(f'Database initialized at: {db.db_path}')
+print(f'Schema version: {db.db_path}')
+" 2>&1 || {
+            log_error "Failed to initialize database"
+            return 1
+        }
+    else
+        # Run as current user for user installation
+        "$VENV_PYTHON" -c "
+import sys
+sys.path.insert(0, '$LIB_DIR')
+from otto_bgp.database.core import DatabaseManager
+db = DatabaseManager()
+print(f'Database initialized at: {db.db_path}')
+" 2>&1 || {
+            log_error "Failed to initialize database"
+            return 1
+        }
+    fi
+
+    # Verify database file was created
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        if [[ -f "$DB_PATH" ]]; then
+            log_success "Database initialized at $DB_PATH"
+            sudo chown "$SERVICE_USER:$SERVICE_USER" "$DB_PATH"
+            chmod 644 "$DB_PATH"
+        else
+            log_error "Database file not created at $DB_PATH"
+            return 1
+        fi
+    else
+        if [[ -f "$DB_PATH" ]]; then
+            log_success "Database initialized at $DB_PATH"
+        else
+            log_error "Database file not created at $DB_PATH"
+            return 1
+        fi
+    fi
+}
+
 # Check for existing installation
 check_existing_installation() {
     # Check if installation already exists
@@ -1154,6 +1216,7 @@ main() {
     create_directories
     download_otto_bgp
     install_python_deps
+    initialize_database  # Initialize SQLite database after deps installed
     create_wrapper
     create_config
     create_systemd_services  # New in v0.3.2
