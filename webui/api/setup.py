@@ -70,6 +70,16 @@ async def setup_config(request: Request):
     try:
         config_data = await request.json()
 
+        # Clean up SSH config - only keep expected fields
+        if 'ssh' in config_data:
+            valid_ssh_fields = {'username', 'password', 'key_path', 'connection_timeout', 'command_timeout'}
+            ssh_config = config_data['ssh']
+            unexpected_fields = set(ssh_config.keys()) - valid_ssh_fields
+            if unexpected_fields:
+                logger.info(f"Removing unexpected fields from SSH config: {unexpected_fields}")
+                for field in unexpected_fields:
+                    del ssh_config[field]
+
         # Validate configuration before writing files
         from otto_bgp.utils.config import ConfigManager
         validation_issues = ConfigManager.validate_object(config_data)
