@@ -251,6 +251,24 @@ initialize_database() {
     if [[ "$INSTALL_MODE" == "system" ]]; then
         DB_PATH="$DATA_DIR/otto.db"
         export OTTO_BGP_MODE="system"
+
+        # Ensure DATA_DIR exists and is writable by service user
+        if [[ ! -d "$DATA_DIR" ]]; then
+            log_error "DATA_DIR does not exist: $DATA_DIR"
+            return 1
+        fi
+
+        # Verify ownership is correct
+        log_info "Ensuring correct ownership of $DATA_DIR"
+        sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
+        sudo chmod 755 "$DATA_DIR"
+
+        # Verify service user can write to DATA_DIR
+        if ! sudo -u "$SERVICE_USER" test -w "$DATA_DIR"; then
+            log_error "Service user $SERVICE_USER cannot write to $DATA_DIR"
+            ls -ld "$DATA_DIR"
+            return 1
+        fi
     else
         DB_PATH="$HOME/.local/share/otto-bgp/otto.db"
         mkdir -p "$(dirname "$DB_PATH")"
@@ -263,6 +281,7 @@ initialize_database() {
 
     if [[ "$INSTALL_MODE" == "system" ]]; then
         # Run as service user for system installation
+        log_info "Initializing database as user: $SERVICE_USER"
         sudo -u "$SERVICE_USER" "$PYTHON_BIN" -c "
 import sys
 sys.path.insert(0, '$LIB_DIR')
