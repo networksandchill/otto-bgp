@@ -23,7 +23,6 @@ from otto_bgp.appliers.safety import ApplicationResult
 
 # Import our modules
 from otto_bgp.collectors.juniper_ssh import JuniperSSHCollector
-from otto_bgp.discovery import YAMLGenerator
 from otto_bgp.generators.bgpq4_wrapper import BGPq4Wrapper
 from otto_bgp.models import DeviceInfo
 from otto_bgp.pipeline.workflow import run_pipeline
@@ -466,7 +465,54 @@ def cmd_discover(args):
             print_error("No profiles discovered", "Check device connectivity and credentials")
             return 1
 
-        # Generate and save mappings
+        # Save discovery data to database
+        from otto_bgp.database.router_mapping import RouterMappingManager
+        mapper = RouterMappingManager()
+
+        # Save each router profile to database
+        for profile in profiles:
+            # Update router inventory
+            mapper.update_router_inventory(
+                hostname=profile.hostname,
+                ip_address=profile.ip_address,
+                platform=profile.metadata.get('platform'),
+                model=profile.metadata.get('model'),
+                software_version=profile.metadata.get('software_version'),
+                serial_number=profile.metadata.get('serial_number'),
+                location=profile.metadata.get('location'),
+                role=profile.metadata.get('role'),
+                collection_success=True
+            )
+
+            # Save BGP groups
+            for group_name, group_data in profile.bgp_groups.items():
+                mapper.save_bgp_group(
+                    router_hostname=profile.hostname,
+                    group_name=group_name,
+                    group_type=group_data.get('type'),
+                    import_policy=group_data.get('import_policy'),
+                    export_policy=group_data.get('export_policy'),
+                    peer_count=len(group_data.get('peers', []))
+                )
+
+            # Save router-AS mappings
+            for as_number in profile.discovered_as_numbers:
+                # Find which BGP group this AS belongs to
+                bgp_group = None
+                for group_name, group_data in profile.bgp_groups.items():
+                    if as_number in group_data.get('as_numbers', []):
+                        bgp_group = group_name
+                        break
+
+                if bgp_group:
+                    mapper.update_router_as_mapping(
+                        router_hostname=profile.hostname,
+                        as_number=as_number,
+                        bgp_group=bgp_group,
+                        peer_info={'source': 'discovery'}
+                    )
+
+        # Generate and save mappings (kept for diff report compatibility)
         mappings = yaml_gen.generate_mappings(profiles)
         yaml_gen.save_with_history(mappings)
 
@@ -509,11 +555,12 @@ def cmd_list(args):
     logger = get_logger("otto-bgp.list")
 
     try:
-        yaml_gen = YAMLGenerator(output_dir=Path(args.output_dir) / "discovered")
+        from otto_bgp.database.router_mapping import RouterMappingManager
+        mapper = RouterMappingManager()
 
-        # Load existing mappings
-        mappings = yaml_gen.load_previous_mappings()
-        if not mappings:
+        # Check if we have any discovery data
+        routers = mapper.get_router_inventory()
+        if not routers:
             print("No discovered data found. Run 'otto-bgp discover' first.")
             return 1
 
@@ -528,37 +575,41 @@ def cmd_list(args):
         # Build typed rows based on list_type
         rows = []
         if args.list_type == "routers":
-            for hostname, data in mappings.get("routers", {}).items():
-                as_count = len(data.get("discovered_as_numbers", []))
-                group_count = len(data.get("bgp_groups", []))
+            for router in routers:
+                hostname = router['hostname']
+                as_numbers = mapper.get_as_for_router(hostname)
+                bgp_groups = mapper.get_bgp_groups_for_router(hostname)
                 row = {
                     "hostname": hostname,
-                    "as_count": as_count,
-                    "group_count": group_count
+                    "as_count": len(as_numbers),
+                    "group_count": len(bgp_groups)
                 }
                 rows.append(row)
 
         elif args.list_type == "as":
-            as_numbers = mappings.get("as_numbers", {})
-            for as_num in sorted(as_numbers.keys(), key=int):
-                data = as_numbers[as_num]
-                router_count = len(data.get("routers", []))
-                groups = data.get("groups", [])
+            # Get all unique AS numbers from all routers
+            all_as_numbers = set()
+            for router in routers:
+                as_numbers = mapper.get_as_for_router(router['hostname'])
+                all_as_numbers.update(as_numbers)
+
+            for as_num in sorted(all_as_numbers):
+                routers_for_as = mapper.get_routers_for_as(as_num)
+                groups_for_as = mapper.get_bgp_groups_for_as(as_num)
                 row = {
-                    "as_number": as_num,
-                    "router_count": router_count,
-                    "groups": groups
+                    "as_number": str(as_num),
+                    "router_count": len(routers_for_as),
+                    "groups": groups_for_as
                 }
                 rows.append(row)
 
         elif args.list_type == "groups":
-            for group_name, data in mappings.get("bgp_groups", {}).items():
-                as_count = len(data.get("as_numbers", []))
-                router_count = len(data.get("routers", []))
+            all_groups = mapper.get_all_bgp_groups()
+            for group in all_groups:
                 row = {
-                    "group_name": group_name,
-                    "as_count": as_count,
-                    "router_count": router_count
+                    "group_name": group['name'],
+                    "as_count": len(group['as_numbers']),
+                    "router_count": len(group['routers'])
                 }
                 rows.append(row)
 

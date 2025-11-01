@@ -12,7 +12,7 @@ from .exceptions import SchemaError
 logger = logging.getLogger('otto_bgp.database.core')
 
 # Schema version for migrations
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class DatabaseManager:
@@ -167,6 +167,76 @@ class DatabaseManager:
                     ON rollout_events(run_id, timestamp);
             ''')
             logger.info("Applied migration: initial schema with multi-router coordination")
+
+        if from_version < 2:
+            # Discovery and policy cache tables
+            conn.executescript('''
+                -- Router inventory and discovery mappings (Phase 1)
+                CREATE TABLE IF NOT EXISTS router_inventory (
+                    hostname TEXT PRIMARY KEY,
+                    ip_address TEXT NOT NULL,
+                    platform TEXT,
+                    model TEXT,
+                    software_version TEXT,
+                    serial_number TEXT,
+                    location TEXT,
+                    role TEXT,
+                    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen TIMESTAMP,
+                    last_collection_success BOOLEAN,
+                    last_collection_date TIMESTAMP,
+                    notes TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS bgp_groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    router_hostname TEXT,
+                    group_name TEXT,
+                    group_type TEXT,
+                    peer_count INTEGER,
+                    import_policy TEXT,
+                    export_policy TEXT,
+                    discovered_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(router_hostname, group_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS router_as_mapping (
+                    router_hostname TEXT,
+                    as_number INTEGER CHECK(as_number >= 0 AND as_number <= 4294967295),
+                    bgp_group TEXT,
+                    peer_address TEXT,
+                    peer_description TEXT,
+                    discovered_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_confirmed TIMESTAMP,
+                    active BOOLEAN DEFAULT 1,
+                    PRIMARY KEY (router_hostname, as_number, bgp_group)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_router_active ON router_as_mapping(active);
+                CREATE INDEX IF NOT EXISTS idx_router_as ON router_as_mapping(as_number);
+
+                -- BGPq4 policy cache (Phase 2)
+                CREATE TABLE IF NOT EXISTS bgpq4_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    as_number INTEGER,
+                    resource TEXT,
+                    source TEXT,
+                    filters TEXT,
+                    prefixes TEXT NOT NULL,
+                    prefix_count INTEGER,
+                    raw_output TEXT,
+                    fetched_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    ttl_hours INTEGER DEFAULT 24,
+                    hits INTEGER DEFAULT 0,
+                    last_hit TIMESTAMP,
+                    CHECK(as_number IS NOT NULL OR resource IS NOT NULL)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_cache_as ON bgpq4_cache(as_number);
+                CREATE INDEX IF NOT EXISTS idx_cache_resource ON bgpq4_cache(resource);
+                CREATE INDEX IF NOT EXISTS idx_cache_date ON bgpq4_cache(fetched_date);
+            ''')
+            logger.info("Applied migration: discovery and policy cache tables")
 
     @contextmanager
     def transaction(self):

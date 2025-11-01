@@ -185,16 +185,42 @@ def _generate_policy_worker(args) -> PolicyGenerationResult:
 
             monitor.heartbeat()
 
-            # Generate policy with process-safe file caching
+            # Check cache first using DB cache manager
+            from otto_bgp.database.bgpq4_cache import BGPq4CacheManager
+            cache_manager = BGPq4CacheManager()
+
+            cached_policy = cache_manager.get_policy(
+                as_number=as_number,
+                policy_name=policy_name
+            )
+            if cached_policy:
+                return PolicyGenerationResult(
+                    as_number=as_number,
+                    policy_name=policy_name or f"AS{as_number}",
+                    policy_content=cached_policy,
+                    success=True,
+                    execution_time=0.0,
+                    cache_hit=True,
+                    resource=f"AS{as_number}",
+                    bgpq4_mode=wrapper_config["mode"]
+                )
+
+            # Generate policy if not cached
             with timeout_context(TimeoutType.PROCESS_EXECUTION, f"bgpq4_AS{as_number}"):
                 result = wrapper.generate_policy_for_as(as_number, policy_name, use_cache=False)
 
             # Record operation result
             monitor.record_operation(success=result.success)
 
-            # Save to process-safe cache if successful
+            # Save to cache if successful
             if result.success and result.policy_content:
-                _save_to_process_safe_cache(as_number, result.policy_content, policy_name, wrapper_config["cache_ttl"])
+                cache_manager.put_policy(
+                    policy_content=result.policy_content,
+                    as_number=as_number,
+                    policy_name=policy_name,
+                    resource=result.resource or f"AS{as_number}",
+                    ttl=wrapper_config["cache_ttl"]
+                )
 
             return result
 
@@ -975,8 +1001,14 @@ class BGPq4Wrapper:
                 if policy_name is not None:
                     policy_name = validate_policy_name(policy_name)
 
-                # Check process-safe cache first
-                cached_policy = _load_from_process_safe_cache(validated_as, policy_name)
+                # Check DB cache first
+                from otto_bgp.database.bgpq4_cache import BGPq4CacheManager
+                cache_manager = BGPq4CacheManager()
+
+                cached_policy = cache_manager.get_policy(
+                    as_number=validated_as,
+                    policy_name=policy_name
+                )
                 if cached_policy:
                     # Use cached result
                     self.logger.debug(f"Using cached policy for AS{validated_as}")
@@ -989,6 +1021,7 @@ class BGPq4Wrapper:
                             execution_time=0.0,
                             bgpq4_mode=self.detected_mode.value,
                             router_context=None,
+                            cache_hit=True
                         )
                     )
                 else:
