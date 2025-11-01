@@ -258,9 +258,12 @@ initialize_database() {
 
     # Initialize database by importing the core module
     # This will create the database file and run migrations
+    # Use VENV_DIR/bin/python since VENV_PYTHON isn't set yet
+    PYTHON_BIN="$VENV_DIR/bin/python"
+
     if [[ "$INSTALL_MODE" == "system" ]]; then
         # Run as service user for system installation
-        sudo -u "$SERVICE_USER" "$VENV_PYTHON" -c "
+        sudo -u "$SERVICE_USER" "$PYTHON_BIN" -c "
 import sys
 sys.path.insert(0, '$LIB_DIR')
 from otto_bgp.database.core import DatabaseManager
@@ -273,7 +276,7 @@ print(f'Schema version: {db.db_path}')
         }
     else
         # Run as current user for user installation
-        "$VENV_PYTHON" -c "
+        "$PYTHON_BIN" -c "
 import sys
 sys.path.insert(0, '$LIB_DIR')
 from otto_bgp.database.core import DatabaseManager
