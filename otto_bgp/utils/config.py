@@ -433,6 +433,28 @@ AUTONOMOUS_MODE_SCHEMA = {
 
 
 @dataclass
+class GuardrailsConfig:
+    """Guardrails safety configuration"""
+
+    enabled_guardrails: List[str] = None
+    prefix_count: Dict[str, Any] = None
+
+    def __post_init__(self):
+        """Initialize with defaults including all critical guardrails"""
+        if self.enabled_guardrails is None:
+            # Always include critical guardrails
+            self.enabled_guardrails = [
+                "bogon_prefix",
+                "signal_handling",
+                "concurrent_operation",
+                "commit_retry",
+                "prefix_count"
+            ]
+        if self.prefix_count is None:
+            self.prefix_count = {}
+
+
+@dataclass
 class BGPToolkitConfig:
     """Main configuration container"""
 
@@ -446,6 +468,7 @@ class BGPToolkitConfig:
     installation_mode: InstallationModeConfig = None
     autonomous_mode: AutonomousModeConfig = None
     rpki: RPKIConfig = None
+    guardrails: GuardrailsConfig = None
 
     def __post_init__(self):
         """Initialize subconfigs if not provided"""
@@ -469,6 +492,8 @@ class BGPToolkitConfig:
             self.autonomous_mode = AutonomousModeConfig()
         if self.rpki is None:
             self.rpki = RPKIConfig()
+        if self.guardrails is None:
+            self.guardrails = GuardrailsConfig()
 
 
 class ConfigManager:
@@ -603,6 +628,11 @@ class ConfigManager:
         if "rpki" in data:
             rpki_data = data["rpki"]
             self.config.rpki = RPKIConfig(**rpki_data)
+
+        # Handle Guardrails configuration
+        if "guardrails" in data:
+            guardrails_data = data["guardrails"]
+            self.config.guardrails = GuardrailsConfig(**guardrails_data)
 
     def _load_guardrail_env(self):
         """Load guardrail enablement and prefix thresholds from environment"""

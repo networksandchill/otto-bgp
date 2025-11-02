@@ -198,18 +198,35 @@ class UnifiedSafetyManager:
             except Exception as e:
                 self.logger.error(f"Failed to initialize RPKI guardrail: {e}")
 
-        # 3) Determine enabled set from env or defaults
+        # 3) Determine enabled set from config, env or defaults
         enabled_names = []
-        env = getattr(config_manager, "guardrail_env", None) if config_manager else None
-        if env and env.get("enabled"):
-            enabled_names = env["enabled"]
-        else:
+
+        # First try to get from the config object
+        if config and hasattr(config, 'guardrails') and config.guardrails:
+            if config.guardrails.enabled_guardrails:
+                enabled_names = config.guardrails.enabled_guardrails
+
+        # Then try environment variable overrides
+        if not enabled_names:
+            env = getattr(config_manager, "guardrail_env", None) if config_manager else None
+            if env and env.get("enabled"):
+                enabled_names = env["enabled"]
+
+        # Finally use defaults if nothing else is configured
+        if not enabled_names:
             enabled_names = list(CRITICAL_GUARDRAILS) + ["prefix_count"]
             if "rpki_validation" in self.guardrails:
                 enabled_names.append("rpki_validation")
 
         # Validate
-        errors = validate_guardrail_config(enabled_names, env)
+        # Use config.guardrails.prefix_count if available, otherwise use env
+        overrides_dict = None
+        if config and hasattr(config, 'guardrails') and config.guardrails and config.guardrails.prefix_count:
+            overrides_dict = config.guardrails.prefix_count
+        elif env:
+            overrides_dict = env
+
+        errors = validate_guardrail_config(enabled_names, overrides_dict)
         if errors:
             raise ValueError(f"Guardrail configuration errors: {'; '.join(errors)}")
 
@@ -220,10 +237,15 @@ class UnifiedSafetyManager:
             if not g:
                 continue
 
-            if name == "prefix_count" and env:
-                overrides = env.get("prefix_count", {})
-                thresholds = overrides.get("custom_thresholds") or {}
-                strictness = overrides.get("strictness_level")
+            if name == "prefix_count" and (overrides_dict or env):
+                # Use config overrides first, then env
+                if config and hasattr(config, 'guardrails') and config.guardrails and config.guardrails.prefix_count:
+                    overrides = config.guardrails.prefix_count
+                else:
+                    overrides = env.get("prefix_count", {}) if env else {}
+
+                thresholds = overrides.get("custom_thresholds") or {} if isinstance(overrides, dict) else {}
+                strictness = overrides.get("strictness_level") if isinstance(overrides, dict) else None
                 # Create new config with overrides
                 new_config = GuardrailConfig(
                     enabled=True,
