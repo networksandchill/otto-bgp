@@ -178,9 +178,14 @@ async def update_config(request: Request,
                 detail={"issues": [{"path": "smtp", "msg": str(e)}]}
             )
 
-    # Save ALL configuration to config.json and sync to otto.env
-    save_config(new_config)
-    ok = sync_config_to_otto_env(new_config)
+    # Merge new config with existing config to prevent data loss
+    from webui.core.config_io import deep_merge
+    existing_config = load_config_json_only()
+    merged_config = deep_merge(existing_config, new_config)
+
+    # Save merged configuration to config.json and sync to otto.env
+    save_config(merged_config)
+    ok = sync_config_to_otto_env(merged_config)
     if not ok:
         raise HTTPException(
             status_code=500, detail="Failed to sync to otto.env"
