@@ -726,6 +726,7 @@ Group=$SERVICE_USER
 WorkingDirectory=$LIB_DIR
 ExecStart=$BIN_DIR/otto-bgp pipeline $CONFIG_DIR/devices.csv --output-dir $DATA_DIR/policies
 Environment=PYTHONPATH=$LIB_DIR
+Environment=OTTO_BGP_MODE=system
 EnvironmentFile=-$CONFIG_DIR/otto.env
 
 # Security hardening for v0.3.2
@@ -1197,6 +1198,7 @@ WorkingDirectory=$LIB_DIR
 Environment=PYTHONPATH=$LIB_DIR
 Environment=OTTO_WEBUI_ROOT=/usr/local/share/otto-bgp/webui
 Environment=OTTO_WEBUI_ENABLE_SERVICE_CONTROL=true
+Environment=OTTO_BGP_MODE=system
 EnvironmentFile=-$CONFIG_DIR/otto.env
 ExecStart=$VENV_DIR/bin/uvicorn webui.app:app --host 0.0.0.0 --port 8443 --ssl-certfile $CONFIG_DIR/tls/cert.pem --ssl-keyfile $CONFIG_DIR/tls/key.pem
 Restart=on-failure
