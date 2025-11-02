@@ -178,13 +178,8 @@ async def update_config(request: Request,
                 detail={"issues": [{"path": "smtp", "msg": str(e)}]}
             )
 
-    # Save UI config (non-system keys) and sync to otto.env
-    ui_keys = [
-        "ssh", "rpki", "bgpq4", "guardrails", "network_security"
-    ]
-    save_config(
-        {k: v for k, v in new_config.items() if k not in ui_keys}
-    )
+    # Save ALL configuration to config.json and sync to otto.env
+    save_config(new_config)
     ok = sync_config_to_otto_env(new_config)
     if not ok:
         raise HTTPException(
