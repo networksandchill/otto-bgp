@@ -710,9 +710,91 @@ create_systemd_services() {
     fi
     
     log_info "Creating SystemD services..."
-    
-    # Create main service file
-    sudo tee /etc/systemd/system/otto-bgp.service > /dev/null << EOF
+
+    # Create appropriate service file based on mode
+    if [[ "$AUTONOMOUS_MODE" == true ]]; then
+        # Create autonomous service with enhanced security
+        sudo tee /etc/systemd/system/otto-bgp-autonomous.service > /dev/null << EOF
+[Unit]
+Description=Otto BGP - Autonomous Mode (Scheduled Operations)
+Documentation=file://$LIB_DIR/README.md
+After=network-online.target otto-bgp-rpki-preflight.service
+Wants=network-online.target
+Requires=otto-bgp-rpki-preflight.service
+
+[Service]
+Type=oneshot
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$LIB_DIR
+ExecStart=$BIN_DIR/otto-bgp pipeline $CONFIG_DIR/devices.csv --output-dir $DATA_DIR/policies --autonomous
+Environment=PYTHONPATH=$LIB_DIR
+Environment=OTTO_BGP_MODE=autonomous
+Environment=OTTO_BGP_AUTONOMOUS=true
+EnvironmentFile=-$CONFIG_DIR/otto.env
+
+# Enhanced security hardening for autonomous mode
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# File system access
+ReadWritePaths=$DATA_DIR
+ReadOnlyPaths=$CONFIG_DIR $LIB_DIR
+InaccessiblePaths=/home /root
+
+# Network restrictions for autonomous mode
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=10.0.0.0/8
+IPAddressAllow=172.16.0.0/12
+IPAddressAllow=192.168.0.0/16
+
+# Resource limits
+TimeoutStartSec=180
+MemoryMax=1G
+CPUQuota=25%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otto-bgp-autonomous
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        sudo chmod 644 /etc/systemd/system/otto-bgp-autonomous.service
+
+        # Create autonomous timer
+        sudo tee /etc/systemd/system/otto-bgp-autonomous.timer > /dev/null << EOF
+[Unit]
+Description=Otto BGP Autonomous Mode Timer
+Documentation=file://$LIB_DIR/README.md
+Requires=otto-bgp-autonomous.service
+
+[Timer]
+OnCalendar=*-*-* *:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
+EOF
+        sudo chmod 644 /etc/systemd/system/otto-bgp-autonomous.timer
+
+    else
+        # Create standard service for system mode
+        sudo tee /etc/systemd/system/otto-bgp.service > /dev/null << EOF
 [Unit]
 Description=Otto BGP v0.3.2 - Orchestrated Transit Traffic Optimizer
 Documentation=file://$LIB_DIR/README.md
@@ -765,9 +847,10 @@ CPUQuota=50%
 [Install]
 WantedBy=multi-user.target
 EOF
-    sudo chmod 644 /etc/systemd/system/otto-bgp.service
+        sudo chmod 644 /etc/systemd/system/otto-bgp.service
+    fi  # End of AUTONOMOUS_MODE service creation
 
-    # Create RPKI cache update service
+    # Create RPKI cache update service (common to both modes)
     sudo tee /etc/systemd/system/otto-bgp-rpki-update.service > /dev/null << EOF
 [Unit]
 Description=Otto BGP RPKI Cache Update
@@ -918,8 +1001,11 @@ WantedBy=multi-user.target
 EOF
     sudo chmod 644 /etc/systemd/system/otto-bgp-rpki-preflight.service
 
-    # Create timer for scheduled execution (if not autonomous mode)
-    if [[ "$AUTONOMOUS_MODE" != true ]]; then
+    # Log success message based on mode
+    if [[ "$AUTONOMOUS_MODE" == true ]]; then
+        log_success "SystemD autonomous service and timer created"
+    else
+        # Create timer for standard mode
         sudo tee /etc/systemd/system/otto-bgp.timer > /dev/null << EOF
 [Unit]
 Description=Otto BGP v0.3.2 Scheduled Policy Update
@@ -936,28 +1022,32 @@ WantedBy=timers.target
 EOF
         sudo chmod 644 /etc/systemd/system/otto-bgp.timer
         log_success "SystemD service and timer created"
-    else
-        log_success "SystemD service created (autonomous mode - no timer)"
     fi
     
     # Reload systemd daemon
     sudo systemctl daemon-reload
 
     log_info "SystemD services configured. To enable:"
-    echo "  sudo systemctl enable otto-bgp.service"
-    echo "  sudo systemctl enable otto-bgp-rpki-update.service"
-    echo "  sudo systemctl enable otto-bgp-rpki-update.timer"
-    echo "  sudo systemctl enable otto-bgp-rpki-preflight.service"
-    if [[ "$AUTONOMOUS_MODE" != true ]]; then
+    if [[ "$AUTONOMOUS_MODE" == true ]]; then
+        echo "  sudo systemctl enable otto-bgp-autonomous.service"
+        echo "  sudo systemctl enable otto-bgp-autonomous.timer"
+        echo "  sudo systemctl enable otto-bgp-rpki-update.service"
+        echo "  sudo systemctl enable otto-bgp-rpki-update.timer"
+        echo "  sudo systemctl enable otto-bgp-rpki-preflight.service"
+        echo ""
+        echo "To start autonomous operation:"
+        echo "  sudo systemctl start otto-bgp-rpki-update.timer"
+        echo "  sudo systemctl start otto-bgp-autonomous.timer"
+    else
+        echo "  sudo systemctl enable otto-bgp.service"
+        echo "  sudo systemctl enable otto-bgp-rpki-update.service"
+        echo "  sudo systemctl enable otto-bgp-rpki-update.timer"
+        echo "  sudo systemctl enable otto-bgp-rpki-preflight.service"
         echo "  sudo systemctl enable otto-bgp.timer"
         echo ""
         echo "To start services:"
         echo "  sudo systemctl start otto-bgp-rpki-update.timer"
         echo "  sudo systemctl start otto-bgp.timer"
-    else
-        echo ""
-        echo "To start RPKI updates:"
-        echo "  sudo systemctl start otto-bgp-rpki-update.timer"
     fi
     echo ""
     echo "To test RPKI preflight:"
