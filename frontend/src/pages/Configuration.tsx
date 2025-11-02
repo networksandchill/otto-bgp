@@ -204,7 +204,28 @@ const Configuration: React.FC = () => {
 
   const handleSave = async () => {
     if (config) {
-      await saveConfigMutation.mutateAsync(config)
+      // Ensure critical guardrails are always included in the enabled list
+      const criticalGuardrails = ['bogon_prefix', 'signal_handling', 'concurrent_operation', 'commit_retry']
+
+      // Add RPKI validation if RPKI is enabled
+      if (config.rpki?.enabled) {
+        criticalGuardrails.push('rpki_validation')
+      }
+
+      const userEnabledGuardrails = config.guardrails?.enabled_guardrails || []
+
+      // Combine critical guardrails with user-enabled ones (removing duplicates)
+      const allEnabledGuardrails = [...new Set([...criticalGuardrails, ...userEnabledGuardrails])]
+
+      const configToSave = {
+        ...config,
+        guardrails: {
+          ...config.guardrails,
+          enabled_guardrails: allEnabledGuardrails
+        }
+      }
+
+      await saveConfigMutation.mutateAsync(configToSave)
     }
   }
 
@@ -1461,6 +1482,7 @@ const Configuration: React.FC = () => {
                   <Chip label="bogon_prefix" color="error" icon={<LockIcon />} />
                   <Chip label="signal_handling" color="error" icon={<LockIcon />} />
                   <Chip label="concurrent_operation" color="error" icon={<LockIcon />} />
+                  <Chip label="commit_retry" color="error" icon={<LockIcon />} />
                   {config.rpki?.enabled && (
                     <Chip label="rpki_validation" color="warning" icon={<LockIcon />} />
                   )}
