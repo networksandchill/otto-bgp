@@ -200,6 +200,7 @@ class UnifiedSafetyManager:
 
         # 3) Determine enabled set from config, env or defaults
         enabled_names = []
+        env = None  # Initialize to prevent UnboundLocalError
 
         # First try to get from the config object
         if config and hasattr(config, 'guardrails') and config.guardrails:
