@@ -2,20 +2,23 @@
 #
 # Otto BGP - SSH Host Key Setup Script
 #
-# This script collects SSH host keys from all network devices listed in the
-# devices.csv file. This is a one-time setup step that must be run before
-# production deployment to enable secure host key verification.
+# This script collects SSH host keys from all network devices stored in the
+# Otto BGP database (router_inventory table). This is a one-time setup step
+# that must be run before production deployment to enable secure host key verification.
 #
 # Security Note: This script should be run from a trusted network where you
 # can verify the authenticity of the network devices. After collection, the
 # host keys should be reviewed before production use.
 #
 # Usage:
-#   ./setup-host-keys.sh [devices.csv] [known_hosts_output]
+#   ./setup-host-keys.sh [known_hosts_output]
+#
+# Environment Variables:
+#   OTTO_DB_PATH - Path to Otto database (default: /var/lib/otto-bgp/otto.db)
 #
 # Defaults:
-#   devices.csv: /var/lib/otto-bgp/config/devices.csv
 #   known_hosts: /var/lib/otto-bgp/ssh-keys/known_hosts
+#
 
 set -euo pipefail
 
@@ -26,12 +29,13 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Default paths
-DEFAULT_DEVICES_CSV="/var/lib/otto-bgp/config/devices.csv"
 DEFAULT_KNOWN_HOSTS="/var/lib/otto-bgp/ssh-keys/known_hosts"
 
-# Use provided paths or defaults
-DEVICES_CSV="${1:-$DEFAULT_DEVICES_CSV}"
-KNOWN_HOSTS="${2:-$DEFAULT_KNOWN_HOSTS}"
+# Use provided path or default
+KNOWN_HOSTS="${1:-$DEFAULT_KNOWN_HOSTS}"
+
+# Database path (configurable via environment variable)
+DB_PATH="${OTTO_DB_PATH:-/var/lib/otto-bgp/otto.db}"
 
 # Verify user
 EXPECTED_USER="otto.bgp"
@@ -59,20 +63,42 @@ echo "Otto BGP SSH Host Key Collection"
 echo "========================================"
 echo
 
-# Check if devices CSV exists
-if [[ ! -f "$DEVICES_CSV" ]]; then
-    log_error "Devices CSV not found: $DEVICES_CSV"
-    echo "Please create the devices.csv file with your network devices first."
-    echo "Format: address,hostname"
+# Check prerequisites
+if ! command -v sqlite3 &> /dev/null; then
+    log_error "sqlite3 is required but not installed"
     exit 1
 fi
+
+if ! command -v ssh-keyscan &> /dev/null; then
+    log_error "ssh-keyscan is required but not installed"
+    exit 1
+fi
+
+# Check if database exists
+if [[ ! -f "$DB_PATH" ]]; then
+    log_error "Database not found: $DB_PATH"
+    echo "Please ensure Otto BGP is installed and the database is initialized"
+    exit 1
+fi
+
+# Check if router_inventory table has data
+ROUTER_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM router_inventory;" 2>/dev/null || echo "0")
+
+if [[ "$ROUTER_COUNT" -eq 0 ]]; then
+    log_error "No routers found in database"
+    echo "Please add routers to the inventory before collecting host keys"
+    echo "Use: otto-bgp discover or add routers manually"
+    exit 1
+fi
+
+log_info "Found $ROUTER_COUNT routers in database"
 
 # Create SSH keys directory if it doesn't exist
 KNOWN_HOSTS_DIR=$(dirname "$KNOWN_HOSTS")
 if [[ ! -d "$KNOWN_HOSTS_DIR" ]]; then
     log_info "Creating SSH keys directory: $KNOWN_HOSTS_DIR"
     mkdir -p "$KNOWN_HOSTS_DIR"
-    
+
     # Set proper ownership if running as root
     if [[ "$USER" == "root" ]] && id -u otto.bgp >/dev/null 2>&1; then
         chown otto.bgp:otto.bgp "$KNOWN_HOSTS_DIR"
@@ -88,7 +114,7 @@ fi
 
 # Initialize known_hosts file
 > "$KNOWN_HOSTS"
-log_info "Collecting SSH host keys from devices..."
+log_info "Collecting SSH host keys from routers..."
 echo
 
 # Statistics
@@ -97,30 +123,28 @@ SUCCESSFUL_DEVICES=0
 FAILED_DEVICES=0
 FAILED_LIST=""
 
-# Read devices from CSV
-while IFS=',' read -r address hostname; do
-    # Skip header line
-    if [[ "$address" == "address" ]]; then
-        continue
-    fi
-    
-    # Skip empty lines
+# Function to scan a single device
+scan_device() {
+    local address="$1"
+    local hostname="$2"
+
+    # Skip empty addresses
     if [[ -z "$address" ]]; then
-        continue
+        return
     fi
-    
+
     ((TOTAL_DEVICES++))
-    
+
     # Display progress
     echo -n "Scanning $hostname ($address)... "
-    
+
     # Collect SSH host keys (both ed25519 and rsa)
     # Using timeout to prevent hanging on unreachable devices
     if timeout 10 ssh-keyscan -t ed25519,rsa -H "$address" >> "$KNOWN_HOSTS" 2>/dev/null; then
         echo -e "${GREEN}✓${NC}"
         ((SUCCESSFUL_DEVICES++))
-        
-        # Also add by hostname if provided
+
+        # Also add by hostname if provided and different from address
         if [[ -n "$hostname" ]] && [[ "$hostname" != "$address" ]]; then
             timeout 10 ssh-keyscan -t ed25519,rsa -H "$hostname" >> "$KNOWN_HOSTS" 2>/dev/null
         fi
@@ -130,7 +154,15 @@ while IFS=',' read -r address hostname; do
         FAILED_LIST="${FAILED_LIST}  - $hostname ($address)\n"
         log_warn "Failed to collect host key from $address"
     fi
-done < "$DEVICES_CSV"
+}
+
+# Read routers from database
+log_info "Reading routers from database..."
+
+# Query database for all routers
+sqlite3 "$DB_PATH" "SELECT ip_address, hostname FROM router_inventory ORDER BY hostname;" 2>/dev/null | while IFS='|' read -r address hostname; do
+    scan_device "$address" "$hostname"
+done
 
 echo
 echo "========================================"
@@ -157,13 +189,13 @@ fi
 # Set proper permissions
 if [[ -f "$KNOWN_HOSTS" ]]; then
     chmod 644 "$KNOWN_HOSTS"
-    
+
     # Set proper ownership if running as root
     if [[ "$USER" == "root" ]] && id -u otto.bgp >/dev/null 2>&1; then
         chown otto.bgp:otto.bgp "$KNOWN_HOSTS"
         log_info "Set ownership to otto.bgp:otto.bgp"
     fi
-    
+
     log_info "Host keys saved to: $KNOWN_HOSTS"
 fi
 
@@ -177,9 +209,7 @@ echo "   ssh-keygen -l -f $KNOWN_HOSTS"
 echo
 echo "2. Verify host key fingerprints with your network team"
 echo
-echo "3. For production deployment, ensure BGP_TOOLKIT_SETUP_MODE is NOT set"
-echo
-echo "4. Test SSH connections with strict host checking:"
+echo "3. Test SSH connections with strict host checking:"
 echo "   ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS user@device"
 echo
 
