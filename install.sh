@@ -828,8 +828,7 @@ MemoryDenyWriteExecute=yes
 RemoveIPC=yes
 
 # Directory access permissions
-ReadWritePaths=$DATA_DIR/policies
-ReadWritePaths=$DATA_DIR/logs
+ReadWritePaths=$DATA_DIR
 ReadOnlyPaths=$CONFIG_DIR
 ReadOnlyPaths=$LIB_DIR
 
